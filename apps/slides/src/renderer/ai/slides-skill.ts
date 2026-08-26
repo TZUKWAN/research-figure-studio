@@ -1,4 +1,6 @@
 import type { AgentSkill, ToolDisplay } from '@genoffice/agent-core'
+import { layoutInputCoreOutput } from '@genoffice/research-harness'
+import { beginAction, commitAction, completeAction } from '@genoffice/research-harness'
 import type {
   GroupRenderNode,
   PictureRenderNode,
@@ -962,6 +964,55 @@ const TOOLS: AgentToolDef[] = [
         heightMm: { type: 'number', description: 'Canvas height in millimeters' },
       },
       required: ['widthMm', 'heightMm'],
+    },
+  },
+  {
+    name: 'create_input_core_output',
+    description:
+      'Research figure recipe: lay out an Input → Core → Output framework on one page with bound connectors and an optional bottom feedback loop. Node kinds come from the research registry (data-source/input-node/process-node/model-module/mechanism-module/output-node/evidence-node). Zones are sized and spaced deterministically; you do NOT compute coordinates. Use this instead of hand-placing shapes for framework figures.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        slideIndex: { type: 'integer' },
+        inputNodes: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              component: { type: 'string' },
+              title: { type: 'string' },
+              subtitle: { type: 'string' },
+            },
+            required: ['component', 'title'],
+          },
+        },
+        coreNodes: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              component: { type: 'string' },
+              title: { type: 'string' },
+              subtitle: { type: 'string' },
+            },
+            required: ['component', 'title'],
+          },
+        },
+        outputNodes: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              component: { type: 'string' },
+              title: { type: 'string' },
+              subtitle: { type: 'string' },
+            },
+            required: ['component', 'title'],
+          },
+        },
+        feedback: { type: 'boolean', description: 'Add a bottom feedback loop (output back to core)' },
+      },
+      required: ['slideIndex', 'inputNodes', 'coreNodes', 'outputNodes'],
     },
   },
   {
@@ -3167,6 +3218,125 @@ async function executeTool(
         output: `Drew a ${String(call.input.kind ?? 'straight')} connector (id=${r.sourceId}) from ${fromId} to ${toId}${bound ? '; endpoints bound so it follows later moves' : ''}.`,
         mutated: true,
         summary: t('aiSumNewShape', { n: idx + 1 }),
+      }
+    }
+
+    case 'create_input_core_output': {
+      const idx = Number(call.input.slideIndex)
+      const slide = slides[idx]
+      if (!slide) return fail(t('aiFailNewElement'), `slideIndex out of range (0-${slides.length - 1})`)
+      type PlanNodeIn = { component?: unknown; title?: unknown; subtitle?: unknown }
+      const readNodes = (v: unknown) =>
+        Array.isArray(v)
+          ? (v as PlanNodeIn[])
+              .map((n) => ({
+                component: String(n.component ?? 'process-node'),
+                title: String(n.title ?? ''),
+                ...(n.subtitle != null ? { subtitle: String(n.subtitle) } : {}),
+              }))
+              .filter((n) => n.title)
+          : []
+      const inputNodes = readNodes(call.input.inputNodes)
+      const coreNodes = readNodes(call.input.coreNodes)
+      const outputNodes = readNodes(call.input.outputNodes)
+      if (inputNodes.length + coreNodes.length + outputNodes.length === 0)
+        return fail(t('aiFailNewElement'), 'At least one node is required')
+
+      const layout = layoutInputCoreOutput({
+        inputNodes,
+        coreNodes,
+        outputNodes,
+        feedback: call.input.feedback === true,
+        canvasW: slide.widthPx,
+        canvasH: slide.heightPx,
+      })
+      const actionId = beginAction('Create Input–Core–Output figure')
+      try {
+        const nodeIds: string[] = []
+        for (const el of layout.elements) {
+          const text = el.subtitle ? `${el.title}\n${el.subtitle}` : el.title
+          const r = await window.slidesApi.addElement({
+            slideIndex: idx,
+            kind: el.preset,
+            xPx: el.x,
+            yPx: el.y,
+            wPx: el.w,
+            hPx: el.h,
+            fitWidthPx: access.fitWidthPx,
+            text,
+          })
+          if (!r) return fail(t('aiFailNewElement'), `Failed to place node "${el.title}"`)
+          access.applySlide(idx, r.slide)
+          nodeIds.push(r.sourceId)
+          commitAction(actionId, `node ${el.title}`)
+        }
+        // Main-flow chain + optional feedback loop, endpoints bound so moves follow.
+        const seq = layout.elements
+        let boundCount = 0
+        const routes = [
+          ...layout.connectors.filter((c) => c.role === 'main'),
+          ...layout.connectors.filter((c) => c.role === 'feedback'),
+        ]
+        for (const c of routes) {
+          const fromId = nodeIds[c.fromIndex]
+          const toId = nodeIds[c.toIndex]
+          if (!fromId || !toId || fromId === toId) continue
+          const a = seq[c.fromIndex]
+          const b = seq[c.toIndex]
+          const x1 = a.x + a.w / 2
+          const y1 = a.y + a.h / 2
+          const x2 = b.x + b.w / 2
+          const y2 = b.y + b.h / 2
+          const preset =
+            c.role === 'feedback'
+              ? 'bentConnector3'
+              : c.kind === 'curved'
+                ? 'curvedConnector3'
+                : 'line'
+          const cr = await window.slidesApi.addElement({
+            slideIndex: idx,
+            kind: preset,
+            xPx: Math.min(x1, x2),
+            yPx: Math.min(y1, y2),
+            wPx: Math.max(Math.abs(x2 - x1), 1),
+            hPx: Math.max(Math.abs(y2 - y1), 1),
+            fitWidthPx: access.fitWidthPx,
+            stroke: { color: '#687784', widthPt: 1.5 },
+          })
+          if (!cr) continue
+          access.applySlide(idx, cr.slide)
+          try {
+            const boundSlide = await window.slidesApi.editConnectorEndpoints({
+              slideIndex: idx,
+              sourceId: cr.sourceId,
+              x1Px: x1,
+              y1Px: y1,
+              x2Px: x2,
+              y2Px: y2,
+              fitWidthPx: access.fitWidthPx,
+              start: { targetId: fromId, idx: 0 },
+              end: { targetId: toId, idx: 0 },
+            })
+            if (boundSlide) {
+              access.applySlide(idx, boundSlide)
+              boundCount++
+            }
+          } catch {
+            // keep unbound line
+          }
+        }
+        completeAction(
+          actionId,
+          `${seq.length} nodes, ${routes.length} connectors (${boundCount} bound)`,
+        )
+        return {
+          output: `Created an Input–Core–Output framework on page ${idx + 1}: ${seq.length} nodes across three zones, ${routes.length} connectors (${boundCount} endpoint-bound). Element ids: ${nodeIds.filter(Boolean).join(', ')}.`,
+          mutated: true,
+          summary: t('aiSumNewShape', { n: idx + 1 }),
+        }
+      } catch (err) {
+        completeAction(actionId, `aborted: ${err instanceof Error ? err.message : String(err)}`)
+        throw err
       }
     }
 

@@ -1,4 +1,4 @@
-import { dirname, resolve } from 'node:path'
+﻿import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import react from '@vitejs/plugin-react'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
@@ -27,6 +27,7 @@ const workspaceAlias = {
   '@genoffice/pptx-render': resolve(here, '../../packages/pptx-render/src/index.ts'),
   // Metafile (EMF/WMF) rasterizer shared with the docs engine (renderer-only: needs canvas)
   '@genoffice/docx-engine/metafile': resolve(here, '../../packages/docx-engine/src/metafile.ts'),
+  '@genoffice/research-harness': resolve(here, '../../packages/research-harness/src/index.ts'),
 }
 
 export default defineConfig({
@@ -61,3 +62,4 @@ export default defineConfig({
     },
   },
 })
+
