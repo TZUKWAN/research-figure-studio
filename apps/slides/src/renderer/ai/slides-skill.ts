@@ -1566,8 +1566,10 @@ function buildDeckOutline(slides: RenderSlide[], current: number, selectedIds: s
     )
     const infos = currentSlide ? collectNodeInfos(currentSlide.nodes) : []
     for (const id of selectedIds) {
-      const info = infos.find((n) => n.id === id)
-      if (!info) {
+      const node = currentSlide ? findNodeById(currentSlide.nodes, id) : undefined
+      const key = node?.durableId ?? node?.sourceId ?? id
+      const info = infos.find((n) => n.id === key)
+      if (!info || !node) {
         lines.push(`  - ${id} (details unavailable)`)
         continue
       }
