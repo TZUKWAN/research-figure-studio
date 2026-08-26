@@ -32,11 +32,11 @@ describe('resolveComponentColors', () => {
     expect(c.text).toBe('#17212B')
   })
 
-  it('gives output nodes accent identity with readable text', () => {
+  it('gives output nodes accent identity with WCAG-readable text', () => {
     const c = resolveComponentColors('output-node', blue)
     expect(c.fill).toBe('#D68A45')
-    expect(luminance(c.fill)).toBeLessThan(0.55)
-    expect(c.text).not.toBe('#17212B')
+    // whatever direction wins, it must actually read on the fill (AA large-text)
+    expect(contrastRatio(c.text, c.fill)).toBeGreaterThan(4)
   })
 
   it('unknown kinds fall back to surface/primary', () => {
