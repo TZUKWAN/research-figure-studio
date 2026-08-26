@@ -174,10 +174,9 @@ describe('deck outline main fills', () => {
     }
     const outline = createSlidesSkill(access(slideOf([title, subtitle]), ['source-title']))
       .buildContext!()
-    expect(outline).toContain('User selected elements: e_title')
-    expect(outline).not.toContain('User selected elements: source-title')
-    expect(outline).toContain('- e_title | shape | "Main title"')
-    expect(outline).toContain('- e_subtitle | shape | "Subtitle below"')
+    expect(outline).toContain('User selected 1 element')
+    expect(outline).toMatch(/- e_title \| shape \| pos\(0,0\) size\(500×100\)/)
+    expect(outline).toContain('text "Main title"')
   })
 })
 
