@@ -1,6 +1,7 @@
 import type { AgentSkill, ToolDisplay } from '@genoffice/agent-core'
 import { layoutInputCoreOutput } from '@genoffice/research-harness'
 import { beginAction, commitAction, completeAction } from '@genoffice/research-harness'
+import { connectorColor, getThemeById, resolveComponentColors } from '@genoffice/theme-engine'
 import type {
   GroupRenderNode,
   PictureRenderNode,
@@ -1011,6 +1012,11 @@ const TOOLS: AgentToolDef[] = [
           },
         },
         feedback: { type: 'boolean', description: 'Add a bottom feedback loop (output back to core)' },
+        themeId: {
+          type: 'string',
+          description:
+            'Optional preset palette id: academic-blue (default) / academic-green / wine-red / purple-gray / neutral-gray / black-accent / ai-cyan / warm-humanities / nature-light / dark-academic',
+        },
       },
       required: ['slideIndex', 'inputNodes', 'coreNodes', 'outputNodes'],
     },
@@ -3244,6 +3250,7 @@ async function executeTool(
       if (inputNodes.length + coreNodes.length + outputNodes.length === 0)
         return fail(t('aiFailNewElement'), 'At least one node is required')
 
+      const theme = getThemeById(String(call.input.themeId ?? 'academic-blue')) ?? getThemeById('academic-blue')!
       const layout = layoutInputCoreOutput({
         inputNodes,
         coreNodes,
@@ -3257,6 +3264,7 @@ async function executeTool(
         const nodeIds: string[] = []
         for (const el of layout.elements) {
           const text = el.subtitle ? `${el.title}\n${el.subtitle}` : el.title
+          const colors = resolveComponentColors(el.component, theme.roles)
           const r = await window.slidesApi.addElement({
             slideIndex: idx,
             kind: el.preset,
@@ -3266,6 +3274,8 @@ async function executeTool(
             hPx: el.h,
             fitWidthPx: access.fitWidthPx,
             text,
+            fillColor: colors.fill,
+            stroke: { color: colors.stroke, widthPt: 1.25 },
           })
           if (!r) return fail(t('aiFailNewElement'), `Failed to place node "${el.title}"`)
           access.applySlide(idx, r.slide)
@@ -3303,7 +3313,7 @@ async function executeTool(
             wPx: Math.max(Math.abs(x2 - x1), 1),
             hPx: Math.max(Math.abs(y2 - y1), 1),
             fitWidthPx: access.fitWidthPx,
-            stroke: { color: '#687784', widthPt: 1.5 },
+            stroke: { color: connectorColor(theme.roles), widthPt: 1.5 },
           })
           if (!cr) continue
           access.applySlide(idx, cr.slide)
