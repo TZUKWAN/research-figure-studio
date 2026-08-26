@@ -38,7 +38,7 @@ export function resolveComponentColors(
   return {
     fill,
     stroke,
-    text: lightFill ? roles.textPrimary : pickReadableOnDark(roles),
+    text: lightFill ? roles.textPrimary : pickReadableOnDark(roles, fill),
     subtitle: lightFill ? roles.textSecondary : roles.textSecondary,
   }
 }
@@ -69,9 +69,9 @@ export function contrastRatio(a: string, b: string): number {
   return (hi + 0.05) / (lo + 0.05)
 }
 
-function pickReadableOnDark(roles: ThemeRoles): string {
-  // Pick whichever role text reads better on the dark fill; fall back to near-white.
-  const cPrimary = contrastRatio(roles.textPrimary, roles.primary)
-  const cSecondary = contrastRatio(roles.textSecondary, roles.primary)
-  return cPrimary >= cSecondary ? roles.textPrimary : '#F2F5F8'
+function pickReadableOnDark(roles: ThemeRoles, onFill: string): string {
+  // Pick whichever reads better ON THE ACTUAL FILL; fall back to near-white.
+  const cPrimary = contrastRatio(roles.textPrimary, onFill)
+  const cLight = contrastRatio('#F2F5F8', onFill)
+  return cPrimary >= cLight ? roles.textPrimary : '#F2F5F8'
 }
