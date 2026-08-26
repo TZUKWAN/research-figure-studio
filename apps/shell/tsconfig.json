@@ -21,7 +21,6 @@
     "electron.vite.config.ts",
     "src/**/*.ts",
     "src/**/*.tsx",
-    "../slides/src/main/env.d.ts",
-    "../../packages/pdf2docx/src/bidi-js.d.ts"
+    "../slides/src/main/env.d.ts"
   ]
 }
