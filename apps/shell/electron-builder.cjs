@@ -74,8 +74,6 @@ for (const rel of [
   '../../node_modules/@genspark/cli/node_modules/commander',
   '../../node_modules/ws',
   '../../node_modules/electron/dist/LICENSES.chromium.html',
-  '../../node_modules/@embedpdf/pdfium/dist/pdfium.wasm',
-  '../pdf/node_modules/harfbuzzjs/hb-subset.wasm',
 ]) {
   if (!existsSync(join(__dirname, rel))) {
     throw new Error(
@@ -84,124 +82,8 @@ for (const rel of [
   }
 }
 
-// macOS local-OCR helper (scanned-page text recovery): a swiftc output, not
-// an npm artifact — compiled here on demand so CI runners and fresh checkouts
-// need no manual step. Universal (arm64 + x86_64) when both targets compile,
-// host-arch otherwise; mac installers must not silently ship without it.
-const VISION_OCR_HELPER = '../../packages/pdf2docx/ocr-helper/vision-ocr'
-
-// Compile the helper. universalOnly=true has NO host-arch fallback: dual-arch
-// packaging must fail loudly rather than ship a host-arch binary to both dmgs.
-function compileVisionOcr({ universalOnly } = { universalOnly: false }) {
-  const src = join(__dirname, `${VISION_OCR_HELPER}.swift`)
-  const out = join(__dirname, VISION_OCR_HELPER)
-  try {
-    try {
-      const slices = ['arm64', 'x86_64'].map((arch) => {
-        const slice = `${out}.${arch}`
-        execFileSync('swiftc', ['-O', src, '-target', `${arch}-apple-macos12`, '-o', slice], {
-          stdio: 'inherit',
-        })
-        return slice
-      })
-      execFileSync('lipo', ['-create', ...slices, '-output', out], { stdio: 'inherit' })
-      for (const slice of slices) rmSync(slice, { force: true })
-    } catch (err) {
-      if (universalOnly) throw err
-      // cross-target SDK unavailable — a host-arch helper still serves this build
-      execFileSync('swiftc', ['-O', src, '-o', out], { stdio: 'inherit' })
-    }
-  } catch (err) {
-    throw new Error(`vision-ocr helper compile failed: ${err}`, { cause: err })
-  }
-}
-
-if (process.platform === 'darwin' && !existsSync(join(__dirname, VISION_OCR_HELPER))) {
-  compileVisionOcr()
-}
-
-// Windows local-OCR helper (Windows.Media.Ocr): compiled by the in-box .NET
-// Framework csc via build-win.mjs — same on-demand policy as the mac helper,
-// and Windows installers must not silently ship without it.
-const WIN_OCR_HELPER = '../../packages/pdf2docx/ocr-helper/win-ocr.exe'
-if (process.platform === 'win32' && !existsSync(join(__dirname, WIN_OCR_HELPER))) {
-  try {
-    execFileSync(
-      process.execPath,
-      [join(__dirname, '../../packages/pdf2docx/ocr-helper/build-win.mjs')],
-      { stdio: 'inherit' },
-    )
-  } catch (err) {
-    throw new Error(`win-ocr helper compile failed: ${err}`, { cause: err })
-  }
-}
-
-// Dual-arch packs share one extraResources path, so the shipped helper must be
-// a lipo fat binary. A stale host-arch build (dev path above) is rebuilt in
-// place; if a universal build cannot be produced, packaging aborts — otherwise
-// the other arch's OCR silently fails and every scanned page ships as bitmap.
-function assertUniversalVisionOcr() {
-  const helper = join(__dirname, VISION_OCR_HELPER)
-  const wanted = ['x86_64', 'arm64']
-  const archsOf = () =>
-    existsSync(helper)
-      ? execFileSync('lipo', ['-archs', helper], { encoding: 'utf8' }).trim().split(/\s+/)
-      : []
-  if (!wanted.every((w) => archsOf().includes(w))) {
-    rmSync(helper, { force: true })
-    compileVisionOcr({ universalOnly: true })
-  }
-  const archs = archsOf()
-  for (const want of wanted) {
-    if (!archs.includes(want)) {
-      throw new Error(
-        `vision-ocr helper is [${archs.join(', ')}] but both mac arch packages ship it`,
-      )
-    }
-  }
-}
-
-// The module trees are electron-vite outputs produced by build:all; a missing
-// one means that module's build did not run or failed. electron-builder only
-// logs "file source doesn't exist" for an absent extraResources source and
-// still exits 0, so without this the installer launches normally and is simply
-// missing that editor — it surfaces only when a user opens the tab.
-//
-// Runs from the beforePack hook, not at module load: gen-third-party-notices
-// requires this config to read extraResources, and the dist:* scripts run
-// notices before build:all, when the out dirs legitimately don't exist yet.
-// When the mac build packages BOTH arches (GENOFFICE_MAC_X64=1) its
-// extraResources entry is a single path shared by the two packs, so the
-// sidecar there must be a lipo fat binary — a host-arch-only build (the plain
-// `native:build` dev path) would silently ship an arm64 sidecar inside the
-// Intel dmg, where every workbook open fails. Runs from beforePack, dual-arch
-// mac packs only.
-function assertUniversalSidecar() {
-  const sidecar = join(__dirname, '../sheets/native/xlsx-engine/target/release/xlsx-sidecar')
-  if (!existsSync(sidecar)) {
-    throw new Error(
-      `mac extraResources source missing: ${sidecar} (run "npm run native:build:universal -w @genoffice/sheets" first)`,
-    )
-  }
-  const archs = execFileSync('lipo', ['-archs', sidecar], { encoding: 'utf8' }).trim().split(/\s+/)
-  for (const want of ['x86_64', 'arm64']) {
-    if (!archs.includes(want)) {
-      throw new Error(
-        `xlsx-sidecar is [${archs.join(', ')}] but both mac arch packages ship it — ` +
-          'run "npm run native:build:universal -w @genoffice/sheets" before packaging mac',
-      )
-    }
-  }
-}
-
 function assertModuleTreesPresent() {
-  for (const rel of [
-    '../docs/out',
-    '../sheets/out',
-    '../slides/out',
-    '../pdf/out',
-    '../markdown/out',
-  ]) {
+  for (const rel of ['../slides/out']) {
     if (!existsSync(join(__dirname, rel))) {
       throw new Error(
         `electron-builder extraResources source missing: ${rel} (run npm run build:all first)`,
@@ -232,45 +114,8 @@ const config = {
       to: 'LICENSES.chromium.html',
     },
     {
-      from: '../docs/out',
-      to: 'modules/docs',
-    },
-    {
-      from: '../sheets/out',
-      to: 'modules/sheets',
-    },
-    {
       from: '../slides/out',
       to: 'modules/slides',
-    },
-    {
-      from: '../pdf/out',
-      to: 'modules/pdf',
-    },
-    {
-      from: '../markdown/out',
-      to: 'modules/markdown',
-    },
-    // PDF text editing engines: the bundled main resolves these under
-    // Resources/wasm when node_modules is absent (apps/pdf/src/main/wasm-path.ts)
-    {
-      from: '../../node_modules/@embedpdf/pdfium/dist/pdfium.wasm',
-      to: 'wasm/pdfium.wasm',
-    },
-    {
-      from: '../pdf/node_modules/harfbuzzjs/hb-subset.wasm',
-      to: 'wasm/hb-subset.wasm',
-    },
-    // platform system-OCR helpers for scanned-page recovery (each exists only
-    // on its own build platform; electron-builder skips absent sources and the
-    // engine resolver degrades to the bitmap fallback when missing)
-    {
-      from: '../../packages/pdf2docx/ocr-helper/vision-ocr',
-      to: 'ocr/vision-ocr',
-    },
-    {
-      from: '../../packages/pdf2docx/ocr-helper/win-ocr.exe',
-      to: 'ocr/win-ocr.exe',
     },
     {
       from: '../../node_modules/@genspark/cli',
@@ -290,58 +135,10 @@ const config = {
   // there. macOS and Windows ignore the field and key off `ext`.
   fileAssociations: [
     {
-      ext: 'docx',
-      name: 'Word Document',
-      role: 'Editor',
-      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    },
-    {
-      ext: 'xlsx',
-      name: 'Excel Workbook',
-      role: 'Editor',
-      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    },
-    {
-      ext: 'xlsm',
-      name: 'Excel Macro-Enabled Workbook',
-      role: 'Editor',
-      mimeType: 'application/vnd.ms-excel.sheet.macroEnabled.12',
-    },
-    {
       ext: 'pptx',
       name: 'PowerPoint Presentation',
       role: 'Editor',
       mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-    },
-    {
-      ext: 'xls',
-      name: 'Excel 97-2003 Workbook',
-      role: 'Editor',
-      mimeType: 'application/vnd.ms-excel',
-    },
-    {
-      ext: 'csv',
-      name: 'CSV Document',
-      role: 'Editor',
-      mimeType: 'text/csv',
-    },
-    {
-      ext: 'pdf',
-      name: 'PDF Document',
-      role: 'Editor',
-      mimeType: 'application/pdf',
-    },
-    {
-      ext: 'md',
-      name: 'Markdown Document',
-      role: 'Editor',
-      mimeType: 'text/markdown',
-    },
-    {
-      ext: 'markdown',
-      name: 'Markdown Document',
-      role: 'Editor',
-      mimeType: 'text/markdown',
     },
   ],
   npmRebuild: false,
@@ -363,24 +160,12 @@ const config = {
     entitlements: 'build/entitlements.mac.plist',
     entitlementsInherit: 'build/entitlements.mac.plist',
     notarize: true,
-    extraResources: [
-      {
-        from: '../sheets/native/xlsx-engine/target/release/xlsx-sidecar',
-        to: 'native/xlsx-sidecar',
-      },
-    ],
   },
   win: {
     target: [
       {
         target: 'nsis',
         arch: ['x64'],
-      },
-    ],
-    extraResources: [
-      {
-        from: '../sheets/native/xlsx-engine/target/x86_64-pc-windows-gnu/release/xlsx-sidecar.exe',
-        to: 'native/xlsx-sidecar.exe',
       },
     ],
   },
@@ -429,12 +214,6 @@ const config = {
     // match the "genoffice" WM_CLASS the window actually reports — and X11
     // compares case-sensitively, so the taskbar shows an unlinked window.
     syncDesktopName: true,
-    extraResources: [
-      {
-        from: '../sheets/native/xlsx-engine/target/release/xlsx-sidecar',
-        to: 'native/xlsx-sidecar',
-      },
-    ],
   },
   // Same "@genoffice/shell" problem as executableName above: the default deb
   // artifact name derives from package.json "name", and the scope's "/" makes
@@ -468,12 +247,8 @@ const config = {
     oneClick: false,
     allowToChangeInstallationDirectory: true,
   },
-  beforePack: async (context) => {
+  beforePack: async () => {
     assertModuleTreesPresent()
-    if (context.electronPlatformName === 'darwin' && includeMacX64) {
-      assertUniversalSidecar()
-      assertUniversalVisionOcr()
-    }
   },
   dmg: {
     sign: true,
