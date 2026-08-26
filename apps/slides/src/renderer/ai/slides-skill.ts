@@ -935,6 +935,36 @@ const TOOLS: AgentToolDef[] = [
     },
   },
   {
+    name: 'add_connector',
+    description:
+      'Draw a connector between two existing elements and bind its endpoints to them (it follows when either element is later moved). kind: straight (default) / elbow / curved. Optional color and width. Returns the new connector element id.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        slideIndex: { type: 'integer' },
+        fromId: { type: 'string', description: 'Source element id (from the outline/read_slide)' },
+        toId: { type: 'string', description: 'Target element id' },
+        kind: { type: 'string', enum: ['straight', 'elbow', 'curved'] },
+        color: { type: 'string', description: '#RRGGBB stroke color' },
+        widthPt: { type: 'number', description: 'Stroke width in points (default 1.5)' },
+      },
+      required: ['slideIndex', 'fromId', 'toId'],
+    },
+  },
+  {
+    name: 'set_slide_size',
+    description:
+      'Set the slide canvas size (applies to the whole deck; existing elements are rescaled proportionally). Use millimeters. Common research-figure sizes: single-column 90x90, double-column 190x120, A4-landscape 297x210, slide-16:9 338.7x190.5.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        widthMm: { type: 'number', description: 'Canvas width in millimeters' },
+        heightMm: { type: 'number', description: 'Canvas height in millimeters' },
+      },
+      required: ['widthMm', 'heightMm'],
+    },
+  },
+  {
     name: 'add_chart',
     description:
       "Insert a chart on a page (native pptx chart, still editable in PowerPoint). categories are the x-axis categories; series is each series' name and values (length must match categories). Omit x/y/w/h to center it. dataSource declares where the numbers came from and is enforced — never present invented numbers as real data.",
@@ -1480,11 +1510,30 @@ function buildDeckOutline(slides: RenderSlide[], current: number, selectedIds: s
   ]
   if (selectedIds.length > 0) {
     const currentSlide = slides[current]
-    const selectedRefs = selectedIds.map((id) => {
-      const node = currentSlide ? findNodeById(currentSlide.nodes, id) : undefined
-      return node?.durableId ?? node?.sourceId ?? id
-    })
-    lines.push(`User selected elements: ${selectedRefs.join(', ')}`)
+    lines.push(
+      `User selected ${selectedIds.length} element(s) on page ${current + 1} — element-scoped requests (move/restyle/edit) target these unless the user says otherwise. Full details:`,
+    )
+    const infos = currentSlide ? collectNodeInfos(currentSlide.nodes) : []
+    for (const id of selectedIds) {
+      const info = infos.find((n) => n.id === id)
+      if (!info) {
+        lines.push(`  - ${id} (details unavailable)`)
+        continue
+      }
+      const bits = [
+        `${info.id}`,
+        info.type,
+        `pos(${info.x},${info.y}) size(${info.w}×${info.h})`,
+      ]
+      if (info.text) bits.push(`text "${preview(info.text, 40)}"`)
+      if ((info as { fill?: string }).fill) bits.push(`fill ${(info as { fill: string }).fill}`)
+      if ((info as { strokeColor?: string }).strokeColor)
+        bits.push(`stroke ${(info as { strokeColor: string }).strokeColor}`)
+      if (info.fontSizePt) bits.push(`${info.fontSizePt}pt`)
+      if ((info as { groupId?: string }).groupId)
+        bits.push(`in group ${(info as { groupId: string }).groupId}`)
+      lines.push(`  - ${bits.join(' | ')}`)
+    }
   }
   slides.forEach((slide, i) => {
     lines.push(`Page ${i + 1} (slideIndex=${i}):`)
@@ -3037,6 +3086,87 @@ async function executeTool(
         summary: isShape
           ? t('aiSumNewShape', { n: idx + 1 })
           : t('aiSumNewTextbox', { n: idx + 1 }),
+      }
+    }
+
+    case 'set_slide_size': {
+      const widthMm = Number(call.input.widthMm)
+      const heightMm = Number(call.input.heightMm)
+      if (!(widthMm > 10 && widthMm < 2000) || !(heightMm > 10 && heightMm < 2000))
+        return fail(t('aiFailNewElement'), 'widthMm/heightMm must be within 10–2000mm')
+      const EMU_PER_MM = 36000
+      const r = await window.slidesApi.setSlideSize({
+        cx: Math.round(widthMm * EMU_PER_MM),
+        cy: Math.round(heightMm * EMU_PER_MM),
+      })
+      if (!r) return fail(t('aiFailNewElement'), 'Slide size change failed')
+      access.applyDeck(r)
+      return {
+        output: `Canvas is now ${widthMm}×${heightMm}mm (${r.length} pages rescaled). All later coordinates are pixels on this new canvas size.`,
+        mutated: true,
+        summary: t('aiSumNewShape', { n: 1 }),
+      }
+    }
+
+    case 'add_connector': {
+      const idx = Number(call.input.slideIndex)
+      const slide = slides[idx]
+      if (!slide) return fail(t('aiFailNewElement'), `slideIndex out of range (0-${slides.length - 1})`)
+      const fromId = String(call.input.fromId ?? '')
+      const toId = String(call.input.toId ?? '')
+      if (!fromId || !toId) return fail(t('aiFailNewElement'), 'fromId and toId are required')
+      if (fromId === toId) return fail(t('aiFailNewElement'), 'fromId and toId must differ')
+      const from = findNodeById(slide.nodes, fromId)
+      const to = findNodeById(slide.nodes, toId)
+      if (!from?.box || !to?.box)
+        return fail(t('aiFailNewElement'), `fromId/toId not found on page ${idx + 1}`)
+      // Endpoints: element centers; endpoint binding re-snaps to real anchor sides.
+      const x1 = from.box.x + from.box.w / 2
+      const y1 = from.box.y + from.box.h / 2
+      const x2 = to.box.x + to.box.w / 2
+      const y2 = to.box.y + to.box.h / 2
+      const preset =
+        call.input.kind === 'elbow'
+          ? 'bentConnector3'
+          : call.input.kind === 'curved'
+            ? 'curvedConnector3'
+            : 'line'
+      const r = await window.slidesApi.addElement({
+        slideIndex: idx,
+        kind: preset,
+        xPx: Math.min(x1, x2),
+        yPx: Math.min(y1, y2),
+        wPx: Math.max(Math.abs(x2 - x1), 1),
+        hPx: Math.max(Math.abs(y2 - y1), 1),
+        fitWidthPx: access.fitWidthPx,
+        stroke: { color: String(call.input.color ?? '#687784'), widthPt: Number(call.input.widthPt) || 1.5 },
+      })
+      if (!r) return fail(t('aiFailNewElement'), 'Connector insertion failed')
+      access.applySlide(idx, r.slide)
+      let bound = false
+      try {
+        const boundSlide = await window.slidesApi.editConnectorEndpoints({
+          slideIndex: idx,
+          sourceId: r.sourceId,
+          x1Px: x1,
+          y1Px: y1,
+          x2Px: x2,
+          y2Px: y2,
+          fitWidthPx: access.fitWidthPx,
+          start: { targetId: fromId, idx: 0 },
+          end: { targetId: toId, idx: 0 },
+        })
+        if (boundSlide) {
+          access.applySlide(idx, boundSlide)
+          bound = true
+        }
+      } catch {
+        // Degrade gracefully: keep the unbound line (still visible and movable).
+      }
+      return {
+        output: `Drew a ${String(call.input.kind ?? 'straight')} connector (id=${r.sourceId}) from ${fromId} to ${toId}${bound ? '; endpoints bound so it follows later moves' : ''}.`,
+        mutated: true,
+        summary: t('aiSumNewShape', { n: idx + 1 }),
       }
     }
 
