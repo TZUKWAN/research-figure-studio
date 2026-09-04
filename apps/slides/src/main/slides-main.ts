@@ -22,7 +22,7 @@ import type { WebContents } from 'electron'
 import { execFile } from 'node:child_process'
 import { readFile, writeFile, rm, stat, mkdir, open } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync } from 'node:fs'
 import { userInfo } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { cleanupExpiredGeneratedPages } from './generated-page-temp'
@@ -426,6 +426,24 @@ function syncAttachedPaths(session: Session, path: string): void {
 }
 
 const RECENT_PATH = () => join(app.getPath('userData'), 'slides-recent.json')
+
+// ── Persistent export diagnostics (acceptance ISS-04): the status bar is
+// transient, so PNG-export failures were invisible. Every export stage logs
+// to userData/export-diag.log, surviving until the user reports a problem. ──
+const EXPORT_DIAG_LOG = () => join(app.getPath('userData'), 'export-diag.log')
+function appendExportDiag(line: string): void {
+  try {
+    mkdirSync(dirname(EXPORT_DIAG_LOG()), { recursive: true })
+    appendFileSync(
+      EXPORT_DIAG_LOG(),
+      `[${new Date().toISOString()}] ${line}
+`,
+      'utf-8',
+    )
+  } catch {
+    /* diagnostics must never break the export path */
+  }
+}
 
 /** Comment author name: system username, falling back to a generic "User" label. */
 function commentAuthorName(): string {
@@ -4125,6 +4143,11 @@ export function registerSlidesIpc(): void {
 
   // ── Export (PDF / images): the renderer renders hi-res PNGs with offscreen Konva; the main process handles dialogs/writing ──
 
+  ipcMain.handle('slides:append-export-diag', (_e, line: unknown) => {
+    if (typeof line === 'string' && line.length < 4000) appendExportDiag(line)
+    return true
+  })
+
   ipcMain.handle('slides:pick-export-dir', async () => {
     const parent = dialogParent()
     const options = {
@@ -4133,23 +4156,32 @@ export function registerSlidesIpc(): void {
       properties: ['openDirectory' as const, 'createDirectory' as const],
     }
     const r = await showOpenDialogWithMemory(dialog, parent, options)
+    appendExportDiag(`pickExportDir: canceled=${r.canceled} paths=${JSON.stringify(r.filePaths)}`)
     return r.canceled || !r.filePaths[0] ? null : r.filePaths[0]
   })
 
   ipcMain.handle(
     'slides:export-images',
     async (_e, op: ExportImagesOp): Promise<ExportImagesResult> => {
+      appendExportDiag(
+        `exportImages: dir=${JSON.stringify(op.dir)} base=${JSON.stringify(op.baseName)} count=${op.pngsBase64.length}`,
+      )
       try {
+        // Defensive: baseName must be a NAME, never a path. A caller passing an
+        // absolute path produced `dir + path` and ENOENT on Windows (ISS-04).
+        const base = basename(op.baseName).replace(/\.pptx$/i, '')
         // Zero-padding width follows the total page count (3 digits for ≥100 pages)
         const pad = op.pngsBase64.length >= 100 ? 3 : 2
         const paths: string[] = []
         for (let i = 0; i < op.pngsBase64.length; i++) {
-          const p = join(op.dir, `${op.baseName}-${String(i + 1).padStart(pad, '0')}.png`)
+          const p = join(op.dir, `${base}-${String(i + 1).padStart(pad, '0')}.png`)
           await writeFile(p, Buffer.from(op.pngsBase64[i], 'base64'))
           paths.push(p)
         }
+        appendExportDiag(`exportImages: wrote ${paths.length} file(s)`)
         return { ok: true, paths }
       } catch (err) {
+        appendExportDiag(`exportImages: FAILED ${String(err)}`)
         return { ok: false, error: String(err) }
       }
     },

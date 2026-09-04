@@ -81,7 +81,12 @@ export async function saveAs(ctx: ActionCtx): Promise<void> {
 
 /** Export base name: file name without the .pptx extension */
 export function exportBaseName(ctx: ActionCtx): string {
-  return (ctx.path?.split('/').pop() ?? t('appUntitledPresentation')).replace(/\.pptx$/i, '')
+  // Windows paths use backslashes: split on BOTH separators or the whole
+  // absolute path leaks into the exported file name (acceptance ISS-04).
+  return (ctx.path?.split('\\').pop()?.split('/').pop() ?? t('appUntitledPresentation')).replace(
+    /\.pptx$/i,
+    '',
+  )
 }
 
 /** Export as images: each page (skipping hidden ones) rendered offscreen to 2x PNG, written to disk by the main process */
@@ -93,20 +98,24 @@ export async function exportImages(ctx: ActionCtx): Promise<void> {
   }
   const dir = await window.slidesApi.pickExportDir()
   if (!dir) return
+  void window.slidesApi.appendExportDiag?.(`exportImages: picked dir=${JSON.stringify(dir)}`)
   ctx.setStatus(t('appExportImagesProgress', { count: visible.length }))
   try {
     const pngs = await renderSlidesToPngBase64(visible, ctx.images)
+    void window.slidesApi.appendExportDiag?.(`exportImages: rendered ${pngs.length} png(s)`)
     const r = await window.slidesApi.exportImages({
       dir,
       baseName: exportBaseName(ctx),
       pngsBase64: pngs,
     })
+    if (!r.ok) void window.slidesApi.appendExportDiag?.(`exportImages: IPC error ${r.error ?? ''}`)
     ctx.setStatus(
       r.ok
         ? t('appExportImagesDone', { count: r.paths?.length ?? 0, dir })
         : t('appExportImagesFailed', { error: r.error ?? t('appUnknownError') }),
     )
   } catch (err) {
+    void window.slidesApi.appendExportDiag?.(`exportImages: render threw ${String(err)}`)
     ctx.setStatus(t('appExportImagesFailed', { error: String(err) }))
   }
 }

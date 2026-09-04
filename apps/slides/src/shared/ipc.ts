@@ -1529,6 +1529,8 @@ export interface SlidesApi {
   } | null>
   /** Export as images: shows the directory picker dialog, cancel returns null */
   pickExportDir: () => Promise<string | null>
+  /** persist export-failure diagnostics into userData/export-diag.log (ISS-04) */
+  appendExportDiag?: (line: string) => Promise<boolean>
   /** Write each page PNG to disk as <baseName>-01.png …; returns the written paths */
   exportImages: (op: ExportImagesOp) => Promise<ExportImagesResult>
   /** Export as PDF: shows the save dialog for the target path, cancel returns null */

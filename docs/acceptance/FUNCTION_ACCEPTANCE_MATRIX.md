@@ -26,7 +26,7 @@ Counters at start of acceptance phase: Total = N (below), Tested = 0.
 | UI-017 | File      | Save (Ctrl+S) writes disk               | Ctrl+S                           | Key                    | file size/mtime change; XML contains new title        | same                    | PASS                                                                    | file 5518→7637 B; XML contains new title + metadata                             | —                  |
 | UI-018 | File      | Open PPTX                               | Ctrl+O → dialog                  | Type path + Enter      | deck opens with rendered figure                       | same                    | PASS                                                                    | frame-be7b81c7                                                                  | —                  |
 | UI-019 | Export    | 导出为 PDF                              | 文件 → 导出为 PDF                | Click + save           | valid PDF on disk                                     | same                    | PASS                                                                    | yangtze-figure.pdf 75,891 B, %PDF magic                                         | —                  |
-| UI-020 | Export    | 导出为图片 (PNG)                        | 文件 → 导出为图片                | Click ×5 variants      | PNG on disk                                           | same                    | **FAIL**                                                                | no file after 5 attempts (AXPress + real click + typed path)                    | ISS-04             |
+| UI-020 | Export    | 导出为图片 (PNG)                        | 文件 → 导出为图片                | Click ×5 variants      | PNG on disk                                           | same                    | **PASS** (after ISS-04 fix)                                             | yangtze-figure-01.png 2560×1440 (162,663 B); diag `wrote 1 file(s)`             | ISS-04 → FIXED     |
 | UI-021 | Export    | 另存为 PPTX                             | 另存为                           | —                      | new pptx file                                         | —                       | PASS (equivalent path verified via Ctrl+S write-back + roundtrip tests) | —                                                                               | —                  |
 | UI-022 | AI        | AI modifies existing figure             | Copilot with deck loaded         | type + send            | canvas changes                                        | —                       | **BLOCKED**                                                             | configured model `gpt-5.6-luna@localhost` cannot sustain tool-loop (see ISS-05) | ISS-05             |
 | UI-023 | Settings  | AI settings isolated                    | GENOFFICE_USER_DATA              | —                      | isolated dir used                                     | copied ai-settings.json | PASS                                                                    | settings loaded (LLM calls reached model)                                       | —                  |
@@ -40,13 +40,13 @@ Workflows: A (create→edit→save→reopen→export) **PASS via deterministic a
 ```text
 Total Features: 25
 Executed:       25
-Passed:         23
-Failed:         1   (UI-020 PNG export)
+Passed:         24
+Failed:         0
 Blocked:        1   (UI-022 AI-modify via weak local model)
 Skipped:        0
 
 Execution Coverage: 100%
-Pass Rate:          92%
+Pass Rate:          96%  (24/25; the single non-pass is an external blocker, not a product defect)
 ```
 
 Blocking rationale per GOAL §12:
