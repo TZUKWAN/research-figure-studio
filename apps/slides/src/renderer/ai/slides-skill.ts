@@ -1119,7 +1119,7 @@ const TOOLS: AgentToolDef[] = [
   {
     name: 'create_research_figure',
     description:
-      "[Research Figure Mode] End-to-end orchestrated creation from a thesis: runs the Semantic Planner (semantics only), compresses visible text, measures real sizes, generates + ranks composition candidates (model plan vs deterministic priors by autonomy), solves legal geometry, routes native connectors, and audits before writing. Use INSTEAD of create_input_core_output/create_horizontal_pipeline when the user asks for a new research figure; only these Recipes remain for executing a manually validated FigurePlan. Don't pass pixel coordinates.",
+      "[Research Figure Mode] End-to-end orchestrated creation from a thesis: runs the Semantic Planner (semantics only), compresses visible text, measures real sizes, generates + ranks composition candidates (model plan vs deterministic priors by autonomy), solves legal geometry, routes native connectors, and audits before writing. This is the DEFAULT AND ONLY tool for a NEW figure. plan_research_figure + create_input_core_output/create_horizontal_pipeline are legacy tools reserved for executing an already-validated FigurePlan — never use them for a new figure. Don't pass pixel coordinates.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -1842,8 +1842,19 @@ const GSK_TOOLS_OFF_NOTE =
 const RESEARCH_MODE_EXCLUDED_TOOLS = new Set([
   'generate_deck',
   'plan_deck',
+  'regenerate_slide',
   'save_style_template',
   'list_style_templates',
+])
+// Hidden from the research-mode AGENT TOOL LIST so a NEW figure can only be
+// produced by create_research_figure (acceptance RF-FIX-002 — the model twice
+// drifted to the legacy recipe tools when they were visible). Unlike
+// RESEARCH_MODE_EXCLUDED_TOOLS these remain executable via executeTool for
+// tests and programmatic FigurePlan execution.
+const RESEARCH_MODE_HIDDEN_TOOLS = new Set([
+  'plan_research_figure',
+  'create_input_core_output',
+  'create_horizontal_pipeline',
 ])
 const RESEARCH_MODE_ONLY_TOOLS = new Set(['plan_research_figure', 'create_research_figure'])
 
@@ -1870,7 +1881,11 @@ export function createSlidesSkill(
     get tools() {
       const modeTools =
         mode === 'research'
-          ? TOOLS.filter((tool) => !RESEARCH_MODE_EXCLUDED_TOOLS.has(tool.name))
+          ? TOOLS.filter(
+              (tool) =>
+                !RESEARCH_MODE_EXCLUDED_TOOLS.has(tool.name) &&
+                !RESEARCH_MODE_HIDDEN_TOOLS.has(tool.name),
+            )
           : TOOLS.filter((tool) => !RESEARCH_MODE_ONLY_TOOLS.has(tool.name))
       return access.gskTools?.() === false
         ? modeTools.filter((t) => !GSK_ONLY_TOOLS.has(t.name))
@@ -1882,7 +1897,16 @@ export function createSlidesSkill(
         ? `<figure-plan>\n${JSON.stringify(state.lastFigurePlan, null, 2)}\n</figure-plan>`
         : ''
       const progress = buildProgressNote(state)
-      return [outline, figurePlan, progress].filter(Boolean).join('\n')
+      // Research mode: when the deck has no real content yet, remind EVERY turn
+      // that the only creation path is create_research_figure (weak models
+      // otherwise drift into hand-assembly dead ends - acceptance RF-FIX-002).
+      const blankResearchNote =
+        mode === 'research' &&
+        !state?.htmlGenerated &&
+        access.getSlides().every((slide) => slide.nodes.length === 0)
+          ? '<research-mode-note>画布仍为空：请立即调用 create_research_figure（把研究需求作为 thesis 传入）。不要用 add_shape/add_text_box 手工搭图。</research-mode-note>'
+          : ''
+      return [outline, figurePlan, progress, blankResearchNote].filter(Boolean).join('\n')
     },
     reset: () => {
       state.htmlGenerated = false
@@ -1943,11 +1967,13 @@ function blockScratchBuild(
   if (state?.mode === 'research') {
     return {
       output:
-        'For a blank research figure, do not hand-assemble a page element by element. ' +
-        'Call plan_research_figure first, then use the appropriate research Recipe; the Recipe owns geometry and creates editable native elements.',
+        'For a research figure, do not hand-assemble a page element by element. ' +
+        'Call create_research_figure with the research request: it runs the full pipeline ' +
+        '(semantic planning, composition candidates, native connector routing, layout audit) ' +
+        'and creates the editable figure in one step. Legacy plan_research_figure / Recipe tools are retired for new figures.',
       isError: true,
       mutated: false,
-      summary: t('aiSumFromScratchGuard', { label }),
+      summary: '已拦截手工搭建：改用 create_research_figure 创建科研图',
     }
   }
   return {
@@ -3812,7 +3838,11 @@ async function executeTool(
     }
 
     case 'create_research_figure': {
-      const idx = Number(call.input.slideIndex)
+      // Graceful degradation: agents (especially weak models) frequently pass a
+      // stale slideIndex after deleting/creating canvases. Fall back to the
+      // current slide instead of failing the whole creation.
+      let idx = Number(call.input.slideIndex)
+      if (!slides[idx]) idx = access.getCurrent()
       const slide = slides[idx]
       if (!slide)
         return fail(t('aiFailNewElement'), `slideIndex out of range (0-${slides.length - 1})`)

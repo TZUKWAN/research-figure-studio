@@ -11,7 +11,7 @@ const access = {
 } as unknown as DeckAccess
 
 describe('Research Figure Mode', () => {
-  it('does not register or mention the presentation deck generator', () => {
+  it('reserves new-figure creation to create_research_figure (legacy recipes hidden)', () => {
     const skill = createSlidesSkill(access, 'research')
 
     expect(skill.tools.some((tool) => tool.name === 'generate_deck')).toBe(false)
@@ -20,8 +20,12 @@ describe('Research Figure Mode', () => {
       'generate_deck',
     )
     expect(skill.tools.some((tool) => tool.name === 'plan_deck')).toBe(false)
-    expect(skill.tools.some((tool) => tool.name === 'plan_research_figure')).toBe(true)
-    expect(skill.tools.some((tool) => tool.name === 'create_input_core_output')).toBe(true)
+    // Acceptance RF-FIX-002: legacy recipe tools are hidden from the agent so a
+    // NEW figure can only be produced by create_research_figure.
+    expect(skill.tools.some((tool) => tool.name === 'create_research_figure')).toBe(true)
+    expect(skill.tools.some((tool) => tool.name === 'plan_research_figure')).toBe(false)
+    expect(skill.tools.some((tool) => tool.name === 'create_input_core_output')).toBe(false)
+    expect(skill.tools.some((tool) => tool.name === 'create_horizontal_pipeline')).toBe(false)
   })
 
   it('validates and returns a FigurePlan, while rejecting hidden presentation calls', async () => {

@@ -433,12 +433,37 @@ export async function orchestrateFigure(
     // Relationship presentation is model-authored: connectors are routed only
     // when the declared representation is a connector, regardless of whether
     // the semantic relationship happened to be classified as primary.
-    const routeableInputs = routeInputs.filter((edge) =>
+    const connectorInputs = routeInputs.filter((edge) =>
       connectorPresentations.has(edge.presentation),
     )
     unrenderedRelations = routeInputs
       .filter((edge) => !connectorPresentations.has(edge.presentation))
       .map((edge) => ({ ...edge, status: 'suppressed' as const, laneOffsetPx: 0 }))
+    // Density guard (acceptance finding RF-BUG-1): a planner flood of
+    // connectors turns the canvas into a hairball where no single relation
+    // reads. Every drawn line must be irreplaceable, so above the density cap
+    // only the highest-priority relations keep their line and the rest are
+    // demoted to recorded spatial presentation — never silently dropped.
+    const densityCap = Math.max(3, Math.ceil(plan.nodes.length * 1.8))
+    let routeableInputs = connectorInputs
+    if (connectorInputs.length > densityCap) {
+      const rank: Record<string, number> = { primary: 0, feedback: 1, secondary: 2 }
+      const sorted = [...connectorInputs].sort(
+        (a, b) =>
+          (rank[a.priority] ?? 2) - (rank[b.priority] ?? 2) || a.key.localeCompare(b.key),
+      )
+      const kept = sorted.slice(0, densityCap)
+      const demoted = sorted.slice(densityCap)
+      unrenderedRelations.push(
+        ...demoted.map((edge) => ({
+          ...edge,
+          status: 'suppressed' as const,
+          laneOffsetPx: 0,
+          diagnostic: 'connector density cap: expressed spatially',
+        })),
+      )
+      routeableInputs = kept
+    }
     routes = routeEdgesWithObstacles(
       routeableInputs,
       rectMap,

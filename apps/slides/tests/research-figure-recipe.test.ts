@@ -430,7 +430,10 @@ describe('research figure recipes', () => {
     } as unknown as DeckAccess
     const skill = createSlidesSkill(access, 'research')
 
-    expect(skill.tools.some((tool) => tool.name === 'create_horizontal_pipeline')).toBe(true)
+    // Legacy recipe tools are hidden from the research-mode agent tool list
+    // (acceptance RF-FIX-002) but stay executable via executeTool for
+    // validated FigurePlan execution.
+    expect(skill.tools.some((tool) => tool.name === 'create_horizontal_pipeline')).toBe(false)
     const planResult = await skill.executeTool({
       id: 'pipeline-plan',
       name: 'plan_research_figure',
