@@ -86,9 +86,13 @@ function inputCoreOutputLayout(): IceLayout {
     inputNodes: [{ component: 'data-source', title: 'Observed data' }],
     coreNodes: [{ component: 'mechanism-module', title: 'Mechanism model' }],
     outputNodes: [{ component: 'output-node', title: 'Validated result' }],
-    feedback: true,
     canvasW: 1280,
     canvasH: 720,
+    edges: [
+      { from: 'Observed data', to: 'Mechanism model', role: 'main' },
+      { from: 'Mechanism model', to: 'Validated result', role: 'main' },
+      { from: 'Validated result', to: 'Mechanism model', role: 'feedback', relation: 'feedback' },
+    ],
   })
 }
 
@@ -215,6 +219,10 @@ describe('research figure model and OOXML round-trip', () => {
       ],
       canvasW: 1280,
       canvasH: 720,
+      edges: [
+        { from: 'Observed data', to: 'Mechanism model', role: 'main' },
+        { from: 'Mechanism model', to: 'Validated result', role: 'main' },
+      ],
     })
     const { opened, slide } = await createResearchFigure(layout)
     const before = metadataList(slide)
