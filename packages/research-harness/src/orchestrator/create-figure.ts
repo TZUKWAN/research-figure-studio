@@ -6,6 +6,7 @@
  * the existing ReAct + execute_slide_script path untouched.
  */
 import { parseFigurePlanV2, type FigurePlanV2 } from '../semantic/figure-plan.js'
+import type { RelationPresentation } from '../semantic/schema.js'
 import { normalizeSpatialPlan, type SpatialPlan } from '../composition/spatial-plan.js'
 import {
   measureNode,
@@ -31,6 +32,8 @@ import { criticVerdict } from '../critic/metric-critic.js'
 import { routeEdgesWithObstacles, type RoutedEdge } from '../routing/router.js'
 import { classifyEdges, type EdgeTarget } from '../constraints/edge-aware-solver.js'
 import { normalizeVisualPlan } from '../visual/visualPlan.js'
+import { compositionSignature } from '../composition/priors.js'
+import { auditScientific, type ScientificIssue } from '../critic/scientific-critic.js'
 
 export interface OrchestratorLlm {
   /** semantic planner: research meaning ONLY (no coordinates/colors) */
@@ -89,13 +92,16 @@ export interface OrchestrationEvent {
   detail?: string
 }
 
-/** Repair hierarchy actually applied (L2/L3/L5 of GOAL repair ladder). */
+/** Repair hierarchy actually applied (extended P0 ladder). */
 export type AppliedRepair =
   | 'L2 ROUTE_FIX'
   | 'L3 LOCAL_GEOMETRY_FIX'
   | 'L3 LOCAL_GEOMETRY_FIX (budget exhausted)'
+  | 'L4 COMPOSITION_REDESIGN'
   | 'L5 RECOMPOSE (semantic replan)'
   | 'L5 RECOMPOSE (composition redesign)'
+  | 'L6 SEMANTIC_REPLAN'
+  | 'CONTENT_REDUCE'
 
 export interface OrchestrationResult {
   ok: boolean
@@ -225,6 +231,14 @@ export async function orchestrateFigure(
   const signals = {
     roles: new Set(plan.nodes.map((node) => node.role)),
     relations: new Set(plan.edges.map((edge) => edge.relation)),
+    signature: compositionSignature({
+      nodeCount: plan.nodes.length,
+      edgeCount: plan.edges.length,
+      relations: new Set(plan.edges.map((edge) => edge.relation)),
+      roles: new Set(plan.nodes.map((node) => node.role)),
+      edges: plan.edges.map((edge) => ({ from: edge.from, to: edge.to, role: edge.role })),
+      importances: plan.nodes.map((node) => node.importance),
+    }),
   }
   const meta = new Map<string, NodeMeta>(
     plan.nodes.map((node) => [
@@ -353,7 +367,7 @@ export async function orchestrateFigure(
       toId: edge.to,
       role: edge.role,
       relation: edge.relation,
-      presentation: edge.presentation ?? 'arrow',
+      presentation: (edge.presentation ?? 'arrow') as RelationPresentation,
       priority: edgePriorityById.get(`${edge.from}\u0000${edge.to}`) ?? 'secondary',
     }))
     // Relationship presentation is model-authored: connectors are routed only
@@ -381,6 +395,31 @@ export async function orchestrateFigure(
       intent: { plan, spatial: best.plan },
       routed: routes,
     })
+    // Scientific audit (17.3): evidence coverage, connector realization,
+    // causal direction, dominance. Hard scientific failures escalate a PASS —
+    // the figure may look clean while silently dropping required science.
+    const scientificIssues: ScientificIssue[] = auditScientific({
+      plan,
+      placements: best.solve.placements,
+      routes,
+      importance,
+      ...(direction === 'TB' ? { direction } : {}),
+    })
+    const hardScientific = scientificIssues.filter((issue) => issue.severity === 'hard')
+    if (hardScientific.length > 0 && critic.verdict === 'PASS') {
+      const needsRoute = hardScientific.some((issue) => issue.repairClass === 'ROUTE_FIX')
+      critic = {
+        ...critic,
+        verdict: needsRoute ? 'ROUTE_FIX' : 'RECOMPOSE',
+        reason: hardScientific.map((issue) => issue.message).join('; '),
+        gateIssues: [...critic.gateIssues, ...scientificIssues.map((issue) => issue.message)],
+      }
+    } else if (scientificIssues.length > 0) {
+      critic = {
+        ...critic,
+        gateIssues: [...critic.gateIssues, ...scientificIssues.map((issue) => issue.message)],
+      }
+    }
     emit('critic.completed', true, critic.verdict)
 
     if (critic.verdict === 'ROUTE_FIX' && !routeRetried) {
@@ -433,11 +472,11 @@ export async function orchestrateFigure(
 
     if (critic.verdict === 'RECOMPOSE' && attempt < maxRecompose) {
       attempt++
-      repairs.push(
-        critic.decisions?.some((d) => d.scope === 'semantic')
-          ? 'L5 RECOMPOSE (semantic replan)'
-          : 'L5 RECOMPOSE (composition redesign)',
-      )
+      const semanticFailure =
+        critic.hardGates.some((gate) => gate.scope === 'semantic' && !gate.pass) ||
+        (critic.decisions?.some((d) => d.scope === 'semantic') ?? false)
+      repairs.push(semanticFailure ? 'L6 SEMANTIC_REPLAN' : 'L5 RECOMPOSE (composition redesign)')
+      if (critic.scores.compositionQuality <= 3) repairs.push('CONTENT_REDUCE')
       emit('recompose.started', true, `attempt ${attempt}`)
       critique = critic.decisions?.length
         ? critic.decisions.map((d) => `${d.action}: ${d.message}`)

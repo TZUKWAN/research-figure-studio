@@ -1,12 +1,33 @@
 /**
- * Composition Priors (Phase 3, GOAL §17-18). Priors are TENDENCIES, not
- * templates: each carries topological/spatial/routing bias with an allowed
- * range the model (or candidate generator) may move inside.
+ * Composition Priors (Phase 3, GOAL §17-18; P0 rewrite).
+ *
+ * A prior is a TENDENCY with an explicit SPATIAL GRAMMAR family. Two priors
+ * sharing a grammar produce the same layout family; `generateCandidates`
+ * selects priors so the candidate set spans DIFFERENT grammars (never four
+ * recolors of the same topology).
+ *
+ * `priorFitScore` matches a computed CompositionSignature (real graph
+ * statistics) against each prior — the prior's own `semanticFit` vocabulary
+ * and the signature agree through semantic keys, not string vibes.
  */
 import type { ReadingFlow } from './spatial-plan.js'
 
 export interface CompositionPrior {
   id: string
+  /** spatial grammar family — the layout builder this prior executes */
+  grammar:
+    | 'linear'
+    | 'converging'
+    | 'diverging'
+    | 'input-core-output'
+    | 'parallel'
+    | 'layered'
+    | 'radial'
+    | 'feedback'
+    | 'causal'
+    | 'mediation'
+    | 'moderation'
+    | 'tree'
   semanticFit: string[]
   principles: string[]
   defaultBias: Record<string, number>
@@ -17,14 +38,16 @@ export interface CompositionPrior {
 export const COMPOSITION_PRIORS: CompositionPrior[] = [
   {
     id: 'linear-process',
-    semanticFit: ['simple flow', 'stage sequence', 'pipeline'],
-    principles: ['main flow LR', 'equal node prominence unless staged'],
+    grammar: 'linear',
+    semanticFit: ['chain', 'stage sequence', 'pipeline'],
+    principles: ['main flow LR', 'columns by layer', 'equal prominence unless staged'],
     defaultBias: { first: 0.06, last: 0.94 },
     allowedRange: { first: [0.04, 0.1], last: [0.9, 0.96] },
     readingFlow: 'LR',
   },
   {
     id: 'converging-flow',
+    grammar: 'converging',
     semanticFit: ['multi-input', 'fan-in', 'aggregation'],
     principles: ['inputs spread on the left', 'convergence point gets visual weight'],
     defaultBias: { inputs: 0.08, sink: 0.82 },
@@ -33,6 +56,7 @@ export const COMPOSITION_PRIORS: CompositionPrior[] = [
   },
   {
     id: 'diverging-flow',
+    grammar: 'diverging',
     semanticFit: ['multi-output', 'fan-out', 'diffusion'],
     principles: ['source anchored left', 'outputs spread on the right'],
     defaultBias: { source: 0.1, outputs: 0.86 },
@@ -41,6 +65,7 @@ export const COMPOSITION_PRIORS: CompositionPrior[] = [
   },
   {
     id: 'input-core-output',
+    grammar: 'input-core-output',
     semanticFit: ['causal-framework', 'mechanism-model', 'processing-system'],
     principles: [
       'main flow usually LR',
@@ -60,6 +85,7 @@ export const COMPOSITION_PRIORS: CompositionPrior[] = [
   },
   {
     id: 'parallel-mechanisms',
+    grammar: 'parallel',
     semanticFit: ['parallel paths', 'competing mechanisms', 'independent tracks'],
     principles: ['tracks run side-by-side', 'shared inputs/outputs anchor the ends'],
     defaultBias: { start: 0.08, end: 0.88 },
@@ -68,6 +94,7 @@ export const COMPOSITION_PRIORS: CompositionPrior[] = [
   },
   {
     id: 'layered-architecture',
+    grammar: 'layered',
     semanticFit: ['stack', 'tiered system', 'abstraction layers'],
     principles: ['layers stack TB', 'flow usually LR inside a layer'],
     defaultBias: { top: 0.08, bottom: 0.9 },
@@ -76,6 +103,7 @@ export const COMPOSITION_PRIORS: CompositionPrior[] = [
   },
   {
     id: 'core-periphery',
+    grammar: 'radial',
     semanticFit: ['hub model', 'central construct with satellites'],
     principles: ['core at visual center', 'satellites ring outward'],
     defaultBias: { core: 0.5 },
@@ -84,6 +112,7 @@ export const COMPOSITION_PRIORS: CompositionPrior[] = [
   },
   {
     id: 'feedback-system',
+    grammar: 'feedback',
     semanticFit: ['loop', 'homeostatic model', 'reinforcing/balancing loop'],
     principles: ['main flow LR', 'feedback rides the peripheral lane'],
     defaultBias: { start: 0.08, end: 0.88, feedbackLane: 0.92 },
@@ -92,6 +121,7 @@ export const COMPOSITION_PRIORS: CompositionPrior[] = [
   },
   {
     id: 'causal-framework',
+    grammar: 'causal',
     semanticFit: ['X→Y model', 'effect decomposition'],
     principles: ['cause left, effect right', 'moderators above the main path'],
     defaultBias: { cause: 0.12, effect: 0.84 },
@@ -100,6 +130,7 @@ export const COMPOSITION_PRIORS: CompositionPrior[] = [
   },
   {
     id: 'mediation',
+    grammar: 'mediation',
     semanticFit: ['X→M→Y mediation'],
     principles: ['mediator centered between cause and effect'],
     defaultBias: { x: 0.1, m: 0.5, y: 0.9 },
@@ -108,6 +139,7 @@ export const COMPOSITION_PRIORS: CompositionPrior[] = [
   },
   {
     id: 'moderation',
+    grammar: 'moderation',
     semanticFit: ['moderated effect'],
     principles: ['moderator above the arrow it qualifies'],
     defaultBias: { x: 0.12, y: 0.84, moderator: 0.48 },
@@ -116,6 +148,7 @@ export const COMPOSITION_PRIORS: CompositionPrior[] = [
   },
   {
     id: 'multi-stage-pipeline',
+    grammar: 'linear',
     semanticFit: ['experiment flow', 'algorithm pipeline'],
     principles: ['stages LR with clear stage bands'],
     defaultBias: { first: 0.06, last: 0.92 },
@@ -124,6 +157,7 @@ export const COMPOSITION_PRIORS: CompositionPrior[] = [
   },
   {
     id: 'hierarchical-system',
+    grammar: 'tree',
     semanticFit: ['taxonomy', 'org chart', 'decomposition'],
     principles: ['root top, leaves bottom'],
     defaultBias: { root: 0.5, leaves: 0.9 },
@@ -137,10 +171,181 @@ export function priorById(id: string): CompositionPrior | null {
 }
 
 /**
- * Deterministic semantic fit score of a prior against a plan's signals
- * (node roles/relation types present). Pure arithmetic, no model in the loop.
+ * CompositionSignature — real graph statistics computed from a plan.
+ * This is what prior selection matches against; no free-text vibes.
+ */
+export interface CompositionSignature {
+  nodeCount: number
+  edgeCount: number
+  relations: Set<string>
+  roles: Set<string>
+  /** max in/out degree over all nodes (fan-in / fan-out strength) */
+  maxFanIn: number
+  maxFanOut: number
+  /** longest-path layer count (chain depth) */
+  layerCount: number
+  /** weakly-connected component count excluding feedback edges (parallel tracks) */
+  componentCount: number
+  /** hierarchy relation present (tree-ish decomposition) */
+  hasHierarchy: boolean
+  hasFeedback: boolean
+  hasMediation: boolean
+  hasModeration: boolean
+  /** importance max-min spread (0 when unknown) */
+  importanceSpread: number
+}
+
+export function compositionSignature(input: {
+  nodeCount: number
+  edgeCount: number
+  relations: Set<string>
+  roles: Set<string>
+  edges?: Array<{ from: string; to: string; role: string }>
+  importances?: number[]
+}): CompositionSignature {
+  const nodeCount = Math.max(1, input.nodeCount)
+  const edges = input.edges ?? []
+  const inDeg = new Map<string, number>()
+  const outDeg = new Map<string, number>()
+  const ids = new Set<string>()
+  for (const edge of edges) {
+    ids.add(edge.from)
+    ids.add(edge.to)
+    outDeg.set(edge.from, (outDeg.get(edge.from) ?? 0) + 1)
+    inDeg.set(edge.to, (inDeg.get(edge.to) ?? 0) + 1)
+  }
+  const maxFanIn = Math.max(0, ...inDeg.values())
+  const maxFanOut = Math.max(0, ...outDeg.values())
+  // longest-path layering over non-feedback edges
+  const layerOf = new Map<string, number>()
+  const adj = new Map<string, string[]>()
+  const inCount = new Map<string, number>()
+  for (const edge of edges) {
+    if (edge.role === 'feedback') continue
+    adj.set(edge.from, [...(adj.get(edge.from) ?? []), edge.to])
+    inCount.set(edge.to, (inCount.get(edge.to) ?? 0) + 1)
+    layerOf.set(edge.from, layerOf.get(edge.from) ?? 0)
+    layerOf.set(edge.to, layerOf.get(edge.to) ?? 0)
+  }
+  const queue = [...layerOf.keys()].filter((id) => (inCount.get(id) ?? 0) === 0)
+  let maxLayer = 0
+  while (queue.length > 0) {
+    const id = queue.shift()!
+    for (const next of adj.get(id) ?? []) {
+      layerOf.set(next, Math.max(layerOf.get(next) ?? 0, (layerOf.get(id) ?? 0) + 1))
+      maxLayer = Math.max(maxLayer, layerOf.get(next) ?? 0)
+      inCount.set(next, (inCount.get(next) ?? 0) - 1)
+      if ((inCount.get(next) ?? 0) === 0) queue.push(next)
+    }
+  }
+  // weak components (non-feedback)
+  const parent = new Map<string, string>()
+  const find = (id: string): string => {
+    const root = parent.get(id) ?? id
+    if (root === id) return id
+    const top = find(root)
+    parent.set(id, top)
+    return top
+  }
+  for (const id of ids) parent.set(id, id)
+  for (const edge of edges) {
+    if (edge.role === 'feedback') continue
+    const a = find(edge.from)
+    const b = find(edge.to)
+    if (a !== b) parent.set(a, b)
+  }
+  const componentCount = new Set([...ids].map(find)).size
+  const importances = input.importances ?? []
+  const importanceSpread =
+    importances.length >= 2 ? Math.max(...importances) - Math.min(...importances) : 0
+  return {
+    nodeCount,
+    edgeCount: input.edgeCount,
+    relations: input.relations,
+    roles: input.roles,
+    maxFanIn,
+    maxFanOut,
+    layerCount: maxLayer + 1,
+    componentCount: Math.max(1, componentCount),
+    hasHierarchy: input.relations.has('hierarchy'),
+    hasFeedback: input.relations.has('feedback'),
+    hasMediation: input.relations.has('mediation'),
+    hasModeration: input.relations.has('moderation'),
+    importanceSpread,
+  }
+}
+
+/**
+ * Deterministic semantic fit of a prior against a CompositionSignature.
+ * Falls back to role/relation-set heuristics when no signature is supplied
+ * (legacy callers). Pure arithmetic — no model in the loop.
  */
 export function priorFitScore(
+  prior: CompositionPrior,
+  signals: {
+    roles: Set<string>
+    relations: Set<string>
+    signature?: CompositionSignature
+  },
+): number {
+  const signature = signals.signature
+  if (!signature) return legacyFit(prior, signals)
+  let score = 0
+  const rel = signature.relations
+  const role = signature.roles
+  switch (prior.grammar) {
+    case 'radial':
+      // one hub with many satellites: strong fan asymmetry on a single node
+      if (Math.max(signature.maxFanIn, signature.maxFanOut) >= 3) score += 3
+      if (signature.nodeCount >= 5 && signature.maxFanIn >= 2 && signature.maxFanOut >= 2)
+        score += 1
+      break
+    case 'converging':
+      if (signature.maxFanIn >= 2) score += 3
+      if (role.has('input')) score += 1
+      break
+    case 'diverging':
+      if (signature.maxFanOut >= 2) score += 3
+      if (role.has('output')) score += 1
+      break
+    case 'input-core-output':
+      if (role.has('input') && role.has('core') && role.has('output')) score += 3
+      if (signature.layerCount >= 3) score += 1
+      break
+    case 'parallel':
+      if (signature.componentCount >= 2) score += 3
+      if (rel.has('association') || rel.has('bidirectional')) score += 1
+      break
+    case 'layered':
+      if (signature.nodeCount >= 6 && signature.layerCount >= 2) score += 2
+      if (rel.has('hierarchy')) score += 1
+      break
+    case 'feedback':
+      if (signature.hasFeedback) score += 4
+      break
+    case 'causal':
+      if (rel.has('causal') || rel.has('process')) score += 1
+      if (signature.hasModeration) score += 2
+      break
+    case 'mediation':
+      if (signature.hasMediation) score += 4
+      break
+    case 'moderation':
+      if (signature.hasModeration) score += 4
+      break
+    case 'tree':
+      if (signature.hasHierarchy) score += 4
+      else if (signature.layerCount >= 3 && signature.maxFanOut >= 2) score += 2
+      break
+    case 'linear':
+      if (rel.has('process')) score += 1
+      if (signature.layerCount >= Math.max(2, signature.nodeCount - 2)) score += 2
+      break
+  }
+  return score
+}
+
+function legacyFit(
   prior: CompositionPrior,
   signals: { roles: Set<string>; relations: Set<string> },
 ): number {

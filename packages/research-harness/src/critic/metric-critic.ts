@@ -1,10 +1,18 @@
 /**
- * Visual/Metric Critic (Phase 7). Deterministic scientific-figure rubric over
- * the solved layout + routed edges: nine 0–10 scores, a weighted overall, and
- * a verdict of PASS / LOCAL_FIX / RECOMPOSE. Technical validity is a GATE —
- * serious violations force RECOMPOSE regardless of the weighted average.
- * Vision is optional: without a screenshot the geometry/metric path still
- * produces the full rubric.
+ * Visual/Metric Critic (Phase 7, P0 rewrite). Two separated layers:
+ *
+ *  1. HARD GATES — boolean feasibility. Any failure blocks delivery and maps
+ *     to a repair class. Gates are never averaged into the score.
+ *  2. SOFT SCORES — a weighted 0–10 rubric whose weights sum to exactly 1.0.
+ *     Every weighted metric is real (computed from placements/edges/routes);
+ *     no constant placeholders. Additional diagnostics (density, spine
+ *     clarity, connector naturalness) are reported but not weighted.
+ *
+ * Verdict semantics (stable contract):
+ *   semantic hard failure or structural intent failure → RECOMPOSE
+ *   geometry gate failure                              → LOCAL_LAYOUT_FIX
+ *   route gate failure                                 → ROUTE_FIX (edgeIds)
+ *   otherwise thresholded on the weighted overall
  */
 import type { SolveResult } from '../constraints/solver.js'
 import { edgeCrossingCount, connectorNodeIntersections, routeEdges } from '../routing/router.js'
@@ -76,24 +84,46 @@ function segIntersect2(s1: { a: Pt; b: Pt }, s2: { a: Pt; b: Pt }): boolean {
 }
 
 export interface CriticScores {
-  semanticFidelity: number
-  readingPath: number
+  // ── weighted rubric (CRITIC_WEIGHTS sums to exactly 1.0) ──
+  /** relation coverage + graph honesty: declared connectors realized, no geometry lies */
+  scientificFidelity: number
+  /** required evidence visible on canvas (mustShow / node coverage) */
+  evidenceCompleteness: number
+  /** visual center dominance + monotone reading progress: the 5-second test */
+  fiveSecondClarity: number
+  /** importance ↔ area rank correlation */
   visualHierarchy: number
-  groupingClarity: number
-  informationDensity: number
+  /** canvas fill band: neither empty nor overloaded */
+  compositionQuality: number
+  /** crossings / node intersections / anchor-side naturalness */
+  relationClarity: number
+  /** measurable readability proxy: no oversized wide nodes at shared rank */
+  typography: number
+  /** quadrant balance of occupied canvas */
   whitespaceBalance: number
-  connectorQuality: number
-  textEconomy: number
-  visualEconomy: number
+  /** anti card-wall: equal-size averaging penalized when importance varies */
+  visualRestraint: number
+  /** every semantic node placed and reachable as a distinct editable element */
+  editability: number
+  // ── real diagnostics (reported, NOT weighted) ──
+  informationDensity: number
   contentDensity: number
   primaryClarity: number
   connectorNaturalness: number
+  groupingClarity: number
   overall: number
 }
 
 export type CriticVerdictLevel = 'PASS' | 'ROUTE_FIX' | 'LOCAL_LAYOUT_FIX' | 'RECOMPOSE'
 
-export type CriticScope = 'semantic' | 'composition' | 'group' | 'node' | 'edge' | 'geometry'
+export type CriticScope =
+  | 'semantic'
+  | 'composition'
+  | 'group'
+  | 'node'
+  | 'edge'
+  | 'geometry'
+  | 'route'
 export type CriticAction = 'accept' | 'geometry-fix' | 'composition-redesign' | 'semantic-replan'
 
 export interface CriticDecision {
@@ -105,10 +135,20 @@ export interface CriticDecision {
   message: string
 }
 
+export interface HardGateResult {
+  gate: string
+  scope: CriticScope
+  pass: boolean
+  detail?: string
+}
+
 export interface CriticVerdict {
   scores: CriticScores
   verdict: CriticVerdictLevel
   gateIssues: string[]
+  /** boolean feasibility gates; any fail blocks delivery regardless of score */
+  hardGates: HardGateResult[]
+  hardPass: boolean
   decisions?: CriticDecision[]
   /** edges to re-route when verdict === 'ROUTE_FIX' */
   edgeIds?: string[]
@@ -133,19 +173,41 @@ export interface CriticInput {
   routed?: RoutedEdge[]
 }
 
-const WEIGHTS: Record<keyof Omit<CriticScores, 'overall'>, number> = {
-  semanticFidelity: 0.25,
-  readingPath: 0.15,
-  visualHierarchy: 0.15,
-  groupingClarity: 0.1,
-  connectorQuality: 0.1,
-  textEconomy: 0.1,
-  informationDensity: 0.05,
+const CONNECTOR_PRESENTATIONS = new Set([
+  'arrow',
+  'line',
+  'dashed-arrow',
+  'inhibition',
+  'feedback-loop',
+  'junction',
+])
+
+/**
+ * Soft rubric weights. MUST sum to exactly 1.0 — enforced by a unit test.
+ * Every entry is a real computed metric; no constant placeholders.
+ */
+export const CRITIC_WEIGHTS: Record<
+  keyof Omit<
+    CriticScores,
+    | 'overall'
+    | 'informationDensity'
+    | 'contentDensity'
+    | 'primaryClarity'
+    | 'connectorNaturalness'
+    | 'groupingClarity'
+  >,
+  number
+> = {
+  scientificFidelity: 0.2,
+  evidenceCompleteness: 0.15,
+  fiveSecondClarity: 0.15,
+  visualHierarchy: 0.1,
+  compositionQuality: 0.1,
+  relationClarity: 0.1,
+  typography: 0.08,
   whitespaceBalance: 0.05,
-  visualEconomy: 0.05,
-  contentDensity: 0.05,
-  primaryClarity: 0.05,
-  connectorNaturalness: 0.05,
+  visualRestraint: 0.04,
+  editability: 0.03,
 }
 
 export function criticVerdict(input: CriticInput): CriticVerdict {
@@ -251,8 +313,8 @@ export function criticVerdict(input: CriticInput): CriticVerdict {
   }
   const area = placements.reduce((sum, p) => sum + p.w * p.h, 0)
   const fill = area / (input.canvasW * input.canvasH)
-  const informationDensity = clamp10(
-    fill < 0.03 ? 4 : fill > 0.6 ? 4 : 10 - Math.abs(fill - 0.15) * 10,
+  const compositionQuality = clamp10(
+    fill < 0.03 ? 4 : fill > 0.6 ? 3 : 10 - Math.abs(fill - 0.15) * 10,
   )
   const quadrants = [0, 0, 0, 0]
   for (const p of placements) {
@@ -268,10 +330,80 @@ export function criticVerdict(input: CriticInput): CriticVerdict {
   const connectorQuality = clamp10(10 - crossings * 1.5 - intersections.length * 4)
   const utilization = placements.map((p) => p.w / Math.max(1, input.canvasW))
   const wideCount = utilization.filter((u) => u > 0.34).length
-  const textEconomy = clamp10(10 - wideCount * 2)
-  const visualEconomy = clamp10(10)
+  const typography = clamp10(10 - wideCount * 2)
   const safe = (v: number) => (Number.isFinite(v) ? v : 5)
-  const semanticFidelity = clamp10(10 - input.solve.issues.length * 3)
+
+  // ── route bookkeeping (real, from the final routed set when provided) ──
+  const routeByKey = new Map<string, RoutedEdge>()
+  const routeByEndpoints = new Map<string, RoutedEdge>()
+  if (input.routed) {
+    for (const route of input.routed) {
+      routeByKey.set(route.key, route)
+      routeByEndpoints.set(`${route.fromId}\u0000${route.toId}`, route)
+    }
+  }
+  const declaredConnectors = input.edges.filter(
+    (edge) => !edge.presentation || CONNECTOR_PRESENTATIONS.has(edge.presentation),
+  )
+  const unroutableDeclared = input.routed
+    ? input.routed.filter((route) => route.status === 'unroutable').length
+    : 0
+  const realizedConnectors = input.routed
+    ? declaredConnectors.filter((edge) => {
+        // production routes are keyed by semantic edge id; the inline fallback
+        // router uses e${index}. Match by endpoints, which both share.
+        const route =
+          routeByEndpoints.get(`${edge.from}\u0000${edge.to}`) ??
+          routeByKey.get(`e${input.edges.indexOf(edge)}`)
+        return route ? route.status === 'routed' : false
+      })
+    : declaredConnectors
+  const relationCoverage =
+    declaredConnectors.length === 0 ? 1 : realizedConnectors.length / declaredConnectors.length
+  const scientificFidelity = clamp10(10 * relationCoverage - input.solve.issues.length * 2)
+
+  // anchor-side naturalness (real, same rule as info-density critic)
+  let unnatural = 0
+  const naturalRoutes = input.routed ?? routed
+  for (const route of naturalRoutes) {
+    if (route.status !== 'routed' || !route.start || !route.end) continue
+    const a = placements.find((p) => p.id === route.fromId)
+    const b = placements.find((p) => p.id === route.toId)
+    if (!a || !b) continue
+    const v = a.y + a.h / 2 < b.y + b.h / 2 ? 'over' : 'under'
+    const h = a.x + a.w / 2 < b.x + b.w / 2 ? 'right' : 'left'
+    if (v === 'over' && route.end.side === 'bottom') unnatural++
+    if (v === 'over' && route.start.side === 'right') unnatural++
+    if (h === 'right' && route.start.side === 'left' && route.end.side === 'right') unnatural++
+  }
+  const connectorNaturalness = clamp10(
+    naturalRoutes.length === 0 ? 10 : Math.max(0, 10 - unnatural * 1.5),
+  )
+  const relationClarity = clamp10(connectorQuality * 0.6 + connectorNaturalness * 0.4)
+
+  // ── five-second clarity: visual center dominance + monotone progress ──
+  let centerScore = 7
+  const visualCenterId = input.intent?.spatial?.composition.visualCenter
+  if (visualCenterId) {
+    const centerRect = rects.get(visualCenterId)
+    if (centerRect) {
+      const rank =
+        [...placements]
+          .sort((a, b) => b.w * b.h - a.w * a.h)
+          .findIndex((p) => p.id === visualCenterId) + 1
+      centerScore = rank <= 2 ? 10 : clamp10(10 - (rank - 2) * 2)
+    } else {
+      centerScore = 3 // declared center missing from canvas
+    }
+  } else if (withArea.length > 0) {
+    const maxImportance = Math.max(...withArea.map((v) => v.importance))
+    const dominantShare =
+      maxImportance > 0
+        ? (placements.find((p) => (input.importance.get(p.id) ?? 0.5) === maxImportance)?.w ?? 0) *
+          (placements.find((p) => (input.importance.get(p.id) ?? 0.5) === maxImportance)?.h ?? 0)
+        : 0
+    centerScore = clamp10(6 + (dominantShare / Math.max(1, area)) * 8)
+  }
   let progressOk = 0
   let progressTotal = 0
   for (const edge of input.edges) {
@@ -282,21 +414,64 @@ export function criticVerdict(input: CriticInput): CriticVerdict {
     progressTotal++
     if (b.x + b.w / 2 >= a.x + a.w / 2 - 8) progressOk++
   }
-  const readingPath = clamp10(progressTotal ? (progressOk / progressTotal) * 10 : 7)
+  const progressScore = clamp10(progressTotal ? (progressOk / progressTotal) * 10 : 7)
+  const fiveSecondClarity = clamp10(centerScore * 0.5 + progressScore * 0.5)
+
+  // ── evidence completeness: mustShow + node coverage (real, from plan) ──
+  const planNodes = input.intent?.plan.nodes
+  let evidenceCompleteness: number
+  let missingRequired: string[] = []
+  if (planNodes && planNodes.length > 0) {
+    const placedIds = new Set(placements.map((p) => p.id))
+    const nodeCoverage = planNodes.filter((n) => placedIds.has(n.id)).length / planNodes.length
+    const mustShow = input.intent?.plan.narrative?.mustShow ?? []
+    if (mustShow.length > 0) {
+      missingRequired = mustShow.filter((id) => !placedIds.has(id))
+      evidenceCompleteness = clamp10(
+        ((mustShow.length - missingRequired.length) / mustShow.length) * 8 + nodeCoverage * 2,
+      )
+    } else {
+      evidenceCompleteness = clamp10(nodeCoverage * 10 - unroutableDeclared)
+    }
+  } else {
+    evidenceCompleteness = clamp10(10 - unroutableDeclared * 2)
+  }
+
+  // ── editability: distinct placed elements + resolvable graph ──
+  const uniquePlaced = new Set(placements.map((p) => p.id)).size
+  const editability =
+    planNodes && planNodes.length > 0
+      ? clamp10((uniquePlaced / planNodes.length) * 10 - unroutableDeclared)
+      : clamp10(10 - unroutableDeclared * 2)
+
+  // ── visual restraint: equal-size averaging penalized when importance varies ──
+  const sizeCluster = new Map<string, number>()
+  for (const p of placements) {
+    const key = `${p.w}x${p.h}`
+    sizeCluster.set(key, (sizeCluster.get(key) ?? 0) + 1)
+  }
+  const modalCluster = Math.max(0, ...sizeCluster.values())
+  const modalRatio = placements.length ? modalCluster / placements.length : 0
+  const importanceValues = [...input.importance.values()]
+  const importanceSpread =
+    importanceValues.length >= 2 ? Math.max(...importanceValues) - Math.min(...importanceValues) : 0
+  // neutral 8 = insufficient contrast data to judge; NOT a padded perfect score
+  const visualRestraint =
+    importanceSpread >= 0.25 ? clamp10(10 - Math.max(0, modalRatio - 0.5) * 12) : 8
+
   const overallScore = clamp10(
-    WEIGHTS.semanticFidelity * semanticFidelity +
-      WEIGHTS.readingPath * readingPath +
-      WEIGHTS.visualHierarchy * visualHierarchy +
-      WEIGHTS.groupingClarity * groupingClarity +
-      WEIGHTS.connectorQuality * connectorQuality +
-      WEIGHTS.textEconomy * textEconomy +
-      WEIGHTS.informationDensity * informationDensity +
-      WEIGHTS.whitespaceBalance * whitespaceBalance +
-      WEIGHTS.visualEconomy * visualEconomy +
-      WEIGHTS.contentDensity * informationDensity +
-      WEIGHTS.primaryClarity * informationDensity +
-      WEIGHTS.connectorNaturalness * informationDensity,
+    CRITIC_WEIGHTS.scientificFidelity * scientificFidelity +
+      CRITIC_WEIGHTS.evidenceCompleteness * evidenceCompleteness +
+      CRITIC_WEIGHTS.fiveSecondClarity * fiveSecondClarity +
+      CRITIC_WEIGHTS.visualHierarchy * visualHierarchy +
+      CRITIC_WEIGHTS.compositionQuality * compositionQuality +
+      CRITIC_WEIGHTS.relationClarity * relationClarity +
+      CRITIC_WEIGHTS.typography * typography +
+      CRITIC_WEIGHTS.whitespaceBalance * whitespaceBalance +
+      CRITIC_WEIGHTS.visualRestraint * visualRestraint +
+      CRITIC_WEIGHTS.editability * editability,
   )
+
   const gateIssues: string[] = [...input.solve.issues]
   for (const hit of intersections)
     gateIssues.push(`connector passes through node ${hit.nodeId} (${hit.key})`)
@@ -311,14 +486,14 @@ export function criticVerdict(input: CriticInput): CriticVerdict {
       canvasH: input.canvasH,
       ...(input.routed ? { routed: input.routed } : {}),
     })
-    // A page-level density audit aligned with the wut-ppt discipline: not
-    // "more cards", but "no scientific signal dropped". Minimal statement
-    // figures remain valid on purpose.
+    // Density is a SEMANTIC decision, not a geometry gate: a minimal statement
+    // is valid by design. Only genuine over-summarisation of rich content
+    // escalates, and it escalates to semantic replan — never to the router.
     const isMinimalStatement =
       input.intent.plan.narrative?.expressionMode === 'statement' &&
       input.intent.plan.narrative?.complexity === 'minimal'
     if (infoDensity.density < 1.5 && !isMinimalStatement) {
-      const decision: CriticDecision = {
+      semanticDensityDecision = {
         scope: 'semantic',
         severity: 'quality',
         action: 'semantic-replan',
@@ -327,25 +502,63 @@ export function criticVerdict(input: CriticInput): CriticVerdict {
         message:
           'The figure over-summarised the research content into too few visible signals; replan what must be visible rather than shrinking the layout.',
       }
-      semanticDensityDecision = decision
-      gateIssues.push(decision.message)
+      gateIssues.push(semanticDensityDecision.message)
     }
   }
-  const densityScore = infoDensity ? infoDensity.density : 8
+  const densityScore = infoDensity ? infoDensity.density : clamp10(compositionQuality)
   const primaryScore = infoDensity ? infoDensity.primaryClarity : 8
-  const naturalnessScore = infoDensity ? infoDensity.connectorNaturalness : 8
+  const naturalnessScore = infoDensity ? infoDensity.connectorNaturalness : connectorNaturalness
   const intentFailures = input.intent?.spatial
     ? auditIntent(input.intent.spatial, placements, input.canvasW, input.canvasH)
     : []
   for (const failure of intentFailures) gateIssues.push(`intent: ${failure.detail}`)
-  const routeEdgeIds = intersections.map((hit) => hit.key)
-  const hasRouteIssue = intersections.length > 0
+
+  // ── hard gates: boolean feasibility, never averaged ──
+  const hardGates: HardGateResult[] = [
+    {
+      gate: 'geometry_legal',
+      scope: 'geometry',
+      pass: input.solve.issues.length === 0,
+      ...(input.solve.issues.length > 0 ? { detail: input.solve.issues.join('; ') } : {}),
+    },
+    {
+      gate: 'connector_not_through_node',
+      scope: 'route',
+      pass: intersections.length === 0,
+      ...(intersections.length > 0
+        ? { detail: intersections.map((hit) => `${hit.key}→${hit.nodeId}`).join(', ') }
+        : {}),
+    },
+    {
+      gate: 'routes_feasible',
+      scope: 'route',
+      pass: unroutableDeclared === 0,
+      ...(unroutableDeclared > 0
+        ? { detail: `${unroutableDeclared} unroutable connector(s)` }
+        : {}),
+    },
+    ...(input.intent?.plan.narrative?.mustShow?.length
+      ? [
+          {
+            gate: 'required_evidence',
+            scope: 'semantic' as const,
+            pass: missingRequired.length === 0,
+            ...(missingRequired.length > 0
+              ? { detail: `missing on canvas: ${missingRequired.join(', ')}` }
+              : {}),
+          },
+        ]
+      : []),
+  ]
+  const hardPass = hardGates.every((gate) => gate.pass)
+  const semanticHardFail = hardGates.some((gate) => gate.scope === 'semantic' && !gate.pass)
+
   const structuralIntent = intentFailures.some((failure) => failure.severity === 'structural')
-  const geometryIssues = input.solve.issues
-  const hasGeometryIssue = geometryIssues.length > 0
+  const routeEdgeIds = intersections.map((hit) => hit.key)
+  const hasRouteIssue = intersections.length > 0 || unroutableDeclared > 0
 
   const decisions: CriticDecision[] = [
-    ...geometryIssues.map((issue) => ({
+    ...input.solve.issues.map((issue) => ({
       scope: 'geometry' as const,
       severity: 'hard-feasibility' as const,
       action: 'geometry-fix' as const,
@@ -365,10 +578,7 @@ export function criticVerdict(input: CriticInput): CriticVerdict {
       scope: 'composition' as const,
       severity:
         failure.severity === 'structural' ? ('hard-feasibility' as const) : ('quality' as const),
-      action:
-        failure.severity === 'structural'
-          ? ('composition-redesign' as const)
-          : ('composition-redesign' as const),
+      action: 'composition-redesign' as const,
       affectedIds: [],
       evidence: failure.detail,
       message: failure.detail,
@@ -378,15 +588,20 @@ export function criticVerdict(input: CriticInput): CriticVerdict {
 
   let verdict: CriticVerdictLevel
   let reason: string | undefined
-  if (structuralIntent) {
+  if (semanticHardFail) {
+    verdict = 'RECOMPOSE'
+    reason = hardGates.find((gate) => gate.scope === 'semantic' && !gate.pass)?.detail
+  } else if (structuralIntent) {
     verdict = 'RECOMPOSE'
     reason = intentFailures.find((failure) => failure.severity === 'structural')?.detail
-  } else if (hasGeometryIssue) {
+  } else if (!hardGates.find((gate) => gate.gate === 'geometry_legal')!.pass) {
     verdict = 'LOCAL_LAYOUT_FIX'
-    reason = geometryIssues[0]
+    reason = input.solve.issues[0]
   } else if (hasRouteIssue) {
     verdict = 'ROUTE_FIX'
-    reason = `route intersects nodes for edges: ${routeEdgeIds.join(', ')}`
+    reason = intersections.length
+      ? `route intersects nodes for edges: ${routeEdgeIds.join(', ')}`
+      : `${unroutableDeclared} declared connector(s) have no legal route`
   } else if (overallScore >= 7.5) {
     verdict = 'PASS'
   } else if (overallScore >= 5.5) {
@@ -397,24 +612,29 @@ export function criticVerdict(input: CriticInput): CriticVerdict {
     reason = `overall ${overallScore}/10 far below PASS threshold`
   }
   const scores: CriticScores = {
-    semanticFidelity: safe(semanticFidelity),
-    readingPath: safe(readingPath),
+    scientificFidelity: safe(scientificFidelity),
+    evidenceCompleteness: safe(evidenceCompleteness),
+    fiveSecondClarity: safe(fiveSecondClarity),
     visualHierarchy: safe(visualHierarchy),
-    groupingClarity: safe(groupingClarity),
-    informationDensity: safe(informationDensity),
+    compositionQuality: safe(compositionQuality),
+    relationClarity: safe(relationClarity),
+    typography: safe(typography),
     whitespaceBalance: safe(whitespaceBalance),
-    connectorQuality: safe(connectorQuality),
-    textEconomy: safe(textEconomy),
-    visualEconomy: safe(visualEconomy),
-    contentDensity: densityScore,
-    primaryClarity: primaryScore,
-    connectorNaturalness: naturalnessScore,
+    visualRestraint: safe(visualRestraint),
+    editability: safe(editability),
+    informationDensity: safe(clamp10(compositionQuality)),
+    contentDensity: safe(densityScore),
+    primaryClarity: safe(primaryScore),
+    connectorNaturalness: safe(naturalnessScore),
+    groupingClarity: safe(groupingClarity),
     overall: safe(overallScore),
   }
   return {
     scores,
     verdict,
     gateIssues,
+    hardGates,
+    hardPass,
     decisions,
     ...(verdict === 'ROUTE_FIX' ? { edgeIds: routeEdgeIds } : {}),
     ...(reason ? { reason } : {}),

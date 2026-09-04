@@ -26,25 +26,12 @@ export function auditIntent(
   const center = (r: Rect) => ({ x: r.x + r.w / 2, y: r.y + r.h / 2 })
   const maxArea = Math.max(...placements.map((p) => areaOf(p)))
 
-  // visualCenter must actually sit nearest the canvas center
+  // visualCenter must be REALIZED as the visually dominant element. It does
+  // NOT have to sit at the geometric canvas center: asymmetric compositions
+  // are legitimate design statements, and punishing them would force every
+  // figure back into grid symmetry. Dominance = area prominence.
   const vcId = plan.composition.visualCenter
   if (vcId && rects.has(vcId)) {
-    const vcCenter = center(rects.get(vcId)!)
-    const canvasCenter = { x: canvasW / 2, y: canvasH / 2 }
-    const vcDist = Math.hypot(vcCenter.x - canvasCenter.x, vcCenter.y - canvasCenter.y)
-    const nearest = placements
-      .map((p) => ({
-        id: p.id,
-        d: Math.hypot(center(p).x - canvasCenter.x, center(p).y - canvasCenter.y),
-      }))
-      .sort((a, b) => a.d - b.d)[0]!
-    if (nearest.id !== vcId) {
-      failures.push({
-        id: 'visualCenter-not-central',
-        severity: 'structural',
-        detail: `visualCenter "${vcId}" is not the most central node (nearest is "${nearest.id}")`,
-      })
-    }
     if (areaOf(rects.get(vcId)!) < maxArea * 0.85) {
       failures.push({
         id: 'visualCenter-not-emphasised',

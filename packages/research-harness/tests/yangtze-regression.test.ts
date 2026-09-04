@@ -2,11 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { orchestrateFigure, type FigurePlanV2 } from '../src/index.js'
 import { normalizeVisualPlan, type VisualPlan } from '../src/visual/visualPlan.js'
 import { layoutMicro } from '../src/visual/microLayout.js'
-import {
-  classifyEdges,
-  edgeRoutingCost,
-  priorityFor,
-} from '../src/constraints/edge-aware-solver.js'
+import { classifyEdges, priorityFor } from '../src/constraints/edge-aware-solver.js'
+import { routeEdges } from '../src/routing/router.js'
 
 /**
  * Real-failure regression: the Yangtze cultural-communication case the user
@@ -304,14 +301,25 @@ describe('classifier and edge-cost', () => {
     }
   })
 
-  it('penalises mis-aligned primary edges vs axis-aligned ones', () => {
+  it('routes axis-aligned primaries straight and mis-aligned ones as elbows', () => {
     const aligned = { x: 100, y: 200, w: 200, h: 80 }
-    const misaligned = { x: 100, y: 200, w: 200, h: 80 }
-    const targetAligned = { x: 350, y: 240, w: 200, h: 80 } // ~aligned Y
-    const targetMisaligned = { x: 350, y: 80, w: 200, h: 80 } // diagonal
-    expect(edgeRoutingCost(aligned, targetAligned, 'primary')).toBeLessThan(
-      edgeRoutingCost(misaligned, targetMisaligned, 'primary'),
+    const targetAligned = { x: 350, y: 200, w: 200, h: 80 } // same row
+    const targetMisaligned = { x: 350, y: 60, w: 200, h: 80 } // diagonal
+    const rects = new Map([
+      ['a', aligned],
+      ['b', targetAligned],
+      ['c', targetMisaligned],
+    ])
+    const [straight] = routeEdges(
+      [{ key: 's', fromId: 'a', toId: 'b', role: 'main', relation: 'causal' }],
+      rects,
     )
+    expect(straight?.kind).toBe('straight')
+    const [elbow] = routeEdges(
+      [{ key: 'e', fromId: 'a', toId: 'c', role: 'main', relation: 'causal' }],
+      rects,
+    )
+    expect(elbow?.kind).toBe('elbow')
     // priorityFor sanity
     expect(priorityFor('main', 'causal')).toBe('primary')
     expect(priorityFor('feedback', 'feedback')).toBe('feedback')
