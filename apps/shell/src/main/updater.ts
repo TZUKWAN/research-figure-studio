@@ -46,8 +46,8 @@ const tUpd = createI18n({
     updDownloading: '正在下载更新…',
     updFailed: '更新下载失败，请检查网络后重试。',
     updRetry: '重试',
-    updManual: '自动更新失败，请从下载页面获取最新版本并手动安装。',
-    updOpenDownload: '前往下载页面',
+    updManual: '自动更新失败，当前没有可用的可信安装包链接。请稍后重试更新。',
+    updOpenDownload: '关闭',
   },
   en: {
     updTitle: 'Software Update',
@@ -61,8 +61,8 @@ const tUpd = createI18n({
     updFailed: 'Update download failed. Check your network and try again.',
     updRetry: 'Retry',
     updManual:
-      'Automatic update failed. Please get the latest version from the download page and install it manually.',
-    updOpenDownload: 'Open Download Page',
+      'Automatic update failed and no trusted installer link is available. Please try updating again later.',
+    updOpenDownload: 'Close',
   },
   ja: {
     updTitle: 'ソフトウェアアップデート',
@@ -76,8 +76,8 @@ const tUpd = createI18n({
     updFailed: 'ダウンロードに失敗しました。ネットワークを確認して再試行してください。',
     updRetry: '再試行',
     updManual:
-      '自動更新に失敗しました。ダウンロードページから最新バージョンを取得して手動でインストールしてください。',
-    updOpenDownload: 'ダウンロードページを開く',
+      '自動更新に失敗し、信頼できるインストーラーのリンクを利用できません。後でもう一度更新を試してください。',
+    updOpenDownload: '閉じる',
   },
   ko: {
     updTitle: '소프트웨어 업데이트',
@@ -91,8 +91,8 @@ const tUpd = createI18n({
     updFailed: '업데이트 다운로드에 실패했습니다. 네트워크를 확인한 후 다시 시도하세요.',
     updRetry: '다시 시도',
     updManual:
-      '자동 업데이트에 실패했습니다. 다운로드 페이지에서 최신 버전을 받아 직접 설치해 주세요.',
-    updOpenDownload: '다운로드 페이지 열기',
+      '자동 업데이트에 실패했고 신뢰할 수 있는 설치 프로그램 링크를 사용할 수 없습니다. 나중에 다시 업데이트를 시도하세요.',
+    updOpenDownload: '닫기',
   },
   fr: {
     updTitle: 'Mise à jour logicielle',
@@ -106,8 +106,8 @@ const tUpd = createI18n({
     updFailed: 'Échec du téléchargement. Vérifiez votre réseau et réessayez.',
     updRetry: 'Réessayer',
     updManual:
-      'La mise à jour automatique a échoué. Téléchargez la dernière version depuis la page de téléchargement et installez-la manuellement.',
-    updOpenDownload: 'Ouvrir la page de téléchargement',
+      'La mise à jour automatique a échoué et aucun lien d’installation fiable n’est disponible. Réessayez plus tard.',
+    updOpenDownload: 'Fermer',
   },
   de: {
     updTitle: 'Softwareaktualisierung',
@@ -122,8 +122,8 @@ const tUpd = createI18n({
       'Download fehlgeschlagen. Prüfen Sie Ihre Netzwerkverbindung und versuchen Sie es erneut.',
     updRetry: 'Erneut versuchen',
     updManual:
-      'Automatisches Update fehlgeschlagen. Laden Sie die neueste Version von der Download-Seite herunter und installieren Sie sie manuell.',
-    updOpenDownload: 'Download-Seite öffnen',
+      'Die automatische Aktualisierung ist fehlgeschlagen und kein vertrauenswürdiger Installer-Link ist verfügbar. Bitte versuchen Sie es später erneut.',
+    updOpenDownload: 'Schließen',
   },
   es: {
     updTitle: 'Actualización de software',
@@ -137,8 +137,8 @@ const tUpd = createI18n({
     updFailed: 'Error al descargar. Compruebe su red e inténtelo de nuevo.',
     updRetry: 'Reintentar',
     updManual:
-      'La actualización automática falló. Descargue la última versión desde la página de descargas e instálela manualmente.',
-    updOpenDownload: 'Abrir página de descargas',
+      'La actualización automática falló y no hay un enlace de instalador confiable disponible. Inténtelo de nuevo más tarde.',
+    updOpenDownload: 'Cerrar',
   },
   th: {
     updTitle: 'อัปเดตซอฟต์แวร์',
@@ -151,8 +151,8 @@ const tUpd = createI18n({
     updFailed: 'ดาวน์โหลดไม่สำเร็จ โปรดตรวจสอบเครือข่ายแล้วลองอีกครั้ง',
     updRetry: 'ลองอีกครั้ง',
     updManual:
-      'การอัปเดตอัตโนมัติล้มเหลว โปรดดาวน์โหลดเวอร์ชันล่าสุดจากหน้าดาวน์โหลดแล้วติดตั้งด้วยตนเอง',
-    updOpenDownload: 'เปิดหน้าดาวน์โหลด',
+      'การอัปเดตอัตโนมัติล้มเหลวและไม่มีลิงก์ตัวติดตั้งที่เชื่อถือได้ โปรดลองอัปเดตอีกครั้งภายหลัง',
+    updOpenDownload: 'ปิด',
   },
   id: {
     updTitle: 'Pembaruan Perangkat Lunak',
@@ -166,8 +166,8 @@ const tUpd = createI18n({
     updFailed: 'Unduhan gagal. Periksa jaringan Anda dan coba lagi.',
     updRetry: 'Coba Lagi',
     updManual:
-      'Pembaruan otomatis gagal. Silakan unduh versi terbaru dari halaman unduhan dan pasang secara manual.',
-    updOpenDownload: 'Buka Halaman Unduhan',
+      'Pembaruan otomatis gagal dan tidak ada tautan pemasang tepercaya. Silakan coba perbarui lagi nanti.',
+    updOpenDownload: 'Tutup',
   },
   ru: {
     updTitle: 'Обновление программы',
@@ -181,8 +181,8 @@ const tUpd = createI18n({
     updFailed: 'Не удалось загрузить обновление. Проверьте сеть и повторите попытку.',
     updRetry: 'Повторить',
     updManual:
-      'Автоматическое обновление не удалось. Скачайте последнюю версию со страницы загрузки и установите её вручную.',
-    updOpenDownload: 'Открыть страницу загрузки',
+      'Автоматическое обновление не удалось, и доверенная ссылка на установщик недоступна. Повторите попытку позже.',
+    updOpenDownload: 'Закрыть',
   },
   ar: {
     updTitle: 'تحديث البرنامج',
@@ -194,8 +194,8 @@ const tUpd = createI18n({
     updDownloading: 'جارٍ تنزيل التحديث…',
     updFailed: 'فشل تنزيل التحديث. تحقق من الشبكة وحاول مرة أخرى.',
     updRetry: 'إعادة المحاولة',
-    updManual: 'فشل التحديث التلقائي. يرجى تنزيل أحدث إصدار من صفحة التنزيل وتثبيته يدويًا.',
-    updOpenDownload: 'فتح صفحة التنزيل',
+    updManual: 'فشل التحديث التلقائي ولا يتوفر رابط موثوق للمثبّت. يُرجى المحاولة لاحقًا.',
+    updOpenDownload: 'إغلاق',
   },
   pt: {
     updTitle: 'Atualização de Software',
@@ -209,8 +209,8 @@ const tUpd = createI18n({
     updFailed: 'Falha no download. Verifique sua rede e tente novamente.',
     updRetry: 'Tentar novamente',
     updManual:
-      'A atualização automática falhou. Baixe a versão mais recente na página de download e instale manualmente.',
-    updOpenDownload: 'Abrir página de download',
+      'A atualização automática falhou e não há um link confiável do instalador disponível. Tente atualizar novamente mais tarde.',
+    updOpenDownload: 'Fechar',
   },
   it: {
     updTitle: 'Aggiornamento software',
@@ -224,8 +224,8 @@ const tUpd = createI18n({
     updFailed: 'Download non riuscito. Controlla la rete e riprova.',
     updRetry: 'Riprova',
     updManual:
-      "Aggiornamento automatico non riuscito. Scarica l'ultima versione dalla pagina di download e installala manualmente.",
-    updOpenDownload: 'Apri pagina di download',
+      'Aggiornamento automatico non riuscito e nessun link affidabile al programma di installazione è disponibile. Riprova più tardi.',
+    updOpenDownload: 'Chiudi',
   },
   pl: {
     updTitle: 'Aktualizacja oprogramowania',
@@ -239,8 +239,8 @@ const tUpd = createI18n({
     updFailed: 'Pobieranie nie powiodło się. Sprawdź sieć i spróbuj ponownie.',
     updRetry: 'Spróbuj ponownie',
     updManual:
-      'Automatyczna aktualizacja nie powiodła się. Pobierz najnowszą wersję ze strony pobierania i zainstaluj ją ręcznie.',
-    updOpenDownload: 'Otwórz stronę pobierania',
+      'Aktualizacja automatyczna nie powiodła się i nie ma dostępnego zaufanego łącza do instalatora. Spróbuj ponownie później.',
+    updOpenDownload: 'Zamknij',
   },
   nl: {
     updTitle: 'Software-update',
@@ -254,8 +254,8 @@ const tUpd = createI18n({
     updFailed: 'Download mislukt. Controleer uw netwerk en probeer het opnieuw.',
     updRetry: 'Opnieuw proberen',
     updManual:
-      'Automatische update mislukt. Download de nieuwste versie via de downloadpagina en installeer deze handmatig.',
-    updOpenDownload: 'Downloadpagina openen',
+      'Automatische update mislukt en er is geen betrouwbare installerlink beschikbaar. Probeer later opnieuw bij te werken.',
+    updOpenDownload: 'Sluiten',
   },
   ms: {
     updTitle: 'Kemas Kini Perisian',
@@ -269,8 +269,8 @@ const tUpd = createI18n({
     updFailed: 'Muat turun gagal. Semak rangkaian anda dan cuba lagi.',
     updRetry: 'Cuba Lagi',
     updManual:
-      'Kemas kini automatik gagal. Sila muat turun versi terkini dari halaman muat turun dan pasang secara manual.',
-    updOpenDownload: 'Buka Halaman Muat Turun',
+      'Kemas kini automatik gagal dan tiada pautan pemasang yang dipercayai tersedia. Sila cuba kemas kini semula kemudian.',
+    updOpenDownload: 'Tutup',
   },
   he: {
     updTitle: 'עדכון תוכנה',
@@ -282,8 +282,8 @@ const tUpd = createI18n({
     updDownloading: 'מוריד את העדכון…',
     updFailed: 'ההורדה נכשלה. בדוק את הרשת ונסה שוב.',
     updRetry: 'נסה שוב',
-    updManual: 'העדכון האוטומטי נכשל. הורד את הגרסה העדכנית מדף ההורדות והתקן אותה ידנית.',
-    updOpenDownload: 'פתח את דף ההורדות',
+    updManual: 'העדכון האוטומטי נכשל ואין קישור מהימן למתקין. נסה לעדכן שוב מאוחר יותר.',
+    updOpenDownload: 'סגור',
   },
   hi: {
     updTitle: 'सॉफ़्टवेयर अपडेट',
@@ -297,8 +297,8 @@ const tUpd = createI18n({
     updFailed: 'डाउनलोड विफल रहा। अपना नेटवर्क जाँचें और पुनः प्रयास करें।',
     updRetry: 'पुनः प्रयास करें',
     updManual:
-      'स्वचालित अपडेट विफल रहा। कृपया डाउनलोड पृष्ठ से नवीनतम संस्करण प्राप्त करें और मैन्युअल रूप से इंस्टॉल करें।',
-    updOpenDownload: 'डाउनलोड पृष्ठ खोलें',
+      'स्वचालित अपडेट विफल रहा और कोई विश्वसनीय इंस्टॉलर लिंक उपलब्ध नहीं है। कृपया बाद में फिर से अपडेट करें।',
+    updOpenDownload: 'बंद करें',
   },
   'zh-TW': {
     updTitle: '軟體更新',
@@ -310,8 +310,8 @@ const tUpd = createI18n({
     updDownloading: '正在下載更新…',
     updFailed: '更新下載失敗，請檢查網路後重試。',
     updRetry: '重試',
-    updManual: '自動更新失敗，請從下載頁面取得最新版本並手動安裝。',
-    updOpenDownload: '前往下載頁面',
+    updManual: '自動更新失敗，目前沒有可用的可信安裝程式連結。請稍後重試更新。',
+    updOpenDownload: '關閉',
   },
 })
 
@@ -324,12 +324,6 @@ const RECHECK_INTERVAL_MS = 4 * 60 * 60 * 1000
 // code-signing identity (Apple Team ID) change, which Squirrel.Mac rejects
 // on every retry while the error looks like a download failure to the user.
 const MANUAL_FALLBACK_AFTER = 2
-// Last-resort manual link only: the GitHub Latest release tracks one channel
-// and signing track, so a stable/legacy-track user could land on the wrong
-// build. Preferred is the CDN installer derived from the user's own update
-// feed (see manualDownloadUrlFor), which matches channel, track, and arch.
-const DOWNLOAD_PAGE_URL = 'https://github.com/genspark-ai/genoffice/releases/latest'
-
 /// Trusted HTTPS base URL baked into resources/app-update.yml. Manual download
 /// links are always rebuilt from this base rather than trusting URLs supplied
 /// by remotely fetched update metadata.
@@ -474,8 +468,7 @@ export function initAutoUpdater(
   autoUpdater.disableDifferentialDownload = true
 
   let latestSeenVersion: string | null = null
-  // CDN installer link for latestSeenVersion (channel/track/arch-correct);
-  // null falls back to the generic download page
+  // CDN installer link for latestSeenVersion (channel/track/arch-correct).
   let manualDownloadUrl: string | null = null
   // consecutive failed attempts for latestSeenVersion; a download can fail
   // through the downloadUpdate() rejection OR only through the 'error' event
@@ -510,7 +503,8 @@ export function initAutoUpdater(
       closeUpdateWindow()
     },
     onOpenDownload: () => {
-      void shell.openExternal(manualDownloadUrl ?? DOWNLOAD_PAGE_URL)
+      if (manualDownloadUrl) void shell.openExternal(manualDownloadUrl)
+      else closeUpdateWindow()
     },
   }
 

@@ -24,22 +24,6 @@ export async function addSlide(ctx: ActionCtx): Promise<void> {
   }
 }
 
-export async function addSlideWithLayout(ctx: ActionCtx, layoutPath: string): Promise<void> {
-  if (!ctx.slide) return
-  const r = await window.slidesApi.addSlideWithLayout({
-    sourceIndex: ctx.current,
-    layoutPath,
-    fitWidthPx: FIT_WIDTH,
-  })
-  if (r) {
-    ctx.setSlides(r.slides)
-    ctx.setCurrent(r.index)
-    ctx.setSelectedIds([])
-    ctx.setEditing(null)
-    ctx.setDirty(true)
-  }
-}
-
 export async function duplicateSlideAt(ctx: ActionCtx, index: number): Promise<void> {
   const r = await window.slidesApi.addSlide({
     sourceIndex: index,

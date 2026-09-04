@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import {
-  PRESET_THEMES,
-  getThemeById,
-} from '../src/presets.js'
-import { connectorColor, contrastRatio, luminance, resolveComponentColors } from '../src/resolve.js'
+import { PRESET_THEMES, getThemeById } from '../src/presets.js'
+import { connectorColor, contrastRatio, resolveComponentColors } from '../src/resolve.js'
 
 describe('preset themes', () => {
   it('ships the ten PRD palettes', () => {
@@ -37,6 +34,13 @@ describe('resolveComponentColors', () => {
     expect(c.fill).toBe('#D68A45')
     // whatever direction wins, it must actually read on the fill (AA large-text)
     expect(contrastRatio(c.text, c.fill)).toBeGreaterThan(4)
+  })
+
+  it('keeps output subtitles readable on accent fills', () => {
+    for (const theme of PRESET_THEMES) {
+      const c = resolveComponentColors('output-node', theme.roles)
+      expect(contrastRatio(c.subtitle!, c.fill), theme.id).toBeGreaterThan(4.5)
+    }
   })
 
   it('unknown kinds fall back to surface/primary', () => {

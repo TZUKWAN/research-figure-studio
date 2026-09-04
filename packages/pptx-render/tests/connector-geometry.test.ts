@@ -6,7 +6,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { connectorPoints, connectorBezier } from '../src/preset-geometry'
-import { openPptx } from '@genoffice/pptx-engine'
+import { addElement, createBlankPptx, openPptx, setElementConnection } from '@genoffice/pptx-engine'
 import { buildRenderSlide } from '../src/index'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -45,6 +45,12 @@ describe('connectorPoints: bentConnector3 adj controls elbow position', () => {
     expect(pts[0]).toBeCloseTo(100, 3) // start x = w - 0
     expect(pts[6]).toBeCloseTo(0, 3) // end x = w - w
   })
+
+  it('routes through an explicit lane outside the connector box', () => {
+    expect(connectorPoints('bentConnector3', 100, 0, true, false, undefined, 40)).toEqual([
+      100, 0, 100, 40, 0, 40, 0, 0,
+    ])
+  })
 })
 
 describe('connectorPoints: bentConnector2 (single elbow)', () => {
@@ -56,6 +62,22 @@ describe('connectorPoints: bentConnector2 (single elbow)', () => {
     expect(pts[3]).toBeCloseTo(0, 3)
     expect(pts[4]).toBeCloseTo(100, 3)
     expect(pts[5]).toBeCloseTo(60, 3)
+  })
+})
+
+describe('buildRenderSlide routed connector', () => {
+  it('converts an absolute route lane into local render points', async () => {
+    const opened = await openPptx(await createBlankPptx())
+    const slide = opened.deck.slides[0]!
+    const connector = addElement(slide, {
+      kind: 'lineBent',
+      offset: { x: 100 * 9525, y: 100 * 9525, cx: 100 * 9525, cy: 0 },
+    })
+    expect(setElementConnection(slide, connector.id, {}, 140 * 9525)).toBe(true)
+
+    const rendered = buildRenderSlide(slide, opened.deck.size, { fitWidthPx: 1280 })
+    const node = rendered.nodes.find((candidate) => candidate.sourceId === connector.id) as any
+    expect(node.line.points).toEqual([0, 0, 0, 40, 100, 40, 100, 0])
   })
 })
 

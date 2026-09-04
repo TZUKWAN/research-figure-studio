@@ -13,10 +13,68 @@
  * bytes, and a wrapper without a creationId must not inherit a child's GUID —
  * after ungroup that same id would suddenly mean the child.
  */
-import type { Slide, SlideElement } from './types'
+import type { SemanticMetadata, Slide, SlideElement } from './types'
 import { creationIdExtXml, creationIdXml } from './xml-utils'
 
 const CREATION_ID_RE = /<a16:creationId[^>]*\bid="\{?([0-9A-Fa-f-]{36})\}?"/
+const SEMANTIC_PREFIX = 'rfs:v1'
+const SEMANTIC_FIELDS = ['role', 'themeFill', 'themeStroke', 'themeText', 'componentType'] as const
+const OPTIONAL_SEMANTIC_FIELDS = [
+  'semanticNodeId',
+  'semanticEdgeId',
+  'relationPresentation',
+] as const
+
+/** Encode the route-B payload as a compact, PowerPoint-safe cNvPr string. */
+export function serializeSemanticMetadata(metadata: SemanticMetadata): string {
+  return [
+    SEMANTIC_PREFIX,
+    ...SEMANTIC_FIELDS.map((field) => `${field}=${encodeURIComponent(metadata[field])}`),
+    ...OPTIONAL_SEMANTIC_FIELDS.flatMap((field) =>
+      metadata[field] === undefined ? [] : [`${field}=${encodeURIComponent(metadata[field]!)}`],
+    ),
+  ].join('|')
+}
+
+/** Decode a route-B cNvPr value; unrelated user descriptions return null. */
+export function parseSemanticMetadata(value: unknown): SemanticMetadata | null {
+  if (typeof value !== 'string') return null
+  const parts = value.split('|')
+  if (parts.shift() !== SEMANTIC_PREFIX) return null
+  const values: Partial<
+    Record<(typeof SEMANTIC_FIELDS)[number] | (typeof OPTIONAL_SEMANTIC_FIELDS)[number], string>
+  > = {}
+  const allowed = new Set<string>([...SEMANTIC_FIELDS, ...OPTIONAL_SEMANTIC_FIELDS])
+  for (const part of parts) {
+    const at = part.indexOf('=')
+    if (at <= 0) continue
+    const key = part.slice(0, at)
+    if (!allowed.has(key)) continue
+    try {
+      values[key as keyof typeof values] = decodeURIComponent(part.slice(at + 1))
+    } catch {
+      return null
+    }
+  }
+  if (SEMANTIC_FIELDS.some((field) => !values[field])) return null
+  return {
+    role: values.role!,
+    themeFill: values.themeFill!,
+    themeStroke: values.themeStroke!,
+    themeText: values.themeText!,
+    componentType: values.componentType!,
+    ...(values.semanticNodeId !== undefined ? { semanticNodeId: values.semanticNodeId } : {}),
+    ...(values.semanticEdgeId !== undefined ? { semanticEdgeId: values.semanticEdgeId } : {}),
+    ...(values.relationPresentation !== undefined
+      ? { relationPresentation: values.relationPresentation }
+      : {}),
+  }
+}
+
+/** Prefer descr, then title, so foreign decks can be read without rewriting them. */
+export function semanticMetadataFromCnvPr(descr: unknown, title: unknown): SemanticMetadata | null {
+  return parseSemanticMetadata(descr) ?? parseSemanticMetadata(title)
+}
 
 export function elementDurableId(el: SlideElement): string | null {
   const xml = el.anchor?.originalXml

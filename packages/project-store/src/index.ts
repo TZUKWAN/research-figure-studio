@@ -17,3 +17,12 @@ export type {
   ResolveChatArgs,
   ResolveChatResult,
 } from './ipc.js'
+export {
+  assertAppendChatArgs,
+  assertLoadChatArgs,
+  assertRebindChatArgs,
+  assertResolveChatArgs,
+  assertStorageId,
+  CHAT_LIMIT_MAX,
+  isStorageId,
+} from './ipc.js'

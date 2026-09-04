@@ -17,7 +17,10 @@ describe('provider registry', () => {
     for (const meta of AI_PROVIDERS) {
       expect(AI_PROVIDER_ADAPTERS[meta.id].meta).toBe(meta)
     }
-    expect(Object.keys(AI_PROVIDER_ADAPTERS).sort()).toEqual(AI_PROVIDERS.map((m) => m.id).sort())
+    // the gsk-login provider is no longer offered in the UI catalog
+    expect(AI_PROVIDERS.map((m) => m.id)).not.toContain('genspark')
+    // the internal adapter set still carries it for legacy stored settings
+    expect(Object.keys(AI_PROVIDER_ADAPTERS)).toContain('genspark')
   })
 
   it('routes genspark by model id prefix onto the three proxy endpoints', () => {

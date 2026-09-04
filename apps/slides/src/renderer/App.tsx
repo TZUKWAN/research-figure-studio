@@ -19,7 +19,6 @@ import type {
   EditParagraph,
   EditStrokeOp,
   EditTableStyleOp,
-  GetLayoutsResult,
   GradientFillSpec,
   InsertKind,
   LinkTargetOp,
@@ -47,7 +46,6 @@ import type { SlideThemePreset } from './themes'
 import { Ribbon, type FormatCmd, type SlidesViewMode } from './components/Ribbon'
 import { contextElementTypeForNode, type ContextElementType } from './components/context-tabs'
 import { SlideShowView } from './components/SlideShowView'
-import { IconNotes, IconPlayBoxed } from './components/icons'
 import { PresenterView } from './components/PresenterView'
 import { CustomShowDialog } from './components/CustomShowDialog'
 import { PrintDialog } from './components/PrintDialog'
@@ -77,13 +75,13 @@ import { AnimationPane } from './components/AnimationPane'
 import { AnimPreviewOverlay } from './components/AnimatedSlide'
 import { EquationDialog, HeaderFooterDialog, LinkDialog } from './components/InsertDialogs'
 import { CutoutDialog } from './components/CutoutDialog'
-import type { WordArtPreset } from '@genoffice/ui'
 import type { ChartPresetDef, IconDef, SmartArtDef } from './insert-presets'
-import { GensparkMark, IconAiBeautify, IconAiFactCheck, IconAiImage } from './components/icons'
+import { CopilotMark, IconAiBeautify, IconAiFactCheck, IconAiImage } from './components/icons'
 import { ToastHost } from './components/toast'
 import { showToast } from './components/toast-bus'
 import { t, useI18n } from './i18n/locale'
 import { AiPanel } from './ai/AiPanel'
+import { researchActionPhase, useResearchAction } from './research-action-ui'
 import { ChartDataDialog } from './components/ChartDataDialog'
 import type { BrushFormat } from './format-brush'
 import { isTextUndoTarget, shouldRouteUndoToDeck } from './undo-routing'
@@ -266,6 +264,7 @@ function collectAligns(node: RenderNode, out: Set<ParaAlign>) {
 
 export function App() {
   const { lang } = useI18n()
+  const researchAction = useResearchAction()
   const [slides, setSlides] = useState<RenderSlide[]>([])
   // Layouts may reference Office-private fonts (resolved in main); register them as FontFaces
   useEffect(() => {
@@ -516,8 +515,6 @@ export function App() {
   const [eqDialogOpen, setEqDialogOpen] = useState(false)
   const recorderRef = useRef<{ rec: MediaRecorder; stream: MediaStream } | null>(null)
   const [recording, setRecording] = useState(false)
-  // ── Layout picking: layout list + slide size (loaded after the file opens) ─────────────────
-  const [layoutsResult, setLayoutsResult] = useState<GetLayoutsResult | null>(null)
   // ── Picture crop mode ─────────────────────────────────────────────────────
   /** Non-null enters crop mode */
   const [cropTarget, setCropTarget] = useState<CropTargetState | null>(null)
@@ -760,8 +757,6 @@ export function App() {
             })
           : t('appStatusNewBlank'),
       )
-      // Fetch the layout list asynchronously (doesn't block opening)
-      void window.slidesApi.getLayouts().then((r) => setLayoutsResult(r))
     },
     [fitZoom],
   )
@@ -1359,10 +1354,6 @@ export function App() {
   }, [])
 
   const addSlide = useCallback(() => slideActions.addSlide(ctxRef.current), [])
-  const addSlideWithLayout = useCallback(
-    (layoutPath: string) => slideActions.addSlideWithLayout(ctxRef.current, layoutPath),
-    [],
-  )
 
   const copySelected = useCallback(() => clipboardActions.copySelected(ctxRef.current), [])
   const cutSelected = useCallback(() => clipboardActions.cutSelected(ctxRef.current), [])
@@ -1453,10 +1444,6 @@ export function App() {
   )
   const insertSmartArt = useCallback(
     (def: SmartArtDef) => insertActions.insertSmartArt(ctxRef.current, def),
-    [],
-  )
-  const insertWordArt = useCallback(
-    (preset: WordArtPreset) => insertActions.insertWordArt(ctxRef.current, preset),
     [],
   )
   const insertField = useCallback(
@@ -1887,11 +1874,6 @@ export function App() {
       alive = false
     }
   }, [hasDoc, slides])
-
-  const addSectionAt = useCallback(
-    (index: number) => slideActions.addSectionAt(ctxRef.current, index),
-    [],
-  )
 
   // ── Thumbnail drag reorder ────────────────────────────────────────────────
   const [dragThumb, setDragThumb] = useState<number | null>(null)
@@ -2784,10 +2766,6 @@ export function App() {
         onFormatBackground={openBgFormat}
         onApplyTheme={(preset) => void applyThemePreset(preset)}
         onAddSlide={() => void addSlide()}
-        onAddSection={() => void addSectionAt(current)}
-        onAddSlideWithLayout={(lp) => void addSlideWithLayout(lp)}
-        layouts={layoutsResult?.layouts ?? null}
-        layoutSize={layoutsResult?.size ?? null}
         formatOpen={showFormat}
         onToggleFormat={() =>
           setShowFormat((v) => {
@@ -2816,16 +2794,6 @@ export function App() {
         onFindReplace={() => setFindOpen(true)}
         animByParagraph={animByParagraph}
         onToggleAnimByParagraph={() => setAnimByParagraph((v) => !v)}
-        onSetLayout={(layoutPath) =>
-          void window.slidesApi
-            .setSlideLayout({ slideIndex: current, layoutPath })
-            .then((r) => r && applySlide(current, r))
-        }
-        onResetLayout={() =>
-          void window.slidesApi
-            .setSlideLayout({ slideIndex: current })
-            .then((r) => r && applySlide(current, r))
-        }
         onSlideSize={(cx, cy) =>
           void window.slidesApi.setSlideSize({ cx, cy }).then((all) => {
             if (all) {
@@ -2836,15 +2804,6 @@ export function App() {
               setDirty(true)
             }
           })
-        }
-        slideSizeKey={
-          slide
-            ? Math.abs(slide.widthPx / slide.heightPx - 16 / 9) < 0.02
-              ? '16:9'
-              : Math.abs(slide.widthPx / slide.heightPx - 4 / 3) < 0.02
-                ? '4:3'
-                : null
-            : null
         }
         onParagraphFormat={onParagraphFormat}
         curBulletChar={curBulletChar}
@@ -2872,7 +2831,6 @@ export function App() {
         onToggleAnimPane={toggleAnimPane}
         animCount={animations.length}
         onAnimPreview={() => setAnimPreview((n) => n + 1)}
-        onSlideShow={startSlideShow}
         onPresenterView={startPresenterView}
         onCustomShow={() => setCustomShowDlgOpen(true)}
         onRehearse={startRehearseShow}
@@ -2905,7 +2863,6 @@ export function App() {
         onInsertIcon={(def, color) => void insertIcon(def, color)}
         onInsertChart={(kind) => void insertChart(kind)}
         onInsertSmartArt={(def) => void insertSmartArt(def)}
-        onInsertWordArt={(preset) => void insertWordArt(preset)}
         onInsertField={(type) => void insertField(type)}
         onOpenLink={() => void openLinkDialog()}
         onInsertZoom={(index) => void insertZoom(index)}
@@ -3133,7 +3090,7 @@ export function App() {
                 data-tip={t('appAiRailExpand')}
                 aria-label={t('appAiRailExpand')}
               >
-                <GensparkMark size={22} />
+                <CopilotMark size={22} />
               </button>
             )}
           </div>
@@ -3471,8 +3428,8 @@ export function App() {
                               data-tip={t('aiOpenAssistant')}
                               onClick={toggleAi}
                             >
-                              <GensparkMark size={14} />
-                              <span>Genspark AI</span>
+                              <CopilotMark size={14} />
+                              <span>{t('aiPanelTitle')}</span>
                             </button>
                             {/* Same one-click presets as the Home tab; hidden instead of
                         disabled while the deck has no real content */}
@@ -3522,7 +3479,12 @@ export function App() {
                         >
                           <div
                             ref={stageRelRef}
-                            className={`stage-rel${transPreviewKind ? ` tp-${transPreviewKind}` : ''}`}
+                            className={`stage-rel${transPreviewKind ? ` tp-${transPreviewKind}` : ''}${
+                              researchAction
+                                ? ` research-action-${researchActionPhase(researchAction.type)}`
+                                : ''
+                            }`}
+                            data-research-action={researchAction?.type}
                             onAnimationEnd={(e) => {
                               if (e.target === e.currentTarget) setTransPreviewKind(null)
                             }}
@@ -3917,26 +3879,6 @@ export function App() {
               {status && <span className="status-msg"> — {status}</span>}
             </div>
             <div className="status-right">
-              {hasDoc && (
-                <button
-                  className={`status-notes-btn${showNotes ? ' on' : ''}`}
-                  data-tip={showNotes ? t('appNotesHide') : t('appNotesShow')}
-                  onClick={() => setShowNotes((v) => !v)}
-                >
-                  <IconNotes size={18} />
-                  <span>{t('appNotesLabel')}</span>
-                </button>
-              )}
-              {hasDoc && (
-                <button
-                  className="status-play-btn"
-                  data-tip={t('ribbonFromCurrentTip')}
-                  aria-label={t('ribbonFromCurrentTip')}
-                  onClick={() => startSlideShow(false)}
-                >
-                  <IconPlayBoxed size={18} />
-                </button>
-              )}
               <ZoomControls zoom={zoom} onPreview={previewZoom} />
             </div>
           </footer>

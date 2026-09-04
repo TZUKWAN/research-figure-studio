@@ -16,28 +16,24 @@ installScreenTips()
 // editor views' translucent regions (e.g. slides thumbnail pane) show it
 if (navigator.platform.toLowerCase().includes('mac')) document.body.classList.add('vib')
 
-// resolve the persisted language, first-run flag, and theme before first paint
-// so the UI never flashes (home showing briefly before the onboarding overlay)
-void Promise.all([
-  window.aiOffice.getLanguage(),
-  // if the flag is unreadable, skip onboarding rather than block the home screen
-  window.aiOffice.onboardingSeen().catch(() => true),
-  window.aiOffice.getTheme().catch(() => 'system' as const),
-]).then(([lang, onboardingSeen, theme]) => {
-  document.documentElement.lang = htmlLang(lang)
-  // apply theme attribute before first paint to avoid flash
-  if (theme !== 'system') {
-    document.documentElement.setAttribute('data-theme', theme)
-  }
-  window.aiOffice.onThemeChanged((next) => {
-    if (next === 'system') document.documentElement.removeAttribute('data-theme')
-    else document.documentElement.setAttribute('data-theme', next)
-  })
-  createRoot(document.getElementById('root')!).render(
-    <React.StrictMode>
-      <LocaleProvider initial={lang}>
-        <AppFrame initialOnboardingSeen={onboardingSeen} />
-      </LocaleProvider>
-    </React.StrictMode>,
-  )
-})
+// resolve the persisted language and theme before first paint to avoid flashes
+void Promise.all([window.aiOffice.getLanguage(), window.aiOffice.getTheme()]).then(
+  ([lang, theme]) => {
+    document.documentElement.lang = htmlLang(lang)
+    // apply theme attribute before first paint to avoid flash
+    if (theme !== 'system') {
+      document.documentElement.setAttribute('data-theme', theme)
+    }
+    window.aiOffice.onThemeChanged((next) => {
+      if (next === 'system') document.documentElement.removeAttribute('data-theme')
+      else document.documentElement.setAttribute('data-theme', next)
+    })
+    createRoot(document.getElementById('root')!).render(
+      <React.StrictMode>
+        <LocaleProvider initial={lang}>
+          <AppFrame />
+        </LocaleProvider>
+      </React.StrictMode>,
+    )
+  },
+)

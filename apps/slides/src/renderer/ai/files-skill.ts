@@ -4,7 +4,7 @@ import { ATTACHMENT_IMAGE_EXTS } from '../../shared/ipc'
 import { t } from '../i18n/locale'
 
 /**
- * Chat-attachment capability as an AgentSkill (isomorphic to apps/docs files-skill):
+ * Chat-attachment capability as an AgentSkill:
  * each turn's context lists the attached local files; read_attachment reads their
  * extracted text in pages (parsing happens in the main process; files never leave
  * this machine).

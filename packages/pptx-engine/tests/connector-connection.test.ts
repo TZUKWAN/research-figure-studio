@@ -7,6 +7,8 @@ import {
   openPptx,
   savePptx,
   createBlankPptx,
+  commitSaved,
+  reparseDeck,
   setElementConnection,
   updateConnectorsForMoved,
   elementSpid,
@@ -96,5 +98,43 @@ describe('setElementConnection', () => {
       (e) => (e as TextElement).presetGeometry === 'straightConnector1',
     )
     expect(parsed?.connection).toEqual({ start: { id: aId, idx: 3 }, end: { id: bId, idx: 0 } })
+  })
+
+  it('replaces existing non-self-closing endpoint tags without duplicating them', async () => {
+    const { opened, slide, a, b, cxn } = await setup()
+    const aId = elementSpid(a)!
+    const bId = elementSpid(b)!
+    setElementConnection(slide, cxn.id, {
+      start: { id: aId, idx: 3 },
+      end: { id: bId, idx: 0 },
+    })
+    commitSaved(opened)
+
+    const slideXml = opened.archive.readText(slide.path)!
+    const externalizedXml = slideXml
+      .replace(/<a:stCxn\b([^>]*)\/>/g, '<a:stCxn$1></a:stCxn>')
+      .replace(/<a:endCxn\b([^>]*)\/>/g, '<a:endCxn$1></a:endCxn>')
+    opened.archive.entries.set(slide.path, Buffer.from(externalizedXml, 'utf8'))
+
+    const reparsed = reparseDeck(opened)
+    const reparsedSlide = reparsed.deck.slides[0]!
+    const reparsedCxn = reparsedSlide.elements.find((element) => element.connection)!
+    expect(reparsedCxn.connection).toEqual({
+      start: { id: aId, idx: 3 },
+      end: { id: bId, idx: 0 },
+    })
+
+    expect(
+      setElementConnection(reparsedSlide, reparsedCxn.id, {
+        start: { id: aId, idx: 1 },
+      }),
+    ).toBe(true)
+
+    const reopened = await openPptx(await savePptx(reparsed))
+    const finalCxn = reopened.deck.slides[0]!.elements.find((element) => element.connection)
+    expect(finalCxn?.connection).toEqual({
+      start: { id: aId, idx: 1 },
+      end: { id: bId, idx: 0 },
+    })
   })
 })

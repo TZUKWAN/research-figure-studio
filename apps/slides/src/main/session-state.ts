@@ -24,12 +24,13 @@ import { createSystemFontMetrics, resetFontRegistry } from './fonts'
 import { tiffToPng } from './tiff-decode'
 import { neutralizeJpegOrientation } from './jpeg-orientation'
 import { displayMime } from './media-mime'
+import type { AiRunState } from './ai-run-state'
 
 export interface RuntimePaths {
   preloadPath: string
   rendererDevUrl?: string | undefined
   rendererFilePath?: string | undefined
-  /** Shell router used to open exported PDFs in a new GenOffice tab. */
+  /** Shell router used to open exported PDFs in a new editor tab. */
   openGeneratedPath?: (path: string) => boolean
 }
 
@@ -61,6 +62,8 @@ export interface Session {
   }
   /** Rollback points for the AI panel's Snapshots list, keyed by id (one per AI run that edited the deck). */
   aiSnapshots?: Map<number, HistorySnapshot>
+  /** Active renderer AI run and the queue for async mutations that can persist the canonical deck. */
+  aiRun?: AiRunState
   /** Edits that only touch archive entries (notes/comments; element-level dirty cannot detect them), reset after save */
   metaDirty?: boolean
   /** Transform preview gesture in progress (the first preview already pushed an undo snapshot; later previews/final commit do not) */
@@ -263,6 +266,7 @@ export function carryHistoryForReplacement(
   replacement.redoStack = previous.redoStack
   replacement.historyBatch = previous.historyBatch
   replacement.aiSnapshots = previous.aiSnapshots
+  replacement.aiRun = previous.aiRun
   scheduleHistoryNotify(replacement)
 }
 

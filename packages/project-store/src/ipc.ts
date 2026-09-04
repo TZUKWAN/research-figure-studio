@@ -2,9 +2,136 @@
  * IPC interface type definitions (shared by the renderer and main processes).
  * No Electron dependency; importable from the renderer.
  */
-import type { ChatAttachment, ChatMessage, ChatMeta, ProjectSummary, TimelineEntry, ToolActivity } from './types.js'
+import type {
+  ChatAttachment,
+  ChatMessage,
+  ChatMeta,
+  ProjectSummary,
+  TimelineEntry,
+  ToolActivity,
+} from './types.js'
 
 export type { ChatAttachment, ChatMessage, ChatMeta, ProjectSummary, TimelineEntry, ToolActivity }
+
+const STORAGE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
+export const CHAT_LIMIT_MAX = 10_000
+
+type UnknownRecord = Record<string, unknown>
+
+function asRecord(value: unknown): UnknownRecord | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as UnknownRecord)
+    : null
+}
+
+function invalidArgs(operation: string): never {
+  throw new TypeError(`Invalid ${operation} args`)
+}
+
+export function isStorageId(value: unknown): value is string {
+  return typeof value === 'string' && STORAGE_ID_RE.test(value)
+}
+
+export function assertStorageId(value: unknown, label: string): string {
+  if (!isStorageId(value)) throw new Error(`Invalid ${label}`)
+  return value
+}
+
+function isOptionalString(value: unknown): boolean {
+  return value === undefined || typeof value === 'string'
+}
+
+function isToolActivity(value: unknown): value is ToolActivity {
+  const tool = asRecord(value)
+  return (
+    tool !== null &&
+    typeof tool.name === 'string' &&
+    typeof tool.summary === 'string' &&
+    (tool.isError === undefined || typeof tool.isError === 'boolean') &&
+    isOptionalString(tool.input) &&
+    isOptionalString(tool.output)
+  )
+}
+
+function isChatAttachment(value: unknown): value is ChatAttachment {
+  const attachment = asRecord(value)
+  const sizeBytes = attachment?.sizeBytes
+  return (
+    attachment !== null &&
+    typeof attachment.name === 'string' &&
+    isOptionalString(attachment.path) &&
+    isOptionalString(attachment.ext) &&
+    (sizeBytes === undefined ||
+      (typeof sizeBytes === 'number' && Number.isSafeInteger(sizeBytes) && sizeBytes >= 0))
+  )
+}
+
+export function assertResolveChatArgs(value: unknown): ResolveChatArgs {
+  const args = asRecord(value)
+  if (
+    args === null ||
+    !Object.prototype.hasOwnProperty.call(args, 'filePath') ||
+    (args.filePath !== null && (typeof args.filePath !== 'string' || args.filePath.length === 0)) ||
+    (args.tempChatId !== undefined && !isStorageId(args.tempChatId))
+  ) {
+    invalidArgs('resolveChat')
+  }
+  return args as unknown as ResolveChatArgs
+}
+
+export function assertAppendChatArgs(value: unknown): AppendChatArgs {
+  const args = asRecord(value)
+  if (
+    args === null ||
+    !isStorageId(args.projectId) ||
+    !isStorageId(args.chatId) ||
+    (args.role !== 'user' && args.role !== 'assistant') ||
+    typeof args.text !== 'string' ||
+    (args.tools !== undefined &&
+      (!Array.isArray(args.tools) || !args.tools.every((tool) => isToolActivity(tool)))) ||
+    (args.attachments !== undefined &&
+      (!Array.isArray(args.attachments) ||
+        !args.attachments.every((attachment) => isChatAttachment(attachment))))
+  ) {
+    invalidArgs('appendChat')
+  }
+  return args as unknown as AppendChatArgs
+}
+
+export function assertLoadChatArgs(value: unknown): LoadChatArgs {
+  const args = asRecord(value)
+  const limit = args?.limit
+  if (
+    args === null ||
+    !isStorageId(args.projectId) ||
+    !isStorageId(args.chatId) ||
+    (limit !== undefined &&
+      (typeof limit !== 'number' ||
+        !Number.isSafeInteger(limit) ||
+        limit < 1 ||
+        limit > CHAT_LIMIT_MAX))
+  ) {
+    invalidArgs('loadChat')
+  }
+  return args as unknown as LoadChatArgs
+}
+
+export function assertRebindChatArgs(value: unknown): RebindChatArgs {
+  const args = asRecord(value)
+  const hasNewChatId = args?.newChatId !== undefined
+  const hasNewFilePath = args?.newFilePath !== undefined
+  if (
+    args === null ||
+    !isStorageId(args.projectId) ||
+    !isStorageId(args.tempChatId) ||
+    hasNewChatId === hasNewFilePath ||
+    (hasNewChatId && !isStorageId(args.newChatId)) ||
+    (hasNewFilePath && (typeof args.newFilePath !== 'string' || args.newFilePath.length === 0))
+  ) {
+    invalidArgs('rebindChat')
+  }
+  return args as unknown as RebindChatArgs
+}
 
 export interface AppendChatArgs {
   projectId: string

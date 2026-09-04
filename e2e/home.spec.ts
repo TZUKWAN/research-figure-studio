@@ -1,19 +1,13 @@
 import { test, expect } from '@playwright/test'
-import { launchShell, closeAndSaveVideo, screenshotPath } from './helpers'
+import { launchShell, closeAndSaveVideo, screenshotPath, activateHome } from './helpers'
 
 test.describe('home screen', () => {
-  test('shows hero, quick-create cards and tab bar', async () => {
+  test('shows the file list, quick actions and tab bar', async () => {
     const launched = await launchShell({ onboardingSeen: true, videoDir: 'home-basics' })
-    const { page } = launched
+    const page = await activateHome(launched.app)
     try {
-      await expect(page.locator('.home-hero')).toBeVisible()
-      // five AI quick-create cards plus the "Open file" browse card
-      await expect(page.locator('.quick-card')).toHaveCount(6)
-      await expect(page.locator('.quick-card').first()).toContainText('AI Docs')
-      await expect(page.locator('.quick-card').nth(1)).toContainText('AI Sheets')
-      await expect(page.locator('.quick-card').nth(2)).toContainText('AI Slides')
-      await expect(page.locator('.quick-card').nth(3)).toContainText('AI Markdown')
-      await expect(page.locator('.quick-card').nth(4)).toContainText('AI PDF')
+      await expect(page.locator('.recent-table, .empty.proj-empty').first()).toBeVisible()
+      await expect(page.locator('.quick-card').first()).toBeVisible()
       await expect(page.locator('.tab-bar .tab-item.tab-home')).toBeVisible()
       await page.screenshot({ path: screenshotPath('home-overview') })
     } finally {
@@ -27,7 +21,7 @@ test.describe('home screen', () => {
       lang: 'zh-CN',
       videoDir: 'home-zh-cn',
     })
-    const { page } = launched
+    const page = await activateHome(launched.app)
     try {
       await expect(page.locator('.nav-item .nav-label').first()).toHaveText('最近')
       await page.screenshot({ path: screenshotPath('home-zh-cn') })

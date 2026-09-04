@@ -50,6 +50,7 @@ import type {
 import { parseChartXml } from './chart'
 import { parseChartExXml } from './chartex'
 import { parseCustGeom } from './custgeom'
+import { semanticMetadataFromCnvPr } from './identity'
 import {
   resolveTableStyle,
   cellPartStyle,
@@ -350,6 +351,10 @@ function parseSpShape(
   const phType = ph?.['@_type']
   const phIdx = ph?.['@_idx'] != null ? String(ph['@_idx']) : undefined
   const name = nv?.['p:cNvPr']?.['@_name']
+  const semanticMetadata = semanticMetadataFromCnvPr(
+    nv?.['p:cNvPr']?.['@_descr'],
+    nv?.['p:cNvPr']?.['@_title'],
+  )
 
   let transform = parseXfrm(spPr['a:xfrm'])
   // Phase 2 fix: when a placeholder omits <a:xfrm>, geometry is backfilled from layout/master inheritance.
@@ -481,6 +486,7 @@ function parseSpShape(
     transform,
     // <p:ph> without a type (content placeholder) defaults to body per ECMA
     placeholder: ph ? (phType ?? 'body') : undefined,
+    ...(semanticMetadata ? { semanticMetadata } : {}),
     ...(nv?.['p:cNvSpPr']?.['@_txBox'] === '1' ? { txBox: true } : {}),
     name,
     presetGeometry,
@@ -588,6 +594,10 @@ function parseConnector(node: any, anchor: ByteAnchor, ctx: ParseContext): TextE
   const spPr = node['p:spPr'] ?? {}
   const nvCxn = node['p:nvCxnSpPr']
   const name = nvCxn?.['p:cNvPr']?.['@_name']
+  const semanticMetadata = semanticMetadataFromCnvPr(
+    nvCxn?.['p:cNvPr']?.['@_descr'],
+    nvCxn?.['p:cNvPr']?.['@_title'],
+  )
   const prstGeom = spPr['a:prstGeom']
   // Stroke priority: explicit <a:ln> (when it has no fill, complete the color from the lnRef reference color/dk1, keeping arrows and dashes)
   // -> lnRef theme template -> dk1 solid-line fallback (a connector without a stroke is effectively invisible)
@@ -624,6 +634,7 @@ function parseConnector(node: any, anchor: ByteAnchor, ctx: ParseContext): TextE
     anchor,
     transform: parseXfrm(spPr['a:xfrm']),
     name,
+    ...(semanticMetadata ? { semanticMetadata } : {}),
     presetGeometry: prstGeom?.['@_prst'] ?? 'line',
     ...(parseAvLst(prstGeom?.['a:avLst']) ? { adjust: parseAvLst(prstGeom?.['a:avLst']) } : {}),
     ...(connection ? { connection } : {}),

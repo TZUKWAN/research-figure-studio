@@ -1,6 +1,6 @@
 /**
  * Insert-tab actions extracted from App.tsx: shapes/text boxes,
- * images, tables, icons, charts, SmartArt, WordArt, fields, links, Zoom,
+ * images, tables, icons, charts, SmartArt, fields, links, Zoom,
  * header/footer, equations, media, 3D models, and screen recording.
  * Functions take the ActionCtx built fresh per call.
  */
@@ -8,7 +8,6 @@ import type { InsertKind, LinkTargetOp } from '../shared/ipc'
 import type { ActionCtx } from './action-context'
 import { applySelectionLink, saveEditSelection, selectionLink } from './TextEditOverlay'
 import { FIT_WIDTH } from './app-constants'
-import type { WordArtPreset } from '@genoffice/ui'
 import {
   chartSampleData,
   iconSvg,
@@ -203,42 +202,6 @@ export async function insertSmartArt(ctx: ActionCtx, def: SmartArtDef): Promise<
     ctx.applySlide(current, r.slide)
     ctx.setSelectedIds([r.sourceId])
     ctx.setStatus(t('appStatusSmartArtInserted', { name: def.label }))
-  }
-}
-
-export async function insertWordArt(ctx: ActionCtx, preset: WordArtPreset): Promise<void> {
-  const { slide, current } = ctx
-  if (!slide) return
-  const w = 520
-  const h = 100
-  const r = await window.slidesApi.addElement({
-    slideIndex: current,
-    kind: 'textbox',
-    xPx: Math.round((slide.widthPx - w) / 2),
-    yPx: Math.round((slide.heightPx - h) / 2),
-    wPx: w,
-    hPx: h,
-    fitWidthPx: FIT_WIDTH,
-    paragraphs: [
-      {
-        align: 'center',
-        runs: [
-          {
-            text: t('appWordArtPlaceholder'),
-            fontSize: 40,
-            bold: preset.bold,
-            italic: preset.italic,
-            color: preset.fill,
-            ...(preset.outline ? { outline: preset.outline } : {}),
-          },
-        ],
-      },
-    ],
-  })
-  if (r) {
-    ctx.applySlide(current, r.slide)
-    ctx.setSelectedIds([r.sourceId])
-    ctx.setStatus(t('appStatusWordArtInserted'))
   }
 }
 

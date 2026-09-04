@@ -8,9 +8,18 @@
  * Both change the spTree structure, driving a full-slide rebuild via
  * slide.structureDirty.
  */
-import type { EmuRect, Paragraph, PictureElement, Slide, SlideElement, TextElement } from './types'
+import type {
+  EmuRect,
+  Paragraph,
+  PictureElement,
+  SemanticMetadata,
+  Slide,
+  SlideElement,
+  TextElement,
+} from './types'
 import { generateParagraphXml, generateXfrmXml } from './generate'
 import { creationIdXml, escapeXmlAttr } from './xml-utils'
+import { serializeSemanticMetadata } from './identity'
 import { relsPathFor } from './zip'
 import type { OpenedPptx } from './index'
 import { cleanupDeletedElementResources } from './resource-cleanup'
@@ -47,6 +56,14 @@ export interface NewElementOptions {
   stroke?: { color: string; widthEmu: number }
   /** body geometry overrides; absent = `wrap="square" rtlCol="0"` as before */
   bodyPr?: NewElementBodyPr
+  /** Research Figure Studio semantic payload (route B: cNvPr descr/title). */
+  semanticMetadata?: SemanticMetadata
+}
+
+function semanticAttrs(metadata: SemanticMetadata | undefined): string {
+  if (!metadata) return ''
+  const encoded = escapeXmlAttr(serializeSemanticMetadata(metadata))
+  return ` descr="${encoded}" title="${encoded}"`
 }
 
 /**
@@ -116,7 +133,7 @@ function buildCxnSpXml(
   const head = def.head ? '<a:headEnd type="triangle" w="med" len="med"/>' : ''
   const tail = def.tail ? '<a:tailEnd type="triangle" w="med" len="med"/>' : ''
   return (
-    `<p:cxnSp><p:nvCxnSpPr><p:cNvPr id="${id}" name="${escapeXmlAttr(name)}">${creationIdXml()}</p:cNvPr>` +
+    `<p:cxnSp><p:nvCxnSpPr><p:cNvPr id="${id}" name="${escapeXmlAttr(name)}"${semanticAttrs(opts.semanticMetadata)}>${creationIdXml()}</p:cNvPr>` +
     '<p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr>' +
     `<p:spPr><a:xfrm><a:off x="${o.x}" y="${o.y}"/><a:ext cx="${o.cx}" cy="${o.cy}"/></a:xfrm>` +
     `<a:prstGeom prst="${def.prst}"><a:avLst/></a:prstGeom>` +
@@ -157,7 +174,7 @@ export function buildSpXml(slide: Slide, opts: NewElementOptions): string {
     .map((p) => generateParagraphXml(p))
     .join('')
   return (
-    `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${escapeXmlAttr(name)}">${creationIdXml()}</p:cNvPr>` +
+    `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${escapeXmlAttr(name)}"${semanticAttrs(opts.semanticMetadata)}>${creationIdXml()}</p:cNvPr>` +
     `<p:cNvSpPr${isTextbox ? ' txBox="1"' : ''}/><p:nvPr/></p:nvSpPr>` +
     `<p:spPr>${xfrm}${geom}${fill}${ln}</p:spPr>` +
     `<p:txBody>${buildBodyPrXml(opts.bodyPr)}<a:lstStyle/>${paras}</p:txBody></p:sp>`
@@ -186,6 +203,7 @@ export function addElement(slide: Slide, opts: NewElementOptions): TextElement {
         ...(lineDef.head ? { headEnd: { type: 'triangle' as const } } : {}),
         ...(lineDef.tail ? { tailEnd: { type: 'triangle' as const } } : {}),
       },
+      ...(opts.semanticMetadata ? { semanticMetadata: opts.semanticMetadata } : {}),
     }
     slide.elements.push(el)
     slide.structureDirty = true
@@ -208,6 +226,7 @@ export function addElement(slide: Slide, opts: NewElementOptions): TextElement {
         }
       : {}),
     text: { paragraphs: opts.paragraphs?.length ? opts.paragraphs : [{ runs: [{ text: '' }] }] },
+    ...(opts.semanticMetadata ? { semanticMetadata: opts.semanticMetadata } : {}),
   }
   slide.elements.push(el)
   slide.structureDirty = true

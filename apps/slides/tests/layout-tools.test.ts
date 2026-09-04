@@ -204,6 +204,15 @@ describe('auditSlideLayout', () => {
     const issues = auditSlideLayout(slideOf([bg, deco, t]))
     expect(issues).toHaveLength(0)
   })
+
+  it('detects invalid geometry and duplicate element ids', () => {
+    const invalid = textNode('bad', box(80, 60, 200, 100), 'Bad')
+    invalid.box = { ...invalid.box, x: Number.NaN }
+    const duplicate = textNode('bad', box(400, 60, 200, 100), 'Duplicate')
+    const issues = auditSlideLayout(slideOf([invalid, duplicate]))
+    expect(issues.some((issue) => issue.includes('Invalid geometry'))).toBe(true)
+    expect(issues.some((issue) => issue.includes('Duplicate element id'))).toBe(true)
+  })
 })
 
 // ── execute_layout_script tool chain ──────────────────────────

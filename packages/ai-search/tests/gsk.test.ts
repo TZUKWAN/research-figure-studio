@@ -1,4 +1,9 @@
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
+
+vi.mock('../src/genoffice-auth', () => ({
+  genofficeApiKey: () => '',
+}))
+
 import {
   gskChildEnv,
   setGskProxyUrl,
@@ -10,7 +15,17 @@ import {
   parseGskPastProjects,
   extractGskText,
   parseToolCliNdjson,
+  HOSTED_TOOL_UNAVAILABLE_MESSAGE,
 } from '../src/gsk'
+
+describe('hosted tool configuration errors', () => {
+  it('uses neutral copy without a legacy service name', () => {
+    expect(HOSTED_TOOL_UNAVAILABLE_MESSAGE).toBe(
+      'This hosted tool is unavailable because no compatible local configuration was found.',
+    )
+    expect(HOSTED_TOOL_UNAVAILABLE_MESSAGE).not.toMatch(/genspark/i)
+  })
+})
 
 describe('parseGskOutput', () => {
   it('parses clean JSON', () => {

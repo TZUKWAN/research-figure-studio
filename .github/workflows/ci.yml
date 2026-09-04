@@ -1,8 +1,8 @@
 name: CI
 
 # Test gate for every PR and push: changed-file formatting, lint, typecheck across
-# all workspaces, and the full unit-test suite (engine packages and app tests; the
-# sheets suite also runs the Rust xlsx-sidecar tests). Packaging/signing is handled
+# all workspaces, and the full unit-test suite (engine packages and app tests).
+# Packaging/signing is handled
 # by separate release automation — this workflow never builds installers.
 
 on:
@@ -36,29 +36,11 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
-      - name: Setup Rust
-        # SHA-pinned (third-party action); the ref no longer selects the
-        # toolchain, so it is passed explicitly.
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable branch, 2026-07
-        with:
-          toolchain: stable
-
-      - name: Cache cargo (xlsx-sidecar)
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-        with:
-          workspaces: apps/sheets/native/xlsx-engine
-
       - name: Install dependencies
         run: npm ci
 
       - name: Check dependency licenses
         run: npm run licenses
-
-      - name: Check Rust dependency licenses (xlsx-sidecar)
-        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
-        with:
-          command: check licenses
-          manifest-path: apps/sheets/native/xlsx-engine/Cargo.toml
 
       - name: Check formatting
         env:
@@ -105,13 +87,6 @@ jobs:
       - name: Test
         run: npm test
 
-      # Preservation gate: a no-op-adjacent edit through the OOXML gateway must
-      # leave every untouched package entry byte-identical (fails closed otherwise).
-      - name: Sheets compatibility gate
-        run: |
-          npm run fixtures -w @genoffice/sheets
-          npm run compat -w @genoffice/sheets
-
   e2e:
     # 22.04, not -latest: 24.04's AppArmor hardening blocks Electron renderer
     # spawn under xvfb even with --no-sandbox and the userns sysctl lifted
@@ -128,24 +103,11 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable branch, 2026-07
-        with:
-          toolchain: stable
-
-      - name: Cache cargo (xlsx-sidecar)
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-        with:
-          workspaces: apps/sheets/native/xlsx-engine
-
       - name: Install dependencies
         run: npm ci
 
       - name: Build apps
         run: npm run build:all
-
-      - name: Generate sheets fixtures
-        run: npm run fixtures -w @genoffice/sheets
 
       # Newer Ubuntu kernels ship an AppArmor policy that blocks unprivileged
       # user namespaces, which kills the Chromium zygote even with --no-sandbox

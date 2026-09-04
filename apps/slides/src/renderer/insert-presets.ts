@@ -160,8 +160,6 @@ export function iconSvg(def: IconDef, color: string, size = 512): string {
 
 export const ICON_COLORS = ['#404040', '#4472C4', '#ED7D31', '#70AD47', '#C00000', '#7030A0']
 
-// WordArt presets are shared across apps — see @genoffice/ui wordart-presets.ts.
-
 // ── SmartArt layouts ──────────────────────────────────────────────────
 
 export interface SmartArtDef {

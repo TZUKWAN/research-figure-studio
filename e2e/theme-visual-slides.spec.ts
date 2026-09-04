@@ -6,7 +6,11 @@ async function findShellPage(app: ElectronApplication, timeoutMs = 15_000): Prom
   for (;;) {
     for (const candidate of app.windows()) {
       const has = await candidate
-        .evaluate(() => Boolean((window as unknown as { aiOffice?: unknown }).aiOffice))
+        .evaluate(
+          () =>
+            Boolean((window as unknown as { aiOffice?: unknown }).aiOffice) &&
+            Boolean(document.querySelector('.app-frame')),
+        )
         .catch(() => false)
       if (has) return candidate
     }
@@ -26,7 +30,6 @@ test('slides chrome darkens while the slide canvas stays paper-white', async () 
   const launched = await launchShell({ onboardingSeen: true, videoDir: 'theme-visual-slides' })
   try {
     const shellPage = await findShellPage(launched.app)
-    await shellPage.locator('.quick-card', { hasText: 'AI Slides' }).click()
     const editorPage = await waitForPageWithUrl(launched.app, 'slides/out')
     await editorPage.waitForSelector('.stage-wrap canvas', { timeout: 20_000 })
 

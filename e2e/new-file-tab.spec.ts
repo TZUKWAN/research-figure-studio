@@ -1,28 +1,36 @@
 import { test, expect } from '@playwright/test'
-import { launchShell, closeAndSaveVideo, waitForPageWithUrl, screenshotPath } from './helpers'
+import {
+  launchShell,
+  closeAndSaveVideo,
+  waitForPageWithUrl,
+  screenshotPath,
+  activateHome,
+} from './helpers'
 
 test.describe('new file from home', () => {
-  test('AI Docs quick card opens a docs editor tab', async () => {
-    const launched = await launchShell({ onboardingSeen: true, videoDir: 'new-doc-tab' })
-    const { app, page } = launched
+  test('AI Slides quick card opens a Slides editor tab', async () => {
+    const launched = await launchShell({ onboardingSeen: true, videoDir: 'new-slides-tab' })
+    const { app } = launched
     try {
-      await expect(page.locator('.quick-card').first()).toContainText('AI Docs')
+      const page = await activateHome(app)
+      await expect(page.locator('.quick-card', { hasText: 'New Canvas' })).toHaveCount(1)
 
-      await page.locator('.quick-card').first().click()
+      const editorTabs = page.locator('.tab-bar .tab-item:not(.tab-home)')
+      const tabCountBefore = await editorTabs.count()
+      await page.locator('.quick-card', { hasText: 'New Canvas' }).click()
 
-      const editorTab = page.locator('.tab-bar .tab-item:not(.tab-home)')
-      await expect(editorTab).toHaveCount(1)
-      await expect(editorTab).toHaveClass(/active/)
-      await page.screenshot({ path: screenshotPath('new-doc-tab-bar') })
+      await expect(editorTabs).toHaveCount(tabCountBefore + 1)
+      await expect(editorTabs.last()).toHaveClass(/active/)
+      await page.screenshot({ path: screenshotPath('new-slides-tab-bar') })
 
-      // the docs editor loads in a WebContentsView, which surfaces as a new
+      // the Slides editor loads in a WebContentsView, which surfaces as a new
       // page — poll for it instead of waitForLoadState, which hangs on Linux
       // when Playwright attaches mid-navigation and misses lifecycle events
-      const editorPage = await waitForPageWithUrl(app, 'docs/out')
-      await expect(editorPage.locator('body')).toBeVisible()
-      await editorPage.screenshot({ path: screenshotPath('new-doc-editor') })
+      const editorPage = await waitForPageWithUrl(app, 'slides/out')
+      await editorPage.waitForSelector('.stage-wrap canvas', { timeout: 20_000 })
+      await editorPage.screenshot({ path: screenshotPath('new-slides-editor') })
     } finally {
-      await closeAndSaveVideo(launched, 'new-doc-tab')
+      await closeAndSaveVideo(launched, 'new-slides-tab')
     }
   })
 })

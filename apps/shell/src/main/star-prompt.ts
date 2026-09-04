@@ -3,7 +3,7 @@
  * `starPrompt` object persisted in userData/app-settings.json.
  *
  * Design: the prompt only appears after the user has demonstrably gotten
- * value out of the app (installed a few days, opened several documents),
+ * value out of the app (installed a few days, opened several presentations),
  * shows at most twice in a lifetime, and any explicit reaction ("go star" /
  * "already starred") resolves it permanently. We cannot detect whether the
  * user actually starred (that would need GitHub OAuth), so opening the repo
@@ -16,7 +16,7 @@ export const LAST_RUN_VERSION_KEY = 'lastRunVersion'
 
 /** installed at least this long before the first prompt */
 export const MIN_AGE_MS = 3 * 24 * 60 * 60 * 1000
-/** documents opened (any type) before the first prompt */
+/** presentations opened before the first prompt */
 export const MIN_DOC_OPENS = 5
 /** lifetime cap on how many times the prompt appears */
 export const MAX_SHOWS = 2
@@ -26,7 +26,7 @@ export const RESHOW_AFTER_MS = 14 * 24 * 60 * 60 * 1000
 export interface StarPromptState {
   /** ms epoch of the first launch that carried this feature */
   firstRunAt?: number
-  /** documents opened since firstRunAt (value-moment proxy) */
+  /** presentations opened since firstRunAt (value-moment proxy) */
   docOpens?: number
   /** times the prompt has been displayed */
   shownCount?: number
@@ -58,9 +58,9 @@ export function withFirstRun(state: StarPromptState, now: number): StarPromptSta
 }
 
 /**
- * A document was opened — counts toward the value-moment threshold, and past
+ * A presentation was opened — counts toward the value-moment threshold, and past
  * it: the prompt copy personalizes with the real count ("you've opened N
- * documents"). Stops once no prompt can ever show again.
+ * presentations"). Stops once no prompt can ever show again.
  */
 export function withDocOpen(state: StarPromptState): StarPromptState {
   if (state.resolved || (state.shownCount ?? 0) >= MAX_SHOWS) return state

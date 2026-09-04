@@ -459,6 +459,7 @@ export class AgentLoop<TSnapshot = unknown> {
     this.abortController?.abort()
     this.handle?.cancel()
     this.handle = null
+    this.options.skill.reset?.()
     this.running = false
     this.cancelled = false
     this.history = []

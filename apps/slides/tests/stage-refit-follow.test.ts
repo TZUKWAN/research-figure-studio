@@ -209,6 +209,17 @@ async function bootApp(): Promise<HTMLElement> {
 }
 
 describe('stage fit-to-window follow', () => {
+  it('keeps the streamlined canvas status bar controls', async () => {
+    await bootApp()
+
+    const statusBar = container!.querySelector('.status-bar')
+    expect(statusBar).not.toBeNull()
+    expect(statusBar!.textContent).toContain('画布 1 / 1')
+    expect(statusBar!.querySelector('.status-notes-btn')).toBeNull()
+    expect(statusBar!.querySelector('.status-play-btn')).toBeNull()
+    expect(statusBar!.querySelector('.zoom-btn')).not.toBeNull()
+  })
+
   it('hides bleed-only scrollbars until the nominal slide overflows', async () => {
     const wrap = await bootApp()
     expect(wrap.classList.contains('stage-fits-viewport')).toBe(true)
@@ -226,32 +237,6 @@ describe('stage fit-to-window follow', () => {
     await act(async () => FakeResizeObserver.fire(wrap))
     expect(stageZoom(container!)).toBeCloseTo(1.1, 5)
     expect(wrap.classList.contains('stage-fits-viewport')).toBe(true)
-  })
-
-  it('re-fits on container resize after a reading-view round trip', async () => {
-    const wrap = await bootApp()
-
-    // sanity: the follow works before any view-mode round trip
-    resizeStage(696, 800) // avail 640 → fit 0.5
-    await act(async () => FakeResizeObserver.fire(wrap!))
-    expect(stageZoom(container!)).toBeCloseTo(0.5, 5)
-
-    // reading view unmounts the editor; returning remounts a fresh .stage-wrap
-    clickByText(container!, '.ribbon-tabs button', /^(View|视图)$/)
-    clickByText(container!, 'button.rb-big', /Reading|阅读/)
-    await settle()
-    expect(container!.querySelector('.stage-wrap')).toBeNull()
-    clickByText(container!, 'button.reading-exit', /./)
-    await settle()
-
-    const wrap2 = container!.querySelector<HTMLElement>('.stage-wrap')
-    expect(wrap2, 'editor should be back').not.toBeNull()
-    expect(wrap2).not.toBe(wrap)
-
-    // shrink again: the observer must follow the NEW stage-wrap
-    resizeStage(376, 800) // avail 320 → fit 0.25
-    await act(async () => FakeResizeObserver.fire(wrap2!))
-    expect(stageZoom(container!)).toBeCloseTo(0.25, 5)
   })
 
   it('clamps a manual zoom back to fit when the container shrinks', async () => {

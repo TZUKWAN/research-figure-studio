@@ -53,6 +53,16 @@ function makeSkill(execute?: (call: AgentToolCall) => ToolExecution): AgentSkill
 const flush = () => new Promise((r) => setTimeout(r, 0))
 
 describe('AgentLoop', () => {
+  it('resets skill state when the conversation is reset', () => {
+    const reset = vi.fn()
+    const skill = Object.assign(makeSkill(), { reset })
+    const loop = new AgentLoop({ transport: scriptedTransport([]), skill })
+
+    loop.reset()
+
+    expect(reset).toHaveBeenCalledOnce()
+  })
+
   it('runs a plain-text turn to completion', async () => {
     const transport = scriptedTransport([
       (cb) => {
@@ -1134,6 +1144,24 @@ describe('AgentLoop: verifyResponse (claimed-action guard)', () => {
 })
 
 describe('composeSkills', () => {
+  it('broadcasts conversation resets to every sub-skill', () => {
+    const resetA = vi.fn()
+    const resetB = vi.fn()
+    const make = (id: string, reset: () => void): AgentSkill => ({
+      id,
+      systemPrompt: '',
+      tools: [],
+      executeTool: () => ({ output: '', summary: '' }),
+      reset,
+    })
+    const merged = composeSkills('x', '', [make('a', resetA), make('b', resetB)])
+
+    merged.reset?.()
+
+    expect(resetA).toHaveBeenCalledOnce()
+    expect(resetB).toHaveBeenCalledOnce()
+  })
+
   it('merges prompts, tools and context, and routes execution', async () => {
     const a: AgentSkill = {
       id: 'a',

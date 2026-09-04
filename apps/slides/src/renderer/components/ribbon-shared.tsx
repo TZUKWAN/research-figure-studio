@@ -10,20 +10,17 @@ import type {
   AnimationItem,
   EditChartOp,
   EditTableStyleOp,
-  GetLayoutsResult,
   GradientFillSpec,
   InsertKind,
   TransitionKind,
 } from '../../shared/ipc'
 import type { InkPenSettings, InkTool } from '../ink'
-import type { WordArtPreset } from '@genoffice/ui'
 import type { ChartPresetDef, IconDef, SmartArtDef } from '../insert-presets'
 import type { SlideThemePreset } from '../themes'
 import type { ChartStyleInfo } from '@genoffice/pptx-render'
 import { useI18n, type StringKey } from '../i18n/locale'
 
-export type InsertDropKey =
-  'shapes' | 'icons' | 'chart' | 'smartart' | 'wordart' | 'zoom' | 'addanim'
+export type InsertDropKey = 'icons'
 
 export const BIG = 28
 
@@ -158,75 +155,6 @@ export function RbCaret() {
   )
 }
 
-/** PowerPoint's canonical layout names → localized labels (the built-in set; unknown names show as-is) */
-const LAYOUT_NAME_KEYS: Record<string, StringKey> = {
-  'Title Slide': 'ribbonLayoutTitleSlide',
-  'Title and Content': 'ribbonLayoutTitleAndContent',
-  'Section Header': 'ribbonLayoutSectionHeader',
-  'Two Content': 'ribbonLayoutTwoContent',
-  'Title Only': 'ribbonLayoutTitleOnly',
-  Blank: 'ribbonLayoutBlank',
-}
-
-/** Layout candidates with placeholder-sketch previews (new-slide dropdown + layout picker) */
-export function LayoutList({
-  layouts,
-  size,
-  onPick,
-}: {
-  layouts: GetLayoutsResult['layouts'] | null
-  size: GetLayoutsResult['size'] | null
-  onPick: (path: string) => void
-}) {
-  const { t } = useI18n()
-  const W = 120
-  const H = 68 // preview box (px)
-  const cx = size?.cx || 9144000
-  const cy = size?.cy || 5143500
-  const list = layouts ?? []
-  return (
-    <div className="rb-layout-list">
-      {list.map((lay) => {
-        const key = LAYOUT_NAME_KEYS[lay.name]
-        const name = key ? t(key) : lay.name
-        return (
-          <button
-            key={lay.path}
-            className="rb-layout-item"
-            onClick={() => onPick(lay.path)}
-            data-tip={name}
-          >
-            <div className="rb-layout-preview">
-              {lay.placeholders.map((ph, i) => (
-                <div
-                  key={i}
-                  className="rb-layout-ph"
-                  style={{
-                    left: Math.round((ph.x / cx) * W),
-                    top: Math.round((ph.y / cy) * H),
-                    width: Math.max(8, Math.round((ph.cx / cx) * W)),
-                    height: Math.max(6, Math.round((ph.cy / cy) * H)),
-                  }}
-                >
-                  <span>
-                    {ph.type === 'title' || ph.type === 'ctrTitle'
-                      ? 'T'
-                      : ph.type === 'body' || ph.type === 'obj'
-                        ? '≡'
-                        : ''}
-                  </span>
-                </div>
-              ))}
-            </div>
-            <div className="rb-layout-name">{name}</div>
-          </button>
-        )
-      })}
-      {list.length === 0 && <div className="rb-layout-empty">{t('ribbonNoLayouts')}</div>}
-    </div>
-  )
-}
-
 /** Every ribbon popup that participates in "one popup at a time". */
 export type RibbonPanelKey =
   | 'file'
@@ -235,7 +163,6 @@ export type RibbonPanelKey =
   | 'size'
   | 'lineSpacing'
   | 'para'
-  | 'layoutPick'
   | 'slideSize'
   | 'transparency'
   | 'pictureBorder'
@@ -243,14 +170,11 @@ export type RibbonPanelKey =
   | 'shapeStyle'
   | 'shapeFill'
   | 'table'
-  | 'layout'
   | 'translate'
   | 'arrange'
   | 'insert'
   | 'chart'
   | 'collapse'
-  | 'pen'
-  | 'slideShow'
 
 /** Ribbon popups are mutually exclusive: a trigger closes every sibling popup
  *  on mousedown, before its own click-toggle runs. A trigger rendered inside
@@ -360,14 +284,6 @@ export interface Props {
   onApplyTheme: (preset: SlideThemePreset) => void
   /** New blank slide (inherits the current page's layout background, empty content) */
   onAddSlide: () => void
-  /** New slide with a given layout */
-  onAddSlideWithLayout: (layoutPath: string) => void
-  /** Add a section (before the current page, modeled on PowerPoint Home tab "Section") */
-  onAddSection: () => void
-  /** The current pptx's layout list (null = not loaded) */
-  layouts: GetLayoutsResult['layouts'] | null
-  /** Slide size (EMU) for normalizing layout previews */
-  layoutSize: GetLayoutsResult['size'] | null
   formatOpen: boolean
   onToggleFormat: () => void
   hasSelection: boolean
@@ -412,12 +328,8 @@ export interface Props {
   /** Animation "by paragraph" toggle (entrance effects split into one per paragraph) */
   animByParagraph: boolean
   onToggleAnimByParagraph: () => void
-  /** Switch the current page's layout / reset layout (placeholders back in position) */
-  onSetLayout: (layoutPath: string) => void
-  onResetLayout: () => void
-  /** Slide size (EMU) and the current size tag ('16:9'|'4:3'|null for display) */
+  /** Slide size (EMU) */
   onSlideSize: (cx: number, cy: number) => void
-  slideSizeKey: '16:9' | '4:3' | null
   /** Element-level paragraph format (bullets/numbering/line spacing) */
   onParagraphFormat: (patch: {
     bullet?: 'char' | 'number' | 'none'
@@ -459,7 +371,6 @@ export interface Props {
   /** Preview the current page's animations on the edit canvas */
   onAnimPreview: () => void
   /** Start the show (fromStart=true from the beginning, false from the current page) */
-  onSlideShow: (fromStart: boolean) => void
   /** Start presenter view (single-window version: current page + next-page preview + notes + timer) */
   onPresenterView: (fromStart: boolean) => void
   /** Open the custom show management dialog (create/edit/play page subsets) */
@@ -511,8 +422,6 @@ export interface Props {
   onInsertChart: (kind: ChartPresetDef['kind']) => void
   /** Insert SmartArt (simplified shape combination) */
   onInsertSmartArt: (def: SmartArtDef) => void
-  /** Insert WordArt (preset-styled text box) */
-  onInsertWordArt: (preset: WordArtPreset) => void
   /** Insert date-time / slide number text boxes (dynamic fields) */
   onInsertField: (type: 'datetime' | 'slidenum') => void
   /** Open the hyperlink dialog (requires a selected element) */
@@ -618,11 +527,7 @@ export interface RibbonTabCtx extends Pick<
   | 'hasDoc'
   | 'hasSelection'
   | 'hasTextSelection'
-  | 'layouts'
-  | 'layoutSize'
-  | 'onAddSection'
   | 'onAddSlide'
-  | 'onAddSlideWithLayout'
   | 'onAiPreset'
   | 'onAskSelection'
   | 'onAlign'
@@ -647,7 +552,6 @@ export interface RibbonTabCtx extends Pick<
   | 'onInsertModel3d'
   | 'onInsertSmartArt'
   | 'onInsertTable'
-  | 'onInsertWordArt'
   | 'onInsertZoom'
   | 'onNewComment'
   | 'onOpenEquation'
@@ -655,9 +559,7 @@ export interface RibbonTabCtx extends Pick<
   | 'onOpenLink'
   | 'onParagraphFormat'
   | 'onPaste'
-  | 'onResetLayout'
-  | 'onSetLayout'
-  | 'onSlideShow'
+  | 'onSlideSize'
   | 'onStrike'
   | 'onTextColor'
   | 'onTextToggle'
@@ -690,8 +592,6 @@ export interface RibbonTabCtx extends Pick<
   iconColor: string
   lastBulletColor: string
   lastColor: string
-  layoutOpen: boolean
-  layoutPickOpen: boolean
   lineSpacingOpen: boolean
   onCustomBulletColor: (value: string) => void
   onCustomTextColor: (value: string) => void
@@ -703,22 +603,18 @@ export interface RibbonTabCtx extends Pick<
   setIconColor: Dispatch<SetStateAction<string>>
   setInsertDrop: Dispatch<SetStateAction<InsertDropKey | null>>
   setLastColor: Dispatch<SetStateAction<string>>
-  setLayoutOpen: Dispatch<SetStateAction<boolean>>
-  setLayoutPickOpen: Dispatch<SetStateAction<boolean>>
   setLineSpacingOpen: Dispatch<SetStateAction<boolean>>
   setParaOpen: Dispatch<SetStateAction<boolean>>
   setSizeDraft: Dispatch<SetStateAction<string | null>>
   setSizeOpen: Dispatch<SetStateAction<boolean>>
-  setSlideShowFromStart: Dispatch<SetStateAction<boolean>>
-  setSlideShowOpen: Dispatch<SetStateAction<boolean>>
+  setSlideSizeOpen: Dispatch<SetStateAction<boolean>>
+  slideSizeOpen: boolean
   setTableCustom: Dispatch<SetStateAction<{ r: number; c: number }>>
   setTableHover: Dispatch<SetStateAction<{ r: number; c: number }>>
   setTableOpen: Dispatch<SetStateAction<boolean>>
   sizeDraft: string | null
   sizeOpen: boolean
   /** Home-tab split button memory: the last chosen start mode (true = from beginning) */
-  slideShowFromStart: boolean
-  slideShowOpen: boolean
   t: ReturnType<typeof useI18n>['t']
   tableCustom: { r: number; c: number }
   tableHover: { r: number; c: number }

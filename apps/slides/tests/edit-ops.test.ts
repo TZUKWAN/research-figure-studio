@@ -13,6 +13,7 @@ import {
   patchSlideXml,
   savePptx,
   type OpenedPptx,
+  type SemanticMetadata,
   type TextElement,
 } from '@genoffice/pptx-engine'
 import { runTxn, opNames, elementDurableId, slideDurableId } from '../src/main/ops'
@@ -317,6 +318,38 @@ describe('cross-family ops on a real deck', () => {
     expect(el.transform.offset.x).toBe(914400)
     expect(el.transform.rot).toBe(45 * 60000)
     expect(els()[0]!.id).toBe(newId) // sent to back
+  })
+
+  it('addElement carries semantic metadata through the canonical op and save', async () => {
+    const semanticMetadata: SemanticMetadata = {
+      role: 'mechanism-primary',
+      themeFill: 'primary.100',
+      themeStroke: 'primary.700',
+      themeText: 'text.primary',
+      componentType: 'research-module',
+    }
+    const added = runTxn(opened, {
+      ops: [
+        {
+          op: 'addElement',
+          target: { slide: 0 },
+          kind: 'roundRect',
+          offset: { x: 0, y: 0, cx: 914400, cy: 457200 },
+          semanticMetadata,
+        },
+      ],
+    })
+    expect(added.applied).toBe(true)
+    const newId = added.records![0]!.created![0]!
+    const created = els().find((x) => x.id === newId)!
+    expect(created.semanticMetadata).toEqual(semanticMetadata)
+    expect(created.anchor.originalXml).toContain('descr="rfs:v1|')
+    const reopened = await openPptx(await savePptx(opened))
+    expect(
+      reopened.deck.slides[0]!.elements.find(
+        (x) => x.semanticMetadata?.role === semanticMetadata.role,
+      )?.semanticMetadata,
+    ).toEqual(semanticMetadata)
   })
 
   it('slide lifecycle: duplicate, hide, find-replace, delete — one vocabulary', () => {

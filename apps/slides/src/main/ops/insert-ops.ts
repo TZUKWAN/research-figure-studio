@@ -18,6 +18,7 @@ import {
   type NewChartOptions,
   type NewElementOptions,
   type Paragraph,
+  type SemanticMetadata,
 } from '@genoffice/pptx-engine'
 import {
   GuidedError,
@@ -50,6 +51,23 @@ function reqBytes(op: Op, field = 'bytes'): Uint8Array {
   return v
 }
 
+function reqSemanticMetadata(op: Op): SemanticMetadata | undefined {
+  const value = op.semanticMetadata
+  if (value == null) return undefined
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    ['role', 'themeFill', 'themeStroke', 'themeText', 'componentType'].some(
+      (key) => typeof (value as Record<string, unknown>)[key] !== 'string',
+    )
+  ) {
+    throw new GuidedError(
+      `op "${op.op}" needs "semanticMetadata": role/themeFill/themeStroke/themeText/componentType strings.`,
+    )
+  }
+  return value as SemanticMetadata
+}
+
 // ── addElement (textbox / preset shape / line) ──────────────────────────
 register({
   name: 'addElement',
@@ -62,6 +80,7 @@ register({
   },
   apply(op, ctx): OpRecord {
     const { slide } = resolveSlide(ctx, op)
+    const semanticMetadata = reqSemanticMetadata(op)
     const el = addElement(slide, {
       kind: String(op.kind),
       offset: reqRect(op),
@@ -71,6 +90,7 @@ register({
       ...(typeof op.fill === 'string' ? { fillColor: op.fill } : {}),
       ...(op.stroke ? { stroke: op.stroke as NewElementOptions['stroke'] } : {}),
       ...(op.bodyPr ? { bodyPr: op.bodyPr as NewElementOptions['bodyPr'] } : {}),
+      ...(semanticMetadata ? { semanticMetadata } : {}),
     })
     return { op, created: [el.id] }
   },

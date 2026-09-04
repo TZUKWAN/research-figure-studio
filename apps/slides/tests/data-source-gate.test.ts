@@ -124,6 +124,18 @@ describe('add_chart provenance gate', () => {
     expect(r.isError).toBeUndefined()
     expect(r.output).not.toContain('illustrative')
   })
+
+  it('does not carry search authorization into a reset conversation', async () => {
+    const skill = createSlidesSkill(mkAccess())
+    await skill.executeTool!({ id: 's', name: 'web_search', input: { query: 'heytea stores' } })
+    expect((await skill.executeTool!(chartCall({ dataSource: 'search' }))).isError).toBeUndefined()
+
+    skill.reset?.()
+    const r = await skill.executeTool!(chartCall({ dataSource: 'search' }))
+
+    expect(r.isError).toBe(true)
+    expect(r.output).toContain('web_search')
+  })
 })
 
 describe('edit_chart provenance gate', () => {

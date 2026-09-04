@@ -66,7 +66,7 @@ export const OP_DOCS: Record<string, OpDoc> = {
     group: 'element',
   },
   setConnectorEndpoints: {
-    sig: '{p1:{x,y},p2:{x,y},start?:{targetId,idx}|null,end?:{targetId,idx}|null}',
+    sig: '{p1:{x,y},p2:{x,y},routeY?:EMU-y,start?:{targetId,idx}|null,end?:{targetId,idx}|null}',
     group: 'element',
   },
   flipElements: { sig: '{els:[id,…],axis:"h"|"v"} — target.el unused', group: 'element' },
@@ -104,7 +104,7 @@ export const OP_DOCS: Record<string, OpDoc> = {
 
   // ── insert ────────────────────────────────────────────────────────────
   addElement: {
-    sig: '{kind:"textbox"|<preset geometry>,offset:{x,y,cx,cy},paragraphs?,fill?,stroke?}',
+    sig: '{kind:"textbox"|<preset geometry>,offset:{x,y,cx,cy},paragraphs?,fill?,stroke?,semanticMetadata?}',
     group: 'insert',
   },
   addPicture: {

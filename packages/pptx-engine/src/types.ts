@@ -341,6 +341,19 @@ export interface PPrDirty {
   paraIndices?: number[]
 }
 
+/** Semantic payload carried by Research Figure Studio objects. */
+export interface SemanticMetadata {
+  role: string
+  themeFill: string
+  themeStroke: string
+  themeText: string
+  componentType: string
+  /** stable research-figure semantics used by editor, critic and round-trip */
+  semanticNodeId?: string
+  semanticEdgeId?: string
+  relationPresentation?: string
+}
+
 interface ElementBase {
   id: string
   type: ElementType
@@ -363,6 +376,8 @@ interface ElementBase {
   /** <p:cNvSpPr txBox="1">: an Insert > Text Box, which stays top-left where an autoshape centers */
   txBox?: boolean
   name?: string
+  /** Research Figure Studio semantic payload, stored in cNvPr descr/title. */
+  semanticMetadata?: SemanticMetadata
   /**
    * <p:cNvPr descr="…">: editor-owned metadata payload (e.g. vector points of
    * freehand ink), written back verbatim with originalXml on save so the editable

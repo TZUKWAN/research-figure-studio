@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { getComponentSpec, resolveSize, RESEARCH_COMPONENT_REGISTRY } from '../src/components/registry.js'
+import {
+  getComponentSpec,
+  resolveSize,
+  RESEARCH_COMPONENT_REGISTRY,
+} from '../src/components/registry.js'
 import { layoutInputCoreOutput } from '../src/recipes/input-core-output.js'
 
 describe('ResearchComponentRegistry', () => {
@@ -69,13 +73,34 @@ describe('layoutInputCoreOutput', () => {
     expect(l.regions.core.x + l.regions.core.w).toBeLessThanOrEqual(l.regions.output.x)
   })
 
-  it('emits a main-flow chain plus one feedback route', () => {
-    const l = layoutInputCoreOutput(plan)
+  it('emits connectors exclusively from the declared semantic edges', () => {
+    const l = layoutInputCoreOutput({
+      ...plan,
+      edges: [
+        // fan-in: both inputs feed the first core module (group semantics)
+        { from: 'input', to: 'Feature encoding', role: 'main' },
+        { from: 'Feature encoding', to: 'State predictor', role: 'main' },
+        { from: 'State predictor', to: 'Service decision', role: 'main' },
+        {
+          from: 'Service decision',
+          to: 'Feature encoding',
+          role: 'feedback',
+          relation: 'feedback',
+        },
+      ],
+    })
     const main = l.connectors.filter((c) => c.role === 'main')
     expect(main).toHaveLength(4)
-    expect(main[0]).toMatchObject({ fromIndex: 0, toIndex: 1 })
+    expect(main[0]).toMatchObject({ fromIndex: 0, toIndex: 2 })
+    expect(main[1]).toMatchObject({ fromIndex: 1, toIndex: 2 })
+    expect(main[2]).toMatchObject({ fromIndex: 2, toIndex: 3 })
     expect(main[3]).toMatchObject({ fromIndex: 3, toIndex: 4 })
-    expect(l.connectors.filter((c) => c.role === 'feedback')).toHaveLength(1)
+    const feedback = l.connectors.filter((c) => c.role === 'feedback')
+    expect(feedback).toHaveLength(1)
+    expect(feedback[0]).toMatchObject({ fromIndex: 4, toIndex: 2, kind: 'elbow' })
+    expect(feedback[0]?.laneY).toBe(l.regions.feedbackLaneY)
+    // no edges declared → no connectors at all (no implicit chain)
+    expect(layoutInputCoreOutput({ ...plan, feedback: false }).connectors).toEqual([])
   })
 
   it('centers single-element zones vertically', () => {

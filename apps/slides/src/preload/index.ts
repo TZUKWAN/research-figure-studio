@@ -128,6 +128,7 @@ const api: SlidesApi = {
     mode?: 'replace' | 'append' | 'replace_at' | 'insert_at',
     atIndex?: number,
     deckName?: string,
+    ownerToken?: string,
   ) =>
     ipcRenderer.invoke(
       'slides:land-generated-pages',
@@ -136,6 +137,7 @@ const api: SlidesApi = {
       mode,
       atIndex,
       deckName,
+      ownerToken,
     ),
   cloudGenStatus: () => ipcRenderer.invoke('slides:cloud-gen-status'),
   cloudGeneratePage: (op: {
@@ -292,9 +294,12 @@ const api: SlidesApi = {
     ipcRenderer.invoke('slides:native-clipboard', op),
   beginHistoryBatch: () => ipcRenderer.invoke('slides:history-batch-begin'),
   endHistoryBatch: () => ipcRenderer.invoke('slides:history-batch-end'),
+  aiRunBegin: (ownerToken: string) => ipcRenderer.invoke('slides:ai-run-begin', ownerToken),
+  aiRunEnd: (ownerToken: string) => ipcRenderer.invoke('slides:ai-run-end', ownerToken),
   applyEditScript: (op: ApplyEditScriptOp) => ipcRenderer.invoke('slides:apply-edit-script', op),
   applyTxn: (op: ApplyTxnOp) => ipcRenderer.invoke('slides:apply-txn', op),
-  aiSnapshotRestore: (id: number) => ipcRenderer.invoke('slides:ai-snapshot-restore', id),
+  aiSnapshotRestore: (id: number, ownerToken?: string) =>
+    ipcRenderer.invoke('slides:ai-snapshot-restore', id, ownerToken),
   undo: () => ipcRenderer.invoke('slides:undo'),
   redo: () => ipcRenderer.invoke('slides:redo'),
   pickExportDir: () => ipcRenderer.invoke('slides:pick-export-dir'),
@@ -347,10 +352,13 @@ const api: SlidesApi = {
   },
   getAiSettings: () => ipcRenderer.invoke('ai:get-settings'),
   setAiSettings: (settings: AiSettings) => ipcRenderer.invoke('ai:set-settings', settings),
+  getPromptDefaults: () => ipcRenderer.invoke('prompts:defaults'),
+  getPromptOverrides: () => ipcRenderer.invoke('prompts:get-overrides'),
+  setPromptOverride: (id: string, text: string) =>
+    ipcRenderer.invoke('prompts:set-override', id, text),
+  clearPromptOverride: (id: string) => ipcRenderer.invoke('prompts:clear-override', id),
   aiStream: (request: AiStreamRequest) => ipcRenderer.invoke('ai:stream', request),
   aiStreamCancel: (requestId: string) => ipcRenderer.invoke('ai:stream-cancel', requestId),
-  aiGskStatus: (withEmail?: boolean) => ipcRenderer.invoke('ai:gsk-status', withEmail),
-  aiGskLogin: () => ipcRenderer.invoke('ai:gsk-login'),
   aiLogRunFailure: (entry: AiRunFailure) => ipcRenderer.invoke('ai:log-run-failure', entry),
   webSearch: (query: string, maxResults?: number) =>
     ipcRenderer.invoke('ai:web-search', query, maxResults),

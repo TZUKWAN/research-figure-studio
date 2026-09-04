@@ -8,7 +8,7 @@ import { displayFontFamily } from '../konva-adapter'
 import { useSystemFontFamilies } from '../system-fonts'
 import { useFontCatalog } from '../font-manager'
 import {
-  GensparkMark,
+  CopilotMark,
   IconAiAskSelection,
   IconAiBeautify,
   IconAiFactCheck,
@@ -28,6 +28,7 @@ import {
   IconIndentInc,
   IconLineSpacing,
   IconNewSlide,
+  IconPageSize,
   IconNumbered,
   IconObjAlignBottom,
   IconObjAlignCenterH,
@@ -43,9 +44,7 @@ import {
   IconPlayCurrent,
   IconPlayFromStart,
   IconPosition,
-  IconSection,
   IconShrinkFont,
-  IconSlideLayout,
   IconSubscript,
   IconSuperscript,
 } from './icons'
@@ -54,7 +53,6 @@ import {
   FONT_FAMILIES,
   FONT_SIZES,
   Group,
-  LayoutList,
   RbCaret,
   TEXT_COLORS,
   closeSiblingPanels,
@@ -84,11 +82,7 @@ export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
     hasDoc,
     hasSelection,
     hasTextSelection,
-    layouts,
-    layoutSize,
-    onAddSection,
     onAddSlide,
-    onAddSlideWithLayout,
     onAiPreset,
     onAskSelection,
     onAlign,
@@ -105,9 +99,7 @@ export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
     onFormatBrushDoubleClick,
     onParagraphFormat,
     onPaste,
-    onResetLayout,
-    onSetLayout,
-    onSlideShow,
+    onSlideSize,
     onStrike,
     onTextColor,
     onTextToggle,
@@ -115,7 +107,6 @@ export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
     onToggleFormat,
     arrangeOpen,
     closePanels,
-    collapseOpen,
     colorOpen,
     commitFontDraft,
     commitSizeDraft,
@@ -125,32 +116,28 @@ export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
     setFontDraft,
     lastBulletColor,
     lastColor,
-    layoutOpen,
-    layoutPickOpen,
     lineSpacingOpen,
     onCustomBulletColor,
     onCustomTextColor,
     paraOpen,
     setArrangeOpen,
-    setCollapseOpen,
     setColorOpen,
     setFontOpen,
     setLastColor,
-    setLayoutOpen,
-    setLayoutPickOpen,
     setLineSpacingOpen,
     setParaOpen,
     setSizeDraft,
     setSizeOpen,
-    setSlideShowFromStart,
-    setSlideShowOpen,
+    setSlideSizeOpen,
     sizeDraft,
     sizeOpen,
-    slideShowFromStart,
-    slideShowOpen,
+    slideSizeOpen,
     t,
   } = rb
   const [hangDraft, setHangDraft] = useState('')
+  // Slide-size dropdown: custom width/height inputs in cm (empty until edited)
+  const [customWcm, setCustomWcm] = useState('')
+  const [customHcm, setCustomHcm] = useState('')
   // Typed-ahead font query: only what the user actually typed filters the menu
   // (opening via the caret or focusing shows the full list)
   const [fontFilter, setFontFilter] = useState('')
@@ -182,16 +169,16 @@ export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
   }
   return (
     <>
-      <Group label="Genspark AI">
+      <Group label="Metis Copilot">
         <button
           className={`rb-big ai-entry${aiOpen ? ' active' : ''}`}
           data-tip={t('aiOpenAssistant')}
           onClick={onToggleAi}
         >
           <span className="rb-big-icon">
-            <GensparkMark size={26} />
+            <CopilotMark size={26} />
           </span>
-          <span>Genspark AI</span>
+          <span>{t('aiPanelTitle')}</span>
         </button>
         <button
           className="rb-big ai-entry"
@@ -247,37 +234,8 @@ export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
         </button>
       </Group>
       <div className="ribbon-sep" />
-      <Group label={t('ribbonGroupClipboard')}>
-        <button
-          className="rb-big"
-          disabled={!hasDoc || !canPaste}
-          onClick={onPaste}
-          data-tip={canPaste ? t('ribbonPasteTip') : t('ribbonPasteTipDisabled')}
-        >
-          <span className="rb-big-icon">
-            <IconPaste size={BIG} />
-          </span>
-          <span>{t('ribbonPaste')}</span>
-        </button>
+      <Group label={t('ribbonGroupHomeTool')}>
         <div className="rb-col rb-clip-col">
-          <button
-            className="rb-icon"
-            disabled={!hasSelection}
-            onClick={onCut}
-            data-tip={t('ribbonCutTip')}
-            aria-label={t('ribbonCutTip')}
-          >
-            <IconCut size={14} />
-          </button>
-          <button
-            className="rb-icon"
-            disabled={!hasSelection}
-            onClick={onCopy}
-            data-tip={t('ribbonCopyTip')}
-            aria-label={t('ribbonCopyTip')}
-          >
-            <IconCopy size={14} />
-          </button>
           <button
             className={`rb-icon${brushMode ? ' on' : ''}`}
             disabled={!hasSelection}
@@ -313,178 +271,102 @@ export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
           </button>
         </div>
       </Group>
-      <div className="ribbon-sep" />
-      <Group label={t('ribbonTabSlideShow')}>
+
+      <Group label={t('ribbonGroupSlides')}>
         <div className="rb-drop-wrap">
           <button
             className="rb-big rb-split"
             disabled={!hasDoc}
-            onClick={() => onSlideShow(slideShowFromStart)}
-            data-tip={t(slideShowFromStart ? 'ribbonFromBeginningTip' : 'ribbonFromCurrentTip')}
-          >
-            <span className="rb-big-icon">
-              <span className="rb-split-main">
-                {slideShowFromStart ? (
-                  <IconPlayFromStart size={BIG} />
-                ) : (
-                  <IconPlayCurrent size={BIG} />
-                )}
-              </span>
-              <span
-                className={`rb-caret-hit${slideShowOpen ? ' active' : ''}`}
-                onMouseDown={(e) => {
-                  e.stopPropagation()
-                  closeSiblingPanels(e, closePanels, 'slideShow')
-                }}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  if (hasDoc) setSlideShowOpen((v) => !v)
-                }}
-              >
-                <RbCaret />
-              </span>
-            </span>
-            <span>{t(slideShowFromStart ? 'ribbonFromBeginning' : 'ribbonFromCurrent')}</span>
-          </button>
-          {slideShowOpen && (
-            <div className="rb-drop rb-menu" onMouseDown={(e) => e.stopPropagation()}>
-              <button
-                onClick={() => {
-                  setSlideShowOpen(false)
-                  setSlideShowFromStart(true)
-                  onSlideShow(true)
-                }}
-                data-tip={t('ribbonFromBeginningTip')}
-              >
-                <span className="rb-menu-glyph">
-                  <IconPlayFromStart size={20} />
-                </span>
-                {t('ribbonFromBeginning')}
-              </button>
-              <button
-                onClick={() => {
-                  setSlideShowOpen(false)
-                  setSlideShowFromStart(false)
-                  onSlideShow(false)
-                }}
-                data-tip={t('ribbonFromCurrentTip')}
-              >
-                <span className="rb-menu-glyph">
-                  <IconPlayCurrent size={20} />
-                </span>
-                {t('ribbonFromCurrent')}
-              </button>
-            </div>
-          )}
-        </div>
-      </Group>
-      <div className="ribbon-sep" />
-      {/* The slides group always renders collapsed behind one dropdown; the
-          flyout holds the combined new-slide + layout / add-section layout */}
-      <Group
-        label={t('ribbonGroupSlides')}
-        groupId="slides"
-        collapse={{
-          collapsed: true,
-          open: collapseOpen === 'slides',
-          onToggle: () => {
-            closePanels(['collapse'])
-            setCollapseOpen((v) => (v === 'slides' ? null : 'slides'))
-          },
-          icon: <IconNewSlide size={BIG} />,
-        }}
-      >
-        <div className="rb-drop-wrap">
-          <button
-            className="rb-big rb-split"
-            disabled={!hasDoc}
-            onClick={onAddSlide}
             data-tip={t('ribbonNewSlideTip')}
+            onClick={onAddSlide}
           >
             <span className="rb-big-icon">
               <span className="rb-split-main">
                 <IconNewSlide size={BIG} />
               </span>
               <span
-                className={`rb-caret-hit${layoutOpen ? ' active' : ''}`}
-                data-tip={t('ribbonChooseLayoutNew')}
+                className={`rb-caret-hit${slideSizeOpen ? ' active' : ''}`}
                 onMouseDown={(e) => {
                   e.stopPropagation()
-                  closeSiblingPanels(e, closePanels, 'layout')
+                  closeSiblingPanels(e, closePanels, 'slideSize')
                 }}
                 onClick={(e) => {
                   e.stopPropagation()
-                  if (hasDoc) setLayoutOpen((v) => !v)
+                  setSlideSizeOpen((v) => !v)
                 }}
               >
                 <RbCaret />
               </span>
             </span>
-            <span>{t('ribbonNewSlide')}</span>
+            <span>{t('ribbonGroupSlides')}</span>
           </button>
-          {layoutOpen && (
-            <div className="rb-drop rb-layout-panel" onMouseDown={(e) => e.stopPropagation()}>
-              <div className="rb-drop-title">{t('ribbonChooseLayoutNew')}</div>
-              <LayoutList
-                layouts={layouts}
-                size={layoutSize}
-                onPick={(path) => {
-                  setLayoutOpen(false)
-                  onAddSlideWithLayout(path)
-                }}
-              />
-            </div>
-          )}
-        </div>
-        <div className="rb-col rb-slides-col">
-          <div className="rb-drop-wrap">
-            <button
-              className={`rb-small ${layoutPickOpen ? 'active' : ''}`}
-              disabled={!hasDoc}
-              onMouseDown={(e) => {
-                e.stopPropagation()
-                closeSiblingPanels(e, closePanels, 'layoutPick')
-              }}
-              onClick={() => setLayoutPickOpen((v) => !v)}
-              data-tip={t('ribbonLayoutTip')}
-            >
-              <IconSlideLayout size={20} />
-              <span>{t('ribbonLayout')}</span>
-              <RbCaret />
-            </button>
-            {layoutPickOpen && (
-              <div className="rb-drop rb-layout-drop" onMouseDown={(e) => e.stopPropagation()}>
-                <div className="rb-drop-title">{t('ribbonChooseLayoutChange')}</div>
-                <LayoutList
-                  layouts={layouts}
-                  size={layoutSize}
-                  onPick={(path) => {
-                    setLayoutPickOpen(false)
-                    onSetLayout(path)
-                  }}
-                />
-                <div className="rb-menu-div" />
+          {slideSizeOpen && (
+            <div className="rb-drop rb-menu" onMouseDown={(e) => e.stopPropagation()}>
+              <div className="rb-drop-title">{t('ribbonSlideSize')}</div>
+              {(
+                [
+                  ['16:9', t('ribbonSize169'), 3387, 1905],
+                  ['4:3', t('ribbonSize43'), 3387, 2540],
+                  ['A4-L', t('ribbonSizeA4'), 2970, 2100],
+                  ['A4-P', t('ribbonSizeA4Portrait'), 2100, 2970],
+                  ['A3-L', t('ribbonSizeA3'), 4200, 2970],
+                  ['A3-P', t('ribbonSizeA3Portrait'), 2970, 4200],
+                  ['A5-L', t('ribbonSizeA5'), 2100, 1480],
+                  ['A5-P', t('ribbonSizeA5Portrait'), 1480, 2100],
+                ] as const
+              ).map(([key, label, cx, cy]) => (
                 <button
-                  className="rb-layout-reset"
+                  key={key}
                   onClick={() => {
-                    setLayoutPickOpen(false)
-                    onResetLayout()
+                    setSlideSizeOpen(false)
+                    onSlideSize(cx, cy)
                   }}
                 >
-                  {t('ribbonResetLayout')}
+                  <span className="rb-menu-glyph" />
+                  {label}
+                </button>
+              ))}
+              <div className="rb-menu-custom-size">
+                <input
+                  className="rb-size-input"
+                  type="number"
+                  min={2}
+                  max={142}
+                  step={0.1}
+                  placeholder={t('ribbonSizeWidthCm')}
+                  value={customWcm}
+                  onChange={(e) => setCustomWcm(e.target.value)}
+                />
+                <span className="rb-size-x">×</span>
+                <input
+                  className="rb-size-input"
+                  type="number"
+                  min={2}
+                  max={142}
+                  step={0.1}
+                  placeholder={t('ribbonSizeHeightCm')}
+                  value={customHcm}
+                  onChange={(e) => setCustomHcm(e.target.value)}
+                />
+                <button
+                  className="rb-size-apply"
+                  disabled={
+                    !(parseFloat(customWcm) > 2 && parseFloat(customWcm) <= 142) ||
+                    !(parseFloat(customHcm) > 2 && parseFloat(customHcm) <= 142)
+                  }
+                  onClick={() => {
+                    setSlideSizeOpen(false)
+                    onSlideSize(
+                      Math.round(parseFloat(customWcm) * 360000),
+                      Math.round(parseFloat(customHcm) * 360000),
+                    )
+                  }}
+                >
+                  {t('ribbonSizeApply')}
                 </button>
               </div>
-            )}
-          </div>
-          <button
-            className="rb-small"
-            disabled={!hasDoc}
-            onClick={onAddSection}
-            data-tip={t('ribbonAddSectionTip')}
-          >
-            <IconSection size={20} />
-            <span>{t('ribbonAddSection')}</span>
-          </button>
+            </div>
+          )}
         </div>
       </Group>
       <div className="ribbon-sep" />

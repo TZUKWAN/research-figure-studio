@@ -23,6 +23,8 @@ interface AuditEntry {
   h: number
   hasText: boolean
   preview: string
+  semanticRole?: string
+  componentType?: string
   /** Pixels by which the text content height exceeds the box height (only meaningful when >0) */
   overflowPx: number
   /** Pixels by which the widest laid-out line exceeds the box inner width (wrap=false lines, over-wide tokens) */
@@ -76,6 +78,7 @@ function collectEntries(nodes: RenderNode[]): AuditEntry[] {
       hasText = groupHasText(n as GroupRenderNode)
       preview = '(group)'
     }
+    const semantic = (n as { semanticMetadata?: Record<string, unknown> }).semanticMetadata
     out.push({
       id: n.sourceId,
       type: n.type,
@@ -85,6 +88,10 @@ function collectEntries(nodes: RenderNode[]): AuditEntry[] {
       h,
       hasText,
       preview,
+      ...(typeof semantic?.role === 'string' ? { semanticRole: semantic.role } : {}),
+      ...(typeof semantic?.componentType === 'string'
+        ? { componentType: semantic.componentType }
+        : {}),
       overflowPx,
       overflowXPx,
     })
@@ -134,6 +141,25 @@ export function auditSlideLayout(slide: RenderSlide): string[] {
   const W = slide.widthPx
   const H = slide.heightPx
 
+  // Invalid geometry or duplicate ids make every later edit/audit result unreliable.
+  const ids = new Set<string>()
+  for (const e of entries) {
+    if (!e.id || ids.has(e.id)) {
+      issues.push(`Duplicate element id: ${e.id || '(empty)'}`)
+    }
+    ids.add(e.id)
+    if (
+      !Number.isFinite(e.x) ||
+      !Number.isFinite(e.y) ||
+      !Number.isFinite(e.w) ||
+      !Number.isFinite(e.h) ||
+      e.w < 0 ||
+      e.h < 0
+    ) {
+      issues.push(`Invalid geometry: ${label(e)} has non-finite or negative bounds`)
+    }
+  }
+
   // 1. Out of bounds
   for (const e of entries) {
     const parts: string[] = []
@@ -181,6 +207,10 @@ export function auditSlideLayout(slide: RenderSlide): string[] {
       const inter = ix * iy
       const minArea = Math.min(a.w * a.h, b.w * b.h)
       if (inter < OVERLAP_MIN_AREA || inter < minArea * OVERLAP_RATIO) continue
+      const parentChildResearchModule =
+        (a.componentType === 'research-module' && b.componentType === 'research-micro') ||
+        (a.componentType === 'research-micro' && b.componentType === 'research-module')
+      if (parentChildResearchModule) continue
       issues.push(
         `Overlap: ${label(a)} and ${label(b)} intersect by ${Math.round(ix)}×${Math.round(iy)}px`,
       )

@@ -150,6 +150,12 @@ register({
         throw new GuidedError(`op "setConnectorEndpoints" needs "${k}": an EMU point {x, y}.`)
       }
     }
+    if (op.routeY !== undefined && op.routeY !== null && typeof op.routeY !== 'number') {
+      throw new GuidedError('op "setConnectorEndpoints" needs "routeY": a finite EMU y coordinate.')
+    }
+    if (typeof op.routeY === 'number' && !Number.isFinite(op.routeY)) {
+      throw new GuidedError('op "setConnectorEndpoints" needs "routeY": a finite EMU y coordinate.')
+    }
   },
   apply(op, ctx): OpRecord {
     const { slide, el } = resolveElement(ctx, op)
@@ -181,7 +187,7 @@ register({
     setElementConnection(slide, el.id, {
       start: toRef(op.start as { targetId: string; idx: number } | null | undefined),
       end: toRef(op.end as { targetId: string; idx: number } | null | undefined),
-    })
+    }, op.routeY as number | null | undefined)
     return { op, before, after: { p1, p2 } }
   },
 })

@@ -12,9 +12,8 @@
  * LICENSES.chromium.html separately, referenced from the body text.
  */
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 'node:fs'
-import { join, dirname, relative } from 'node:path'
+import { join, dirname, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { execFileSync } from 'node:child_process'
 import { builtinModules, createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
@@ -28,10 +27,6 @@ const BUILTIN = new Set(builtinModules)
  * is not distributed.
  */
 const SRC_GLOBS = [
-  'apps/docs/src',
-  'apps/markdown/src',
-  'apps/pdf/src',
-  'apps/sheets/src',
   'apps/shell/src',
   'apps/slides/src',
   ...readdirSync(join(ROOT, 'packages'), { withFileTypes: true })
@@ -43,6 +38,10 @@ const SKIP_DIR = /^(node_modules|out|dist|release|tests|__tests__|target)$/
 
 /** Runtime that is always present but never imported by specifier */
 const IMPLICIT = ['electron']
+
+// Keep the exact package directories selected by electron-builder. A package
+// can have a different version at the root than the copy shipped as a resource.
+const PACKAGED_PACKAGE_DIRS = new Map()
 
 /**
  * Packages copied into the installer verbatim by electron-builder rather than
@@ -57,7 +56,10 @@ function extraResourceSeeds() {
   const names = []
   for (const e of entries.flat()) {
     const m = e?.from && /node_modules\/((?:@[^/]+\/)?[^/]+)$/.exec(e.from)
-    if (m) names.push(m[1])
+    if (m) {
+      names.push(m[1])
+      PACKAGED_PACKAGE_DIRS.set(m[1], resolve(join(ROOT, 'apps/shell'), e.from))
+    }
   }
   return names
 }
@@ -139,6 +141,8 @@ function topLevelPackages() {
 
 /** npm hoists, so the root copy is the usual answer; fall back to a nested one */
 function pkgDir(name) {
+  const packaged = PACKAGED_PACKAGE_DIRS.get(name)
+  if (packaged && existsSync(join(packaged, 'package.json'))) return packaged
   const root = join(ROOT, 'node_modules', name)
   if (existsSync(join(root, 'package.json'))) return root
   for (const owner of topLevelPackages()) {
@@ -215,30 +219,6 @@ function repoOf(pkg) {
   return url ? url.replace(/^git\+/, '').replace(/\.git$/, '') : null
 }
 
-/** Rust crates statically linked into xlsx-sidecar */
-function rustCrates() {
-  const target = join(ROOT, 'apps/sheets/native/xlsx-engine/Cargo.toml')
-  try {
-    const raw = execFileSync(
-      'cargo',
-      ['metadata', '--format-version', '1', '--manifest-path', target],
-      { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] },
-    )
-    return JSON.parse(raw)
-      .packages.filter((p) => p.name !== 'xlsx-sidecar')
-      .map((p) => ({
-        name: p.name,
-        version: p.version,
-        spdx: SPDX_NOTE[p.name] ?? p.license ?? 'see repository',
-        url: p.repository ?? `https://crates.io/crates/${p.name}`,
-        dir: p.manifest_path ? dirname(p.manifest_path) : null,
-      }))
-      .sort((a, b) => a.name.localeCompare(b.name))
-  } catch {
-    return null
-  }
-}
-
 const hr = (title) => `\n${'='.repeat(72)}\n${title}\n${'='.repeat(72)}\n`
 const sub = (title) => `\n${'-'.repeat(72)}\n${title}\n${'-'.repeat(72)}\n`
 
@@ -246,7 +226,7 @@ const seed = importedNames()
 const { resolved, missing } = closure(seed)
 resolved.sort(([a], [b]) => a.localeCompare(b))
 
-let out = `GenOffice — Third-Party Software Notices
+let out = `Metis Diagram — Third-Party Software Notices
 
 This application includes third-party software components under the licenses
 reproduced below.
@@ -271,119 +251,23 @@ for (const [name, { dir, pkg }] of resolved) {
   if (notice) out += `\nNOTICE:\n${notice}\n`
 }
 
-const crates = rustCrates()
-out += hr(`2. Rust crates (xlsx-sidecar native component, statically linked)`)
-if (crates === null) {
-  out += '\ncargo metadata unavailable at generation time; see'
-  out += ' apps/sheets/native/xlsx-engine/Cargo.lock for the full crate list.\n'
-} else {
-  out += `\n${crates.length} crates, all under permissive terms:\n\n`
-  for (const c of crates) out += `  ${c.name} ${c.version}  —  ${c.spdx}\n    ${c.url}\n`
-  const texts = new Map()
-  for (const c of crates) {
-    if (!c.dir) continue
-    const text = licenseText(c.name, c.dir)
-    if (text && !texts.has(text)) texts.set(text, c.name)
-  }
-  out += sub('Crate license texts (deduplicated)')
-  for (const [text, first] of texts) out += `\n[first seen in ${first}]\n${text}\n`
-}
-
-const GOTHIC_KR_COPYRIGHT = [
-  'Copyright (c) 2010, NHN Corporation (http://www.nhncorp.com),',
-  'with Reserved Font Name Nanum, Naver Nanum, NanumGothic, Naver ',
-  'NanumGothic, NanumMyeongjo, Naver NanumMyeongjo, NanumBrush, Naver',
-  'NanumBrush, NanumPen, Naver NanumPen.',
-].join('\n')
-
 /**
  * Bundled web/document fonts. KaTeX code remains separately covered by its
  * npm-package MIT notice above; its webfonts carry OFL terms.
  */
-const FONTS = [
-  [
-    'Liberation Sans / Serif / Mono 2.1.5',
-    'SIL OFL 1.1',
-    'Digitized data © 2010 Google Corporation with Reserved Font Names Arimo, Tinos and Cousine.\n© 2012 Red Hat, Inc. with Reserved Font Name Liberation.',
-  ],
-  [
-    'Carlito',
-    'SIL OFL 1.1',
-    '© 2010-2013 tyPoland Lukasz Dziedzic with Reserved Font Name "Carlito".',
-  ],
-  [
-    'Caladea',
-    'Apache-2.0',
-    '© Huerta Tipográfica. Licensed under the Apache License, Version 2.0.',
-  ],
-  [
-    'Noto Sans CJK SC / Noto Serif CJK SC (subset)',
-    'SIL OFL 1.1',
-    '© Adobe / Google. This bundle ships a subset of the original fonts (reduced glyph coverage for size);\nno other modifications were made.',
-  ],
-  [
-    'GenOffice Sans KR (Noto Sans CJK KR derivative)',
-    'SIL OFL 1.1',
-    'Copyright 2014-2021 Adobe (http://www.adobe.com/), Google LLC, Reserved Font Name "Source".\nSubset with modified advance widths and horizontally transformed Noto CJK outlines to match measured\nKorean Office-family metrics; renamed per OFL 1.1. No Microsoft font outlines are included.',
-  ],
-  [
-    'GenOffice Serif KR (Noto Serif CJK KR derivative)',
-    'SIL OFL 1.1',
-    'Copyright 2017-2024 Adobe (http://www.adobe.com/), Reserved Font Name "Source".\nSubset with modified advance widths and horizontally transformed Noto CJK outlines to match measured\nKorean Office-family metrics; renamed per OFL 1.1. No Microsoft font outlines are included.',
-  ],
-  [
-    'GenOffice Che Latin KR (Noto Sans CJK KR derivative)',
-    'SIL OFL 1.1',
-    'Copyright 2014-2021 Adobe (http://www.adobe.com/), Google LLC, Reserved Font Name "Source".\nASCII subset with fixed 0.5em advances and horizontally transformed Noto CJK outlines; Microsoft\nDotumChe is used only as a metric reference. Renamed per OFL 1.1. No Microsoft outlines are included.',
-  ],
-  [
-    'Noto Naskh Arabic / Noto Sans Arabic (subset)',
-    'SIL OFL 1.1',
-    '© The Noto Project Authors. This bundle ships a subset of the original fonts;\nglyphs and metrics are unmodified.',
-  ],
-  [
-    'GenOffice Gothic KR (NanumGothic derivative)',
-    'SIL OFL 1.1',
-    `${GOTHIC_KR_COPYRIGHT}\nSubset with unmodified metrics; renamed per OFL 1.1.`,
-  ],
-  [
-    'GenOffice Tamil (Noto Sans Tamil derivative)',
-    'SIL OFL 1.1',
-    '© The Noto Project Authors, original Reserved Font Name "Noto". Modified advance widths;\nrenamed per OFL 1.1.',
-  ],
-  [
-    'KaTeX webfonts',
-    'SIL OFL 1.1',
-    'Copyright (c) 2009-2010, Design Science, Inc. (<www.mathjax.org>)\n' +
-      'Copyright (c) 2014-2018 Khan Academy (<www.khanacademy.org>),\n' +
-      'with Reserved Font Names KaTeX_AMS, KaTeX_Caligraphic, KaTeX_Fraktur, ' +
-      'KaTeX_Main, KaTeX_Math, KaTeX_SansSerif, KaTeX_Script, KaTeX_Size1, ' +
-      'KaTeX_Size2, KaTeX_Size3, KaTeX_Size4, and KaTeX_Typewriter.',
-  ],
-]
+const FONTS = [['Carlito', 'SIL OFL 1.1', 'Copyright 2013 The Carlito Project Authors.']]
 
-out += hr('3. Bundled fonts')
+out += hr('2. Bundled fonts')
 for (const [name, spdx, copyright] of FONTS) out += sub(`${name} — ${spdx}`) + copyright + '\n'
 out += sub('SIL Open Font License 1.1 — full text')
-out +=
-  readFileSync(join(ROOT, 'apps/docs/src/renderer/fonts/LICENSE-OFL.txt'), 'utf8').trim() + '\n'
-
-out += hr('4. Unicode Character Database data')
-out += `
-apps/pdf/src/shared/radicals.ts contains a generated mapping derived from
-Unicode Character Database 17.0.0, EquivalentUnifiedIdeograph.txt
-(2025-08-01):
-https://www.unicode.org/Public/17.0.0/ucd/EquivalentUnifiedIdeograph.txt
-
-`
-out += readFileSync(join(ROOT, 'LICENSE-UNICODE.txt'), 'utf8').trim() + '\n'
+out += readFileSync(join(ROOT, 'apps/slides/src/renderer/fonts/OFL.txt'), 'utf8').trim() + '\n'
 
 const dest = join(ROOT, 'apps/shell/build/THIRD-PARTY-NOTICES.txt')
 mkdirSync(dirname(dest), { recursive: true })
 writeFileSync(dest, out)
 console.log(
   `written: ${relative(ROOT, dest)} (${(out.length / 1024).toFixed(0)} KB) — ` +
-    `${resolved.length} npm packages, ${crates?.length ?? 0} crates`,
+    `${resolved.length} npm packages`,
 )
 if (noText.length > 0) console.warn(`no license file published: ${noText.join(', ')}`)
 if (missing.size > 0) console.warn(`not installed, skipped: ${[...missing].join(', ')}`)

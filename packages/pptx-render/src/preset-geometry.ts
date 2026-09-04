@@ -30,7 +30,15 @@ export function connectorPoints(
   flipH: boolean,
   flipV: boolean,
   adjust?: Record<string, number>,
+  routeY?: number,
 ): number[] {
+  if (routeY != null && (/^bentConnector|^curvedConnector/.test(preset))) {
+    const startX = flipH ? w : 0
+    const endX = flipH ? 0 : w
+    const startY = flipV ? h : 0
+    const endY = flipV ? 0 : h
+    return [startX, startY, startX, routeY, endX, routeY, endX, endY]
+  }
   let pts: number[]
   if (/^bentConnector|^curvedConnector/.test(preset)) {
     pts = bentConnectorPts(preset, w, h, adjust)

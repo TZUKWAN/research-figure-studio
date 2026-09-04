@@ -56,9 +56,9 @@
  * Chrome tokens (surface/text/border/…, AI panel --color-*) come from
  * @genoffice/ui/tokens.css; nothing here may shadow those names. */
 :root {
-  --accent: #c43e1c;
-  --accent-dark: #a33517;
-  --accent-soft: #fbeae5;
+  --accent: #d97757;
+  --accent-dark: #c4633f;
+  --accent-soft: #f8ece3;
 
   /* slides-local chrome shades */
   --slides-statusbar-bg: #f3f4f6;
@@ -101,7 +101,7 @@
   /* PowerPoint animation categories: entrance / emphasis / exit / motion path */
   --slides-anim-entr: #107c41;
   --slides-anim-emph: #c28e00;
-  --slides-anim-exit: #c43e1c;
+  --slides-anim-exit: #d97757;
   --slides-anim-path: #2b7cd3;
   --slides-choice-check: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><path d='M2.5 6.5l2.5 2.5 4.5-5' fill='none' stroke='white' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/></svg>");
 
@@ -117,7 +117,7 @@
   --slides-badge-ink: #fff;
   --slides-badge-bg: rgb(0 0 0 / 45%);
   --slides-grid-line: rgb(60 60 60 / 16%);
-  --slides-guide: rgb(196 62 28 / 75%);
+  --slides-guide: rgb(217 119 87 / 75%);
   --slides-theme-card-gloss: inset 0 0 0 1px rgb(255 255 255 / 8%);
   --slides-ph-border: rgb(0 0 0 / 30%);
   --slides-ph-bg: rgb(0 0 0 / 4%);
@@ -172,9 +172,9 @@
   --slides-toast-ink: #fff;
   --slides-toast-ok: #34c759;
   --slides-mask-bg: rgb(0 0 0 / 50%);
-  --slides-copilot-grad: linear-gradient(135deg, #6a5cff 0%, #2b88f8 55%, #29c3a6 120%);
-  --slides-shadow-badge: 0 2px 6px rgb(74 92 255 / 35%);
-  --slides-shadow-badge-soft: 0 2px 6px rgb(74 92 255 / 25%);
+  --slides-copilot-grad: linear-gradient(135deg, #d97757 0%, #c4633f 100%);
+  --slides-shadow-badge: 0 2px 6px rgb(217 119 87 / 35%);
+  --slides-shadow-badge-soft: 0 2px 6px rgb(217 119 87 / 25%);
   --slides-shadow-menu: 0 8px 24px rgb(0 0 0 / 18%);
   --slides-shadow-drop: 0 6px 20px rgb(0 0 0 / 14%), 0 1px 3px rgb(0 0 0 / 8%);
   --slides-shadow-popup: 0 6px 20px rgb(0 0 0 / 15%);
@@ -191,8 +191,8 @@
 }
 
 [data-theme='dark'] {
-  --accent: #e8663f;
-  --accent-dark: #d4552f;
+  --accent: #e08a67;
+  --accent-dark: #c4633f;
   --accent-soft: #43261d;
   --slides-statusbar-bg: #252525;
   --slides-rail-bg: #252525;
@@ -232,14 +232,14 @@
   --slides-swatch-ring-strong: rgb(255 255 255 / 35%);
   --slides-anim-entr: #58b380;
   --slides-anim-emph: #d9a834;
-  --slides-anim-exit: #e8663f;
+  --slides-anim-exit: #e08a67;
   --slides-anim-path: #5aa0e8;
   --slides-choice-check: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><path d='M2.5 6.5l2.5 2.5 4.5-5' fill='none' stroke='%231e1e1e' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/></svg>");
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']):not([data-theme='dark']) {
-    --accent: #e8663f;
+    --accent: #e08a67;
     --accent-dark: #d4552f;
     --accent-soft: #43261d;
     --slides-statusbar-bg: #252525;
@@ -280,7 +280,7 @@
     --slides-swatch-ring-strong: rgb(255 255 255 / 35%);
     --slides-anim-entr: #58b380;
     --slides-anim-emph: #d9a834;
-    --slides-anim-exit: #e8663f;
+    --slides-anim-exit: #e08a67;
     --slides-anim-path: #5aa0e8;
     --slides-choice-check: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><path d='M2.5 6.5l2.5 2.5 4.5-5' fill='none' stroke='%231e1e1e' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/></svg>");
   }
@@ -1457,55 +1457,6 @@ body.vib .slide-list {
   text-align: right;
 }
 
-/* Status-bar quick toggle button for notes */
-.status-notes-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  border: none;
-  background: none;
-  color: inherit;
-  font-size: 11px;
-  /* 20px tall in the 24px status bar: the active/hover block keeps 2px of
-   * air above and below instead of touching the bar edges */
-  height: 20px;
-  padding: 0 5px;
-  border-radius: 3px;
-  cursor: pointer;
-  margin-right: 8px;
-  transition:
-    background 0.1s,
-    color 0.1s;
-}
-
-.status-notes-btn:hover {
-  background: var(--slides-statusbar-hover);
-}
-
-/* Active = neutral pressed gray, not accent (PPT's Notes button stays plain);
- * translucent wash so the shade matches the ribbon's selected gray on the
- * darker statusbar background */
-.status-notes-btn.on {
-  background: var(--slides-statusbar-active);
-}
-
-/* Start-show-from-current-slide (PowerPoint keeps this next to the zoom slider) */
-.status-play-btn {
-  display: inline-flex;
-  align-items: center;
-  border: none;
-  background: none;
-  color: inherit;
-  padding: 1px 4px;
-  border-radius: 3px;
-  cursor: pointer;
-  margin-right: 8px;
-}
-
-.status-play-btn:hover {
-  background: var(--hover);
-}
-
 /* ================= AI panel (Copilot-style pane, isomorphic to docs) ================= */
 
 .ai-panel {
@@ -1562,6 +1513,49 @@ body.vib .slide-list {
   align-items: center;
   gap: 2px;
   min-width: 0;
+}
+
+.research-action-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  padding: 4px 14px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.research-action-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.research-action-status.research-action-started .research-action-dot {
+  animation: research-action-pulse 1.1s ease-in-out infinite;
+}
+
+.research-action-status.research-action-committed .research-action-dot,
+.research-action-status.research-action-completed .research-action-dot {
+  background: var(--color-success, var(--accent));
+}
+
+.research-action-status.research-action-reverted .research-action-dot {
+  background: var(--color-danger, var(--accent));
+}
+
+@keyframes research-action-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 .ai-header-btn {
@@ -5009,6 +5003,20 @@ body.vib .slide-list {
 
 /* ── Canvas animation preview overlay (covers .stage-rel) ──────────────── */
 
+.stage-rel.research-action-started,
+.stage-rel.research-action-committed {
+  animation: research-canvas-settle 360ms ease-out;
+}
+
+@keyframes research-canvas-settle {
+  0% {
+    filter: brightness(1.04);
+  }
+  100% {
+    filter: brightness(1);
+  }
+}
+
 .anim-preview-overlay {
   position: absolute;
   inset: 0;
@@ -5560,12 +5568,12 @@ body.vib .slide-list {
 
 .stage-ai-btn svg {
   flex-shrink: 0;
-  /* AI feature glyphs match the ribbon's blue */
+  /* AI feature glyphs match the accent */
   color: var(--color-brand-secondary);
 }
 
 /* the brand mark uses currentColor and keeps the button's ink, not the blue */
-.stage-ai-btn svg.genspark-mark {
+.stage-ai-btn svg.ai-mark {
   color: var(--slides-stagebar-ink);
 }
 
@@ -7059,30 +7067,6 @@ body.show-curtain::after {
   background: var(--hover);
 }
 
-.rb-wordart-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 44px);
-  gap: 5px;
-}
-
-.rb-wordart-cell {
-  width: 44px;
-  height: 44px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--surface);
-  font-size: 26px;
-  font-family: Georgia, serif;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.rb-wordart-cell:hover {
-  border-color: var(--accent);
-}
-
 .rb-menu-wide {
   min-width: 180px;
 }
@@ -8376,82 +8360,6 @@ body.show-curtain::after {
   padding: 6px 8px;
 }
 
-/* ── Layout picker panel ──────────────────────────────────────────────── */
-.rb-layout-panel {
-  width: 320px;
-  max-height: 360px;
-}
-
-.rb-layout-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  overflow-y: auto;
-  max-height: 300px;
-  padding: 2px;
-}
-
-.rb-layout-item {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  padding: 4px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--surface);
-  cursor: pointer;
-  transition:
-    border-color 0.12s,
-    background 0.12s;
-  width: 136px;
-}
-
-.rb-layout-item:hover {
-  border-color: var(--accent);
-  background: var(--slides-hover-wash-soft);
-}
-
-.rb-layout-preview {
-  position: relative;
-  width: 120px;
-  height: 68px;
-  background: var(--slides-paper);
-  border: 1px solid var(--border);
-  border-radius: 2px;
-  overflow: hidden;
-  flex-shrink: 0;
-}
-
-.rb-layout-ph {
-  position: absolute;
-  border: 1px dashed var(--slides-ph-border);
-  border-radius: 2px;
-  background: var(--slides-ph-bg);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 9px;
-  color: var(--slides-ph-ink);
-  overflow: hidden;
-}
-
-.rb-layout-name {
-  font-size: 11px;
-  color: var(--text);
-  max-width: 128px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  text-align: center;
-}
-
-.rb-layout-empty {
-  font-size: 12px;
-  color: var(--text-dim);
-  padding: 8px;
-}
-
 /* ── Find/replace floating panel ─────────────────────────────────── */
 .find-panel {
   position: absolute;
@@ -8865,4 +8773,42 @@ body.show-curtain::after {
   flex-direction: column;
   flex: 1;
   min-width: 0;
+}
+
+/* slide-size dropdown: preset rows + custom cm inputs */
+.rb-menu-custom-size {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+.rb-size-input {
+  width: 72px;
+  padding: 4px 6px;
+  font-size: 12.5px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-6);
+  background: var(--surface);
+  color: var(--text);
+}
+.rb-size-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.rb-size-x {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.rb-size-apply {
+  margin-left: auto;
+  padding: 4px 10px;
+  font-size: 12.5px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-6);
+  background: var(--accent);
+  color: #fff;
+}
+.rb-size-apply:disabled {
+  opacity: 0.45;
 }

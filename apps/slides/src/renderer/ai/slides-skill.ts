@@ -1,7 +1,42 @@
 import type { AgentSkill, ToolDisplay } from '@genoffice/agent-core'
-import { layoutInputCoreOutput } from '@genoffice/research-harness'
-import { beginAction, commitAction, completeAction } from '@genoffice/research-harness'
-import { connectorColor, getThemeById, resolveComponentColors } from '@genoffice/theme-engine'
+import {
+  anchorPoint,
+  auditHorizontalPipeline,
+  auditInputCoreOutput,
+  endpointTable,
+  getComponentSpec,
+  SEMANTIC_NODE_STYLES,
+  layoutHorizontalPipeline,
+  layoutInputCoreOutput,
+  layoutMicro,
+  normalizeVisualPlan,
+  orchestrateFigure,
+  parseSemanticEdges,
+  ROLE_SHAPE,
+  shapePreset,
+  type CapabilityInput,
+  type Rect as RouteRect,
+} from '@genoffice/research-harness'
+import type { FigurePlan } from '@genoffice/research-harness'
+import {
+  AGENT_SYSTEM_PROMPT,
+  RESEARCH_AGENT_SYSTEM_PROMPT,
+  RESEARCH_COMPOSITION_DESIGNER_PROMPT,
+  RESEARCH_SEMANTIC_PLANNER_PROMPT,
+} from '../../shared/prompt-defaults'
+import { effectivePrompt } from './prompt-overrides'
+import {
+  beginAction,
+  commitAction,
+  completeAction,
+  revertAction,
+} from '@genoffice/research-harness'
+import {
+  componentThemeTokens,
+  connectorColor,
+  getThemeById,
+  resolveComponentColors,
+} from '@genoffice/theme-engine'
 import type {
   GroupRenderNode,
   PictureRenderNode,
@@ -88,6 +123,7 @@ export interface DeckAccess {
     mode?: 'replace' | 'append' | 'insert_at',
     deckName?: string,
     insertAt?: number,
+    signal?: AbortSignal,
   ): Promise<{
     ok: boolean
     pages?: number
@@ -101,6 +137,7 @@ export interface DeckAccess {
   regenerateSlide?(
     slideIndex: number,
     marker: string,
+    signal?: AbortSignal,
   ): Promise<{ ok: boolean; error?: string; imageFailures?: { page: number; url: string }[] }>
   /** Survey: shows a card with options and waits for the user's choices, returning an answer summary. */
   askClarification?(questions: ClarifyQuestion[]): Promise<{ answers: string; cancelled?: boolean }>
@@ -117,6 +154,8 @@ export interface DeckAccess {
   searchImages?(query: string, maxResults: number): Promise<string[]>
   /** Whether cloud single-page generation is available (kill switch + gsk login state) */
   isCloudPageGenEnabled?(): Promise<boolean>
+  /** Creation Orchestrator: one raw schema-contract LLM call with the user's own model */
+  runLlm?(system: string, user: string): Promise<{ ok: boolean; text?: string; error?: string }>
   /** live predicate: gsk login && the Genspark-cloud-tools toggle; false hides generate_image / analyze_media */
   gskTools?(): boolean
   /**
@@ -237,76 +276,6 @@ export interface ClarifyQuestion {
   /** Multi-select (single-select by default) */
   multi?: boolean
 }
-
-const AGENT_SYSTEM_PROMPT = `You are the AI assistant inside GenOffice Slides (a slide editor), helping users improve and generate presentations.
-
-## Most important tool-selection principles (judge the scenario before acting)
-- **Creating a whole new deck (from scratch)** → first gather material (web_search) and images (image_search), then call **generate_deck**. With many pages, prefer **passing topic + approx_pages + context (the real material you found)** and let the system plan internally + generate page by page + display page by page (**you don't hand-write dozens of pages, and no pages get missed / arguments truncated**). For few pages where you already know each page, you may pass core_hook+style+pages directly.
-- **Adding 1 page or a few pages to an existing deck** → generate_deck(pages: briefs for just the new pages, insert_mode:"append"). Write each page's brief in detail (real content/data per region + layout); first look at the existing pages (get_deck_context) and pass a style description matching them so new pages stay consistent. **Even a single new page goes through this generation pipeline; don't fall back to native tools and build a crude page**.
-- **Redoing / redesigning an existing page** (user says "redo this page / redesign it / try another layout / make it prettier") → **regenerate_slide**: first read_slide to get the page's original copy, then pass a detailed brief (copy the text/data to keep into the brief verbatim, state what to change and the target layout); the page is regenerated in place (other pages untouched). Don't dismantle and rebuild the whole page element by element with native tools.
-- **Deleting a page** → delete_slide(slideIndex).
-- **Modifying / fine-tuning existing elements** (position/size/alignment/distribution/relative nudges/text/style/fill/stroke, one or many elements) → always prefer **execute_slide_script** and do it in one script (see "Editing existing elements" below; read-write combined, no read_slide first). Don't blind-fire individual set_element_* calls. Add/delete elements with add_* / delete_element; redo a whole page with regenerate_slide.
-- **Elements inside a group**: direct children of a top-level group (marked "in group <id>" / els groupId) are edited exactly like normal elements — same script primitives and set_element_* tools, absolute coordinates. Only elements nested in a sub-group are read-only: call ungroup_element on the outer group first (ids on the page change afterwards; the result returns the fresh list). To delete a single group member, ungroup first too.
-- **Key constraint**: after a page is generated, do **not** use native tools to "polish/redo" a generated page — the output is the final good-looking result. Only when the user asks for a specific change should you edit the corresponding element with native tools; if they ask to redo the whole page, use regenerate_slide.
-- **When the user attached files (see the "attachment list" in each turn's context)**: first read all text attachments with read_attachment (paginate long files); image attachments were already sent as images with the message, just look at them. Only **then** plan/generate the deck — content should come from the attachments first. When calling generate_deck, put the key content you read into the context argument; no need to web_search information the attachments already cover. **This is enforced: generate_deck refuses to run while any text attachment is still unread.**
-
-Rules:
-- Every user message comes with a deck outline (per-page list of text elements with element ids and text previews). Previews are truncated; read the full text with read_slide before rewriting.
-- Change text with set_element_text: it replaces the element's entire text, so you must pass the complete post-edit paragraph list, not just the changed part.
-- Page numbers are shown to the user starting at 1; the slideIndex tool argument is 0-based.
-- **The user's "page N" always means the current order in this turn's latest <deck outline> (row N is page N)**. The user may add/remove/move/swap pages at any time; page order from history or earlier turns may be stale — locate pages only by this turn's latest outline, never by generation order, content semantics, or old conversation.
-- Canvas coordinate system: pixels, origin top-left, width 1280, height in the outline's first line (720 for 16:9). All element positions/sizes use it.
-- Font size unit is pt: large titles 36–44, subtitles 20–26, body 14–18. Colors are #RRGGBB.
-- Element colors are readable: the outline shows each page's main fills; read_slide and script els expose per-element fill/textColor/strokeColor (hex, read-only — change them with setFill/setStyle/setStroke or set_element_fill/stroke). Picture/chart colors are not readable; don't guess them.
-- For editing existing elements (position/size/text/style/fill/stroke) prefer execute_slide_script; set_element_text/style/transform/fill/stroke are only shortcuts for "one element, one property". Multi-property/multi-element/relative nudges/align-distribute always use a script.
-
-Editing existing elements (user says "move it a bit / align / restyle / fix the layout / it looks messy" etc.):
-**Core: write execute_slide_script directly, don't read_slide first.** At run time the script automatically receives every element's real geometry and text on the page (els, with x/y/w/h/text and read-only fill/textColor/strokeColor); reading and writing happen at execution site — you don't need coordinates in advance, compute from els inside the script (same idea as Google Slides' execute_apps_script).
-Example mappings: "move the title left a bit"→moveBy(titleId, -30, 0); "shift this text right"→moveBy(id, 40, 0); "left-align the subtitle with the title"→const t = els.find(e => e.id === titleId); setBox(subtitleId, { x: t.x }); "make the title blue and bold"→setStyle(id, { color: '#1a73e8', bold: true }); "tidy up this page"→compute equal spacing/columns in the script and batch setBox.
-1. (Optional) Plan the target layout (e.g. three-column cards / top-bottom split), tell the user in a sentence or two;
-2. **Immediately** call execute_slide_script: write JS that finds elements in els by id/text (e.text), computes algorithmically from els' real coordinates (use formulas for spacing/alignment, no hard-coded magic numbers), and writes back with setBox/moveBy/resizeBy/setText/setStyle/setFill/setStroke. One script adjusts the whole page;
-3. Check the <layout-audit> in the tool result: **if there is overlap/out-of-bounds/overflow, immediately write another execute_slide_script in the same turn to fix it** (don't stop to ask the user, don't declare done); at most 2 fix rounds; only an audit ✅ pass counts as done.
-els already contains each element's geometry and full text; editing existing elements generally doesn't need read_slide.
-Forbidden: running read_slide "just to get coordinates" and then stopping, blind-firing dozens of per-element set_element_transform calls, or telling the user "done" while the audit reports problems.
-- Batch changes (e.g. "make all titles blue", "unify the font"): first get_deck_context for the global view, then call the right tool per element; go page by page, element by element, don't miss any.
-- Omit fontFamily by default (inherits the theme, keeps the deck consistent — recommended); only specify it when the user names a font.
-- Keep slide copy concise: punchy titles, bulleted body. Don't rewrite bullets into long sentences unless asked.
-
-Generating a whole deck / adding pages (HTML pipeline first):
-
-[Plan before generating a whole deck — you are a professional deck planner; plan first, then write HTML (this decides the output quality)]
-
-Step 0 Questionnaire (mandatory when creating a whole new deck): first call ask_clarification to show a questionnaire card with 2–4 key trade-off questions for this topic (audience, usage scenario, tone/style, content focus), each with genuinely different options. **The user's choices directly determine the deck's Core Hook and style**; do the planning below only after getting the answers. (Ask only for a whole new deck; adding a few pages or editing needs no questionnaire. The card shows automatically — don't repeat the questions in your reply text.)
-
-Step A Research: when the topic involves facts/attractions/data, run web_search 1–2 times first for real content. **Use real data and facts in the design; no "XX%" or placeholder names**.
-Step B Image strategy: with generate_deck you **don't need image_search in advance** — the system auto-searches internally per page from the planned image_queries keywords and fills real URLs back (each keyword searched once, deduped across pages). **Travel/product/people/brand decks get images by default without the user asking; never fake images with CSS placeholders — slots needing images must be filled with real ones**. Only when redoing a page via regenerate_slide or adding images to existing pages via insert_web_image do you image_search yourself first (English keywords describing a concrete scene like "summer palace kunming lake", not generic words like "park").
-Step C Unified style: first define one design system for the whole deck — primary/secondary colors, title and body font-size scale, content margins, card/corner style (e.g. "teal primary + cream background + sans-serif fresh look"). **Every page's HTML strictly follows the same system; style must be consistent across pages**.
-Step D Generate (call generate_deck): with many pages pass topic + approx_pages + context (feed in the real material from Step A) and let the system plan internally; with few pages you may pass core_hook+style+pages directly (image_queries takes English image-search keywords; **the system auto-searches internally and fills real URLs back**, no image_search needed in advance). The system writes HTML page by page and lands pages as they generate; you don't hand-write HTML.
-Step E Vary layouts per page (avoid sameness): 3 parallel points→three-column cards; a key number→big-number hero; comparison→two columns; sequence→timeline; image+text→left-text-right-image / full-image with text overlay. **Content pages of one deck must not all use the same layout**.
-
-- **generate_deck is the first choice for a whole new deck**: with many pages pass topic+approx_pages+context; the system plans internally (auto-batching over the threshold), **auto-searches images**, writes HTML page by page, and **lands pages onto the canvas as they generate (the user sees them one by one)**. **Neither "only page 1 got generated" nor "arguments were truncated" can happen — the page count is guaranteed by the system loop**.
-- **When adding just 1 page or a few pages (common case)**: also use generate_deck with **pages (briefs for only the new pages) + insert_mode:"append"** (appended at the end, existing pages untouched). **New pages also go through the generation pipeline for polish — don't fall back to native tools for a crude page just because it's one page**. Before adding, read_slide/get_deck_context to see the existing pages' style (primary color/layout) and pass a matching style description; write each brief with the real content per region.
-- Briefs should be concrete: what text/data/numbers go in each region, which image goes where, and the layout name — the page designer follows your brief; vague briefs produce generic pages.
-- After generation, if the user wants a tweak, edit the corresponding element with the native tools below; don't redo whole pages unprompted "to look better". Use regenerate_slide only when the user explicitly asks to redo a page.
-
-Native tools (only for modifying/refining existing pages, not for generating from scratch):
-- add_slide clones a layout into a new page (layout-preserving blank page); add_text_box lays out text; add_shape makes color blocks/accent bars (kind supports any OOXML preset geometry rect/roundRect/ellipse/star5…).
-- For data display use add_chart (native bar/line/pie charts); for structured comparisons use add_table (cells can pre-fill text; later edit_table_cell edits cells, edit_table_structure adds/removes rows/columns); for flows/cycles/hierarchies/lists use add_smartart.
-- set_slide_background sets a solid background (slideIndex=-1 for all pages); on dark backgrounds remember to lighten the text.
-- set_speaker_notes writes the page's speaker notes (shown in presenter view and saved into the .pptx); it does not touch canvas content. Use it when the user asks to add/update/clear notes for a page.
-- Refine page by page, element by element; 2–4 elements per page is enough — fewer beats crowded.
-- Keep replies short, say what you did; don't recite tool results back to the user.
-
-Search and images:
-- Use web_search when you need current information/data/fact-checking; search before writing anything uncertain, don't fabricate. When generating a whole deck, a round of searching for real material first is recommended.
-- **Figure provenance is enforced at the tool layer**: add_chart / edit_chart (with series) and data-dense generate_deck / regenerate_slide briefs refuse to run without a dataSource declaration; 'search' is only accepted after an actual web_search in this conversation. Fabricating precise numbers (¥21.8-style precision) and delivering them as fact is the worst failure mode — when no real data is available, use dataSource:'sample' and tell the user explicitly that the figures are illustrative.
-- image_search for images (English keywords) → get imageUrl. **Two usages**: 1) when redoing a page via regenerate_slide, pass the imageUrl in image_urls; 2) when adding an image to an existing page, use insert_web_image to insert at a position. (generate_deck searches images internally; no advance search needed for a whole new deck.)
-- Travel, product, people, and brand decks get images by default without the user asking; mind whitespace between images and text, no overlap.
-- Editing an EXISTING picture: crop_image (non-destructive srcRect), set_picture_opacity, replace_image (in-place swap keeping frame/z-order/border). For "remove this image's background / upscale / edit this image": run generate_image with referenceImageUrls pointing at a source URL you have (an image_search result or one the user provided — embedded picture bytes are not addressable by URL), then replace_image with the returned URL. Never delete+reinsert a picture to change its content — that loses z-order and effects.
-
-Style templates:
-- When the user says "use last time's style"/"use some template": first call list_style_templates() to see what exists, then pass the style_template name to generate_deck (the system skips Step 0 and uses the template's style).
-- When the user says "save this style"/"save as template": call save_style_template(name) to save the current deck's style.`
 
 /** Paragraph schema (shared by set_element_text / add_text_box / add_shape) */
 const PARAGRAPHS_DEF = {
@@ -539,7 +508,7 @@ const TOOLS: AgentToolDef[] = [
   {
     name: 'generate_image',
     description:
-      'AI image generation/editing (Genspark). Text-to-image, or pass referenceImageUrls for image editing; returns an image URL. NEW imagery: insert with insert_web_image. Editing an EXISTING slide picture (background removal/upscaling/etc.): swap it in place with replace_image — do not insert a duplicate. Use for custom illustrations/icons/backgrounds, style-consistent imagery; for real photos/screenshots still use image_search.',
+      'AI image generation/editing. Text-to-image, or pass referenceImageUrls for image editing; returns an image URL. NEW imagery: insert with insert_web_image. Editing an EXISTING slide picture (background removal/upscaling/etc.): swap it in place with replace_image — do not insert a duplicate. Use for custom illustrations/icons/backgrounds, style-consistent imagery; for real photos/screenshots still use image_search.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -569,7 +538,7 @@ const TOOLS: AgentToolDef[] = [
   {
     name: 'analyze_media',
     description:
-      'Analyze media content (Genspark): understand images/audio/video. Pass media URLs (or local file paths) and analysis requirements; returns analysis text. Video supports extracting key points, structure, and time ranges — good for turning user material into usable deck content.',
+      'Analyze media content: understand images/audio/video. Pass media URLs (or local file paths) and analysis requirements; returns analysis text. Video supports extracting key points, structure, and time ranges — good for turning user material into usable deck content.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -653,7 +622,7 @@ const TOOLS: AgentToolDef[] = [
   {
     name: 'ask_clarification',
     description:
-      "[Call before creating a whole new deck] Shows a questionnaire card with options, letting the user make key choices for this deck (audience/scenario/tone/focus etc.); the user's choices directly determine the deck's Core Hook and style. Questions must target the specific topic, each being a real trade-off (options represent different directions). Ask 2–4 questions, ≤5 options each. After calling, wait for the user to finish choosing in the card and generate once you have the answers. Don't repeat the questions in your reply text.",
+      "[Call before creating a whole new figure] Shows a questionnaire card with options, letting the user make key choices for this figure (audience/scenario/tone/focus etc.); the user's choices directly determine the figure plan. Questions must target the specific topic, each being a real trade-off (options represent different directions). Ask 2–4 questions, ≤5 options each. After calling, wait for the user to finish choosing and then call the appropriate planning tool. Don't repeat the questions in your reply text.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -682,9 +651,89 @@ const TOOLS: AgentToolDef[] = [
     },
   },
   {
+    name: 'plan_research_figure',
+    description:
+      '[Research Figure Mode] Validates and echoes a FigurePlan before a research Recipe creates native editable elements. Include the figure type, reading direction, semantic regions, component nodes, relationship edges, and negative constraints. Do not include pixel coordinates; the Recipe owns geometry.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        figureType: {
+          type: 'string',
+          enum: ['input-core-output', 'horizontal-pipeline'],
+        },
+        readingDirection: { type: 'string', enum: ['LR', 'TB'] },
+        regions: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              role: { type: 'string', enum: ['input', 'core', 'output', 'context', 'feedback'] },
+            },
+            required: ['id', 'role'],
+          },
+        },
+        nodes: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              region: { type: 'string' },
+              component: { type: 'string' },
+              title: { type: 'string' },
+            },
+            required: ['region', 'component', 'title'],
+          },
+        },
+        edges: {
+          type: 'array',
+          description:
+            'The ONLY source of connector topology — the Recipe never infers relationships from node order. Region-level refs expand to every member.',
+          items: {
+            type: 'object',
+            properties: {
+              from: { type: 'string', description: 'Existing region id or node title' },
+              to: { type: 'string', description: 'Existing region id or node title' },
+              role: { type: 'string', enum: ['main', 'feedback', 'annotation'] },
+              relation: {
+                type: 'string',
+                enum: [
+                  'causal',
+                  'process',
+                  'data-flow',
+                  'transformation',
+                  'association',
+                  'mediation',
+                  'moderation',
+                  'feedback',
+                  'inhibition',
+                  'mapping',
+                  'hierarchy',
+                  'bidirectional',
+                ],
+                description: 'Scientific relation type; defaults to process.',
+              },
+              label: { type: 'string', description: 'Optional short edge label (≤8 chars ideal)' },
+            },
+            required: ['from', 'to', 'role'],
+          },
+        },
+        negativeConstraints: { type: 'array', items: { type: 'string' } },
+      },
+      required: [
+        'figureType',
+        'readingDirection',
+        'regions',
+        'nodes',
+        'edges',
+        'negativeConstraints',
+      ],
+    },
+  },
+  {
     name: 'plan_deck',
     description:
-      "[When creating a whole new deck, call after researching material/images and before generate_deck] Outputs a structured plan: the Core Hook + unified style scheme + each page's title/content brief/layout/image keywords. Think the whole deck through first, to avoid starting strong and fizzling out. The plan is echoed to the user.",
+      '[Research Figure Mode] Outputs a structured FigurePlan after researching material/images: the Core Hook, research figure type, regions, nodes, edges, constraints, and a unified style scheme. Think the whole figure through before creating elements; the plan is echoed to the user.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1011,7 +1060,16 @@ const TOOLS: AgentToolDef[] = [
             required: ['component', 'title'],
           },
         },
-        feedback: { type: 'boolean', description: 'Add a bottom feedback loop (output back to core)' },
+        feedback: {
+          type: 'boolean',
+          description: 'Add a bottom feedback loop (output back to core)',
+        },
+        dataSource: {
+          type: 'string',
+          enum: ['user', 'document', 'search', 'sample'],
+          description:
+            "Required when node labels carry specific figures: 'user'/'document'/'search' (run web_search first)/'sample' (disclose to the user)",
+        },
         themeId: {
           type: 'string',
           description:
@@ -1019,6 +1077,74 @@ const TOOLS: AgentToolDef[] = [
         },
       },
       required: ['slideIndex', 'inputNodes', 'coreNodes', 'outputNodes'],
+    },
+  },
+  {
+    name: 'create_horizontal_pipeline',
+    description:
+      'Research figure recipe: lay out an ordered left-to-right pipeline of registered research components with equal gaps, a shared baseline, and bound main-flow connectors. The Recipe owns coordinates; do not compute them.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        slideIndex: { type: 'integer' },
+        nodes: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              component: { type: 'string' },
+              title: { type: 'string' },
+              subtitle: { type: 'string' },
+            },
+            required: ['component', 'title'],
+          },
+          description: 'Ordered pipeline nodes, from left to right',
+        },
+        dataSource: {
+          type: 'string',
+          enum: ['user', 'document', 'search', 'sample'],
+          description:
+            "Required when node labels carry specific figures: 'user'/'document'/'search' (run web_search first)/'sample' (disclose to the user)",
+        },
+        themeId: {
+          type: 'string',
+          description: 'Optional preset palette id; defaults to academic-blue',
+        },
+      },
+      required: ['slideIndex', 'nodes'],
+    },
+  },
+  {
+    name: 'create_research_figure',
+    description:
+      "[Research Figure Mode] End-to-end orchestrated creation from a thesis: runs the Semantic Planner (semantics only), compresses visible text, measures real sizes, generates + ranks composition candidates (model plan vs deterministic priors by autonomy), solves legal geometry, routes native connectors, and audits before writing. Use INSTEAD of create_input_core_output/create_horizontal_pipeline when the user asks for a new research figure; only these Recipes remain for executing a manually validated FigurePlan. Don't pass pixel coordinates.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        thesis: {
+          type: 'string',
+          description: 'The research figure request (what the figure must communicate)',
+        },
+        notes: {
+          type: 'string',
+          description: 'Optional researched material: key nodes, data, edge labels',
+        },
+        themeId: { type: 'string', description: 'Optional theme id (default academic-blue)' },
+        capability: {
+          type: 'object',
+          description: 'Optional calibration override used by deterministic tests',
+          properties: {
+            calibration: {
+              type: 'object',
+              properties: {
+                spatialPlanning: { type: 'string', enum: ['unknown', 'weak', 'medium', 'strong'] },
+                jsonReliability: { type: 'string', enum: ['low', 'medium', 'high'] },
+              },
+            },
+          },
+        },
+      },
+      required: ['thesis'],
     },
   },
   {
@@ -1579,11 +1705,7 @@ function buildDeckOutline(slides: RenderSlide[], current: number, selectedIds: s
         lines.push(`  - ${id} (details unavailable)`)
         continue
       }
-      const bits = [
-        `${info.id}`,
-        info.type,
-        `pos(${info.x},${info.y}) size(${info.w}×${info.h})`,
-      ]
+      const bits = [`${info.id}`, info.type, `pos(${info.x},${info.y}) size(${info.w}×${info.h})`]
       if (info.text) bits.push(`text "${preview(info.text, 40)}"`)
       if ((info as { fill?: string }).fill) bits.push(`fill ${(info as { fill: string }).fill}`)
       if ((info as { strokeColor?: string }).strokeColor)
@@ -1661,44 +1783,79 @@ export function formatSlideDump(slide: RenderSlide): string {
   return `Canvas ${slide.widthPx}×${slide.heightPx}px (1 px = ${pxToEmu} EMU)\n${parts.join('\n---\n') || '(no elements on this page)'}${colorNote}`
 }
 
-/** tools only usable through the Genspark cloud (gated by login + the cloud-tools toggle) */
+/** Optional hosted tools that can be disabled by the runtime configuration. */
 const GSK_ONLY_TOOLS = new Set(['generate_image', 'analyze_media'])
 
 const GSK_TOOLS_OFF_NOTE =
-  '\n\nNote: generate_image and analyze_media are currently unavailable (Genspark cloud tools are off or the user is signed out). Do not call or promise them; for imagery use image_search + insert_web_image instead.'
+  '\n\nNote: generate_image and analyze_media are currently unavailable. Do not call or promise them; for imagery use image_search + insert_web_image instead.'
 
-export function createSlidesSkill(access: DeckAccess): AgentSkill {
+const RESEARCH_MODE_EXCLUDED_TOOLS = new Set([
+  'generate_deck',
+  'plan_deck',
+  'save_style_template',
+  'list_style_templates',
+])
+const RESEARCH_MODE_ONLY_TOOLS = new Set(['plan_research_figure', 'create_research_figure'])
+
+export type SlidesSkillMode = 'research' | 'presentation'
+
+export function createSlidesSkill(
+  access: DeckAccess,
+  mode: SlidesSkillMode = 'presentation',
+): AgentSkill {
   // The HTML pipeline was already used in this conversation → later calls without an explicit mode default to append.
   // Safety net for when the AI ignores the "pass all pages at once" constraint: separate calls no longer overwrite each other (P0-1).
-  const state: SkillState = { htmlGenerated: false }
+  const state: SkillState = { htmlGenerated: false, mode }
   return {
     id: 'slides',
     // live like tools: the off-note overrides the prose that still mentions the hidden tools
     get systemPrompt() {
-      return access.gskTools?.() === false
-        ? AGENT_SYSTEM_PROMPT + GSK_TOOLS_OFF_NOTE
-        : AGENT_SYSTEM_PROMPT
+      const prompt = effectivePrompt(
+        mode === 'research' ? 'agent.research' : 'agent.presentation',
+        mode === 'research' ? RESEARCH_AGENT_SYSTEM_PROMPT : AGENT_SYSTEM_PROMPT,
+      )
+      return access.gskTools?.() === false ? prompt + GSK_TOOLS_OFF_NOTE : prompt
     },
     // live view: gskTools is re-read before every model request
     get tools() {
+      const modeTools =
+        mode === 'research'
+          ? TOOLS.filter((tool) => !RESEARCH_MODE_EXCLUDED_TOOLS.has(tool.name))
+          : TOOLS.filter((tool) => !RESEARCH_MODE_ONLY_TOOLS.has(tool.name))
       return access.gskTools?.() === false
-        ? TOOLS.filter((t) => !GSK_ONLY_TOOLS.has(t.name))
-        : TOOLS
+        ? modeTools.filter((t) => !GSK_ONLY_TOOLS.has(t.name))
+        : modeTools
     },
     buildContext: () => {
       const outline = `<deck outline>\n${buildDeckOutline(access.getSlides(), access.getCurrent(), access.getSelectedIds())}\n</deck outline>`
+      const figurePlan = state.lastFigurePlan
+        ? `<figure-plan>\n${JSON.stringify(state.lastFigurePlan, null, 2)}\n</figure-plan>`
+        : ''
       const progress = buildProgressNote(state)
-      return progress ? `${outline}\n${progress}` : outline
+      return [outline, figurePlan, progress].filter(Boolean).join('\n')
     },
-    executeTool: (call, signal) => executeTool(access, call, state, signal),
+    reset: () => {
+      state.htmlGenerated = false
+      state.lastFigurePlan = undefined
+      state.webSearched = undefined
+      state.plannedPages = undefined
+      state.plannedTitles = undefined
+      state.pageDone = undefined
+      state.lastStyleSkill = undefined
+      state.lastTopic = undefined
+    },
+    executeTool: (call, signal) => executeTool(access, call, state, signal, mode),
   }
 }
 
 interface SkillState {
   htmlGenerated: boolean
+  mode: SlidesSkillMode
+  /** Most recent validated research FigurePlan, injected into subsequent turns. */
+  lastFigurePlan?: FigurePlan
   /** A web_search ran in this conversation — unlocks dataSource:'search' in the figure gate */
   webSearched?: boolean
-  /** Number of pages most recently planned by plan_deck, used by the progress checklist to remind the AI to finish */
+  /** Number of pages most recently planned by plan_deck, used by the presentation progress checklist */
   plannedPages?: number
   /** Per-page titles planned by plan_deck (order = page order), used to name unfinished pages in the checklist */
   plannedTitles?: string[]
@@ -1733,6 +1890,16 @@ function blockScratchBuild(
   }
   if (contentEls > 2) return null // Deck already has real content; this is a refinement scenario, allow it
   const label = toolName === 'add_smartart' ? t('aiLabelInsertSmartart') : t('aiFailNewElement')
+  if (state?.mode === 'research') {
+    return {
+      output:
+        'For a blank research figure, do not hand-assemble a page element by element. ' +
+        'Call plan_research_figure first, then use the appropriate research Recipe; the Recipe owns geometry and creates editable native elements.',
+      isError: true,
+      mutated: false,
+      summary: t('aiSumFromScratchGuard', { label }),
+    }
+  }
   return {
     output:
       "For blank/from-scratch scenarios don't hand-assemble pages element by element with add_text_box/add_shape/add_smartart (crude layout). " +
@@ -1750,7 +1917,7 @@ function blockScratchBuild(
  * one-shot prompt constraint). Returns an empty string when there is no plan.
  */
 function buildProgressNote(state?: SkillState): string {
-  if (!state || !state.plannedPages) return ''
+  if (!state || state.mode === 'research' || !state.plannedPages) return ''
   const planned = state.plannedPages
   const flags = state.pageDone ?? new Array(planned).fill(false)
   const done = flags.filter(Boolean).length
@@ -1778,6 +1945,24 @@ const fail = (summary: string, output: string) => ({
   mutated: false,
   summary,
 })
+
+async function revertCreatedElements(
+  access: DeckAccess,
+  slideIndex: number,
+  sourceIds: string[],
+): Promise<string[]> {
+  const errors: string[] = []
+  for (const sourceId of [...sourceIds].reverse()) {
+    try {
+      const restored = await window.slidesApi.deleteElement({ slideIndex, sourceId })
+      if (!restored) errors.push(sourceId)
+      else access.applySlide(slideIndex, restored)
+    } catch {
+      errors.push(sourceId)
+    }
+  }
+  return errors
+}
 
 // ── Figure-provenance gate ────────────────────────────────────
 // Prompt rules ("search before writing data") did not stop invented numbers being
@@ -1820,6 +2005,263 @@ function dataSourceGateError(call: AgentToolCall, state: SkillState | undefined)
 const SAMPLE_DATA_NOTE =
   '\nNOTE: dataSource is "sample" — you MUST tell the user these figures are illustrative placeholders, not real data, and offer to research real numbers with web_search.'
 
+const RESEARCH_FIGURE_TYPES = new Set<FigurePlan['figureType']>([
+  'input-core-output',
+  'horizontal-pipeline',
+])
+
+const RESEARCH_REGION_ROLES = new Set<FigurePlan['regions'][number]['role']>([
+  'input',
+  'core',
+  'output',
+  'context',
+  'feedback',
+])
+
+const RESEARCH_EDGE_ROLES = new Set<FigurePlan['edges'][number]['role']>([
+  'main',
+  'feedback',
+  'annotation',
+])
+
+function parseResearchFigurePlan(input: Record<string, unknown>): FigurePlan | null {
+  const figureType = input.figureType
+  const readingDirection = input.readingDirection
+  const rawRegions = input.regions
+  const rawNodes = input.nodes
+  const rawEdges = input.edges
+  const rawConstraints = input.negativeConstraints
+  if (
+    typeof figureType !== 'string' ||
+    !RESEARCH_FIGURE_TYPES.has(figureType as FigurePlan['figureType']) ||
+    readingDirection !== 'LR' ||
+    !Array.isArray(rawRegions) ||
+    rawRegions.length === 0 ||
+    !Array.isArray(rawNodes) ||
+    rawNodes.length === 0 ||
+    !Array.isArray(rawEdges) ||
+    !Array.isArray(rawConstraints)
+  ) {
+    return null
+  }
+
+  const allowedRegionRoles =
+    figureType === 'input-core-output'
+      ? new Set<FigurePlan['regions'][number]['role']>(['input', 'core', 'output'])
+      : new Set<FigurePlan['regions'][number]['role']>(['context'])
+  const allowedEdgeRoles =
+    figureType === 'input-core-output'
+      ? new Set<FigurePlan['edges'][number]['role']>(['main', 'feedback'])
+      : new Set<FigurePlan['edges'][number]['role']>(['main'])
+
+  const regionIds = new Set<string>()
+  const regions: FigurePlan['regions'] = []
+  for (const raw of rawRegions) {
+    const region = raw as Record<string, unknown>
+    const id = typeof region.id === 'string' ? region.id.trim() : ''
+    const role = region.role
+    if (
+      !id ||
+      regionIds.has(id) ||
+      typeof role !== 'string' ||
+      !RESEARCH_REGION_ROLES.has(role as FigurePlan['regions'][number]['role']) ||
+      !allowedRegionRoles.has(role as FigurePlan['regions'][number]['role'])
+    ) {
+      return null
+    }
+    regionIds.add(id)
+    regions.push({ id, role: role as FigurePlan['regions'][number]['role'] })
+  }
+
+  const nodes: FigurePlan['nodes'] = []
+  for (const raw of rawNodes) {
+    const node = raw as Record<string, unknown>
+    const region = typeof node.region === 'string' ? node.region.trim() : ''
+    const component = typeof node.component === 'string' ? node.component.trim() : ''
+    const title = typeof node.title === 'string' ? node.title.trim() : ''
+    if (!region || !regionIds.has(region) || !component || !title) return null
+    nodes.push({ region, component, title })
+  }
+
+  const edgeRefs = new Set([...regionIds, ...nodes.map((node) => node.title)])
+  // existence-only table: one distinct slot per ref so cross-endpoint pairs
+  // never collapse into a dropped self pair
+  let refSlot = 0
+  const refTable = endpointTable([...edgeRefs].map((ref) => ({ ref, indices: [refSlot++] })))
+  const parsedEdges = parseSemanticEdges(rawEdges, [refTable, refTable])
+  if (!parsedEdges) return null
+  for (const edge of parsedEdges) {
+    if (!allowedEdgeRoles.has(edge.role)) return null
+  }
+  const edges: FigurePlan['edges'] = parsedEdges.map((edge) => ({
+    from: edge.from,
+    to: edge.to,
+    role: edge.role,
+    relation: edge.relation,
+    ...(edge.label ? { label: edge.label } : {}),
+    ...(edge.id ? { id: edge.id } : {}),
+    ...(edge.targetEdge ? { targetEdge: edge.targetEdge } : {}),
+  }))
+
+  const negativeConstraints = rawConstraints
+    .filter((constraint): constraint is string => typeof constraint === 'string')
+    .map((constraint) => constraint.trim())
+    .filter(Boolean)
+  if (negativeConstraints.length !== rawConstraints.length) return null
+
+  return {
+    figureType: figureType as FigurePlan['figureType'],
+    readingDirection: 'LR',
+    regions,
+    nodes,
+    edges,
+    negativeConstraints,
+  }
+}
+
+type ResearchRecipeNode = { component: string; title: string; subtitle?: string }
+
+interface ResearchRecipeNodeGroups {
+  input?: ResearchRecipeNode[]
+  core?: ResearchRecipeNode[]
+  output?: ResearchRecipeNode[]
+  pipeline?: ResearchRecipeNode[]
+}
+
+type ResearchRecipeType = 'input-core-output' | 'horizontal-pipeline'
+
+function researchRecipeText(nodes: ResearchRecipeNode[]): string {
+  return nodes.flatMap((node) => [node.title, node.subtitle ?? '']).join('\n')
+}
+
+function researchRecipeDataSourceError(
+  call: AgentToolCall,
+  state: SkillState | undefined,
+  nodes: ResearchRecipeNode[],
+): string | null {
+  return countSpecificFigures(researchRecipeText(nodes)) > 0
+    ? dataSourceGateError(call, state)
+    : null
+}
+
+type ResearchRecipeRoute = { fromRef: string; toRef: string; role: 'main' | 'feedback' }
+
+function researchNodeMismatch(
+  expected: FigurePlan['nodes'],
+  actual: ResearchRecipeNode[],
+  label: string,
+): string | null {
+  if (expected.length !== actual.length) {
+    return `${label} has ${actual.length} nodes, but the FigurePlan has ${expected.length}`
+  }
+  for (let i = 0; i < expected.length; i++) {
+    const planned = expected[i]!
+    const received = actual[i]!
+    if (planned.component !== received.component || planned.title !== received.title) {
+      return `${label} node ${i + 1} is ${received.component}/${received.title}, but the FigurePlan requires ${planned.component}/${planned.title}`
+    }
+  }
+  return null
+}
+
+function edgeRefMatches(ref: string, nodeRef: string): boolean {
+  return ref === nodeRef
+}
+
+/**
+ * Plan-gate topology check. Recipes draw connectors EXCLUSIVELY from the
+ * plan's explicit edges (never positional order), so the recipe's declared
+ * route refs must cover every plan edge verbatim.
+ */
+function researchRouteMismatch(plan: FigurePlan, routes: ResearchRecipeRoute[]): string | null {
+  for (const edge of plan.edges) {
+    if (edge.role !== 'main' && edge.role !== 'feedback') {
+      return `the ${edge.role} relationship ${edge.from} -> ${edge.to} is not supported by this Recipe`
+    }
+    const matches = routes.some(
+      (route) =>
+        edge.role === route.role &&
+        edgeRefMatches(edge.from, route.fromRef) &&
+        edgeRefMatches(edge.to, route.toRef),
+    )
+    if (!matches) {
+      return `the ${edge.role} relationship ${edge.from} -> ${edge.to} is not supported by this Recipe`
+    }
+  }
+  return null
+}
+
+/** Research Recipes may only execute the latest Planner output, never an unrelated node list. */
+function researchRecipePlanError(
+  mode: SlidesSkillMode,
+  state: SkillState | undefined,
+  figureType: ResearchRecipeType,
+  groups: ResearchRecipeNodeGroups,
+  feedback = false,
+): string | null {
+  if (mode !== 'research') return null
+  const plan = state?.lastFigurePlan
+  if (!plan) {
+    return `Call plan_research_figure before the ${figureType} Recipe so it can use a validated FigurePlan.`
+  }
+  if (plan.figureType !== figureType) {
+    return `Recipe ${figureType} does not match the current FigurePlan (${plan.figureType}); call plan_research_figure again for this figure type.`
+  }
+  if (plan.readingDirection !== 'LR') {
+    return `Recipe ${figureType} does not match the current FigurePlan: this Recipe currently supports LR reading direction only.`
+  }
+
+  // Connector routes come verbatim from the plan's explicit edges — the gate
+  // verifies node/group consistency, never a positional chain.
+  const expectedRoutes: ResearchRecipeRoute[] = plan.edges.flatMap((edge) =>
+    edge.role === 'main' || edge.role === 'feedback'
+      ? [{ fromRef: edge.from, toRef: edge.to, role: edge.role }]
+      : [],
+  )
+  if (figureType === 'horizontal-pipeline') {
+    const expected = plan.nodes
+    const actual = groups.pipeline ?? []
+    const nodeError = researchNodeMismatch(expected, actual, 'Pipeline')
+    if (nodeError) return `Recipe ${figureType} does not match the current FigurePlan: ${nodeError}`
+  } else {
+    const regionRoles = new Map(plan.regions.map((region) => [region.id, region.role]))
+    const expected: Record<'input' | 'core' | 'output', FigurePlan['nodes']> = {
+      input: [],
+      core: [],
+      output: [],
+    }
+    for (const node of plan.nodes) {
+      const role = regionRoles.get(node.region)
+      if (role !== 'input' && role !== 'core' && role !== 'output') {
+        return `Recipe ${figureType} does not match the current FigurePlan: node ${node.title} belongs to unsupported region role ${role ?? 'unknown'}`
+      }
+      expected[role].push(node)
+    }
+
+    const actualInput = groups.input ?? []
+    const actualCore = groups.core ?? []
+    const actualOutput = groups.output ?? []
+    const nodeMismatches = [
+      researchNodeMismatch(expected.input, actualInput, 'Input'),
+      researchNodeMismatch(expected.core, actualCore, 'Core'),
+      researchNodeMismatch(expected.output, actualOutput, 'Output'),
+    ].filter((message): message is string => Boolean(message))
+    if (nodeMismatches.length > 0) {
+      return `Recipe ${figureType} does not match the current FigurePlan: ${nodeMismatches[0]}`
+    }
+
+    const plannedFeedback = plan.edges.some((edge) => edge.role === 'feedback')
+    if (plannedFeedback !== feedback) {
+      return `Recipe ${figureType} does not match the current FigurePlan: feedback is ${plannedFeedback ? 'required' : 'not declared'} by the plan`
+    }
+  }
+
+  const routeError = researchRouteMismatch(plan, expectedRoutes)
+  return routeError
+    ? `Recipe ${figureType} does not match the current FigurePlan: ${routeError}`
+    : null
+}
+
 /** Append the missing-image report to the tool output: the model learns which pages lack images and how to fix them, instead of silently treating it as success. */
 function imageFailNote(fails?: { page: number; url: string }[]): string {
   if (!fails?.length) return ''
@@ -1827,12 +2269,43 @@ function imageFailNote(fails?: { page: number; url: string }[]): string {
   return `\n⚠️ Missing images: ${detail} failed to download/convert; those image slots are blank on the page. Re-run image_search with more generic English keywords, pick a working image, patch it onto the page with insert_web_image (slideIndex = page number - 1), then reply to the user.`
 }
 
+/** Fit generated node copy using the same renderer-backed text path as manual edits. */
+async function fitResearchNodeText(
+  access: DeckAccess,
+  slideIndex: number,
+  sourceId: string,
+  title: string,
+  signal?: AbortSignal,
+): Promise<RenderSlide> {
+  throwIfAborted(signal)
+  const fitted = await window.slidesApi.setTextBodyProps({
+    slideIndex,
+    sourceId,
+    props: { autofit: 'shrink' },
+  })
+  if (!fitted) throw new Error(`Failed to fit text for node "${title}"`)
+  throwIfAborted(signal)
+  access.applySlide(slideIndex, fitted)
+  return fitted
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new Error('Operation cancelled')
+}
+
 async function executeTool(
   access: DeckAccess,
   call: AgentToolCall,
   state?: SkillState,
   signal?: AbortSignal,
+  mode: SlidesSkillMode = state?.mode ?? 'presentation',
 ) {
+  if (mode === 'research' && RESEARCH_MODE_EXCLUDED_TOOLS.has(call.name)) {
+    return fail(
+      t('aiFailPlan'),
+      'This presentation-only operation is unavailable in Research Figure Mode; use plan_research_figure and a research Recipe instead.',
+    )
+  }
   const slides = access.getSlides()
   switch (call.name) {
     case 'get_deck_context':
@@ -2339,15 +2812,44 @@ async function executeTool(
       if (r.cancelled) {
         return {
           output:
-            'The user skipped the questionnaire. Decide the Core Hook and style yourself based on professional judgment and generate directly.',
+            mode === 'research'
+              ? 'The user skipped the questionnaire. Decide the FigurePlan yourself based on professional judgment and call plan_research_figure.'
+              : 'The user skipped the questionnaire. Decide the Core Hook and style yourself based on professional judgment and generate directly.',
           mutated: false,
           summary: t('aiSumClarifySkipped'),
         }
       }
       return {
-        output: `User questionnaire answers:\n${r.answers}\nDecide the Core Hook and style accordingly, then generate with generate_deck.`,
+        output:
+          mode === 'research'
+            ? `User questionnaire answers:\n${r.answers}\nDecide the FigurePlan accordingly, then call plan_research_figure.`
+            : `User questionnaire answers:\n${r.answers}\nDecide the Core Hook and style accordingly, then generate with generate_deck.`,
         mutated: false,
         summary: t('aiSumClarifyDone'),
+      }
+    }
+
+    case 'plan_research_figure': {
+      if (mode !== 'research') {
+        return fail(
+          t('aiFailPlan'),
+          'plan_research_figure is only available in Research Figure Mode',
+        )
+      }
+      const plan = parseResearchFigurePlan(call.input)
+      if (!plan) {
+        return fail(
+          t('aiFailPlan'),
+          'plan_research_figure requires a valid figureType, readingDirection, non-empty unique regions, non-empty nodes, valid edges, and string negativeConstraints',
+        )
+      }
+      if (state) state.lastFigurePlan = plan
+      return {
+        output:
+          `<figure-plan>\n${JSON.stringify(plan, null, 2)}\n</figure-plan>\n` +
+          'Plan confirmed. Call the matching research Recipe next; the Recipe owns pixel geometry and creates editable native elements.',
+        mutated: false,
+        summary: `Research figure plan confirmed | ${plan.figureType}`,
       }
     }
 
@@ -2435,7 +2937,9 @@ async function executeTool(
           t('aiFailRegen'),
           `Page generation failed (2 attempts): ${lastErr}. This is usually a temporary service error — do not keep calling regenerate_slide in a loop. Instead, make the requested changes in place with execute_slide_script / set_element_* (group children are editable too), or tell the user to retry in a few minutes. The page was not modified.`,
         )
-      const r = await access.regenerateSlide(idx, marker)
+      const r = signal
+        ? await access.regenerateSlide(idx, marker, signal)
+        : await access.regenerateSlide(idx, marker)
       if (!r.ok)
         return fail(
           t('aiFailRegen'),
@@ -2510,6 +3014,14 @@ async function executeTool(
       const PLAN_BATCH = 12 // Per-batch planning cap (kept slightly conservative against truncation)
       const GEN_BATCH = 2 // Per-page generation concurrency (opus large output + proxy concurrent streams time out easily; lowered to 2, stability first)
       const BACKOFF_MS = access.retryBackoffMs ?? 2000 // Retry backoff base (rate limits/overload are mostly transient; immediate retries would hit them again)
+      const landGeneratedPages = signal
+        ? (
+            markers: string[],
+            mode: 'replace' | 'append' | 'insert_at',
+            deckName?: string,
+            insertAt?: number,
+          ) => access.landGeneratedPages!(markers, mode, deckName, insertAt, signal)
+        : access.landGeneratedPages!
 
       let coreHook = String(call.input.core_hook ?? '').trim()
       const style = String(call.input.style ?? '').trim()
@@ -2886,7 +3398,7 @@ async function executeTool(
           const marker = markerByIndex[nextToLand] as string
           if (marker.length > 0) {
             const m: 'replace' | 'append' = firstDone ? 'append' : insertMode
-            const r = await access.landGeneratedPages!([marker], m, deckName)
+            const r = await landGeneratedPages([marker], m, deckName)
             if (r.ok) {
               if (r.fallbackReason) {
                 degraded.push(nextToLand)
@@ -2974,8 +3486,8 @@ async function executeTool(
           }
           const isFirstLand = !firstDone
           const r = isFirstLand
-            ? await access.landGeneratedPages!([marker], insertMode, deckName)
-            : await access.landGeneratedPages!(
+            ? await landGeneratedPages([marker], insertMode, deckName)
+            : await landGeneratedPages(
                 [marker],
                 'insert_at',
                 deckName,
@@ -3170,7 +3682,8 @@ async function executeTool(
     case 'add_connector': {
       const idx = Number(call.input.slideIndex)
       const slide = slides[idx]
-      if (!slide) return fail(t('aiFailNewElement'), `slideIndex out of range (0-${slides.length - 1})`)
+      if (!slide)
+        return fail(t('aiFailNewElement'), `slideIndex out of range (0-${slides.length - 1})`)
       const fromId = String(call.input.fromId ?? '')
       const toId = String(call.input.toId ?? '')
       if (!fromId || !toId) return fail(t('aiFailNewElement'), 'fromId and toId are required')
@@ -3179,11 +3692,27 @@ async function executeTool(
       const to = findNodeById(slide.nodes, toId)
       if (!from?.box || !to?.box)
         return fail(t('aiFailNewElement'), `fromId/toId not found on page ${idx + 1}`)
-      // Endpoints: element centers; endpoint binding re-snaps to real anchor sides.
-      const x1 = from.box.x + from.box.w / 2
-      const y1 = from.box.y + from.box.h / 2
-      const x2 = to.box.x + to.box.w / 2
-      const y2 = to.box.y + to.box.h / 2
+      const fromCenter = { x: from.box.x + from.box.w / 2, y: from.box.y + from.box.h / 2 }
+      const toCenter = { x: to.box.x + to.box.w / 2, y: to.box.y + to.box.h / 2 }
+      const horizontal = Math.abs(toCenter.x - fromCenter.x) >= Math.abs(toCenter.y - fromCenter.y)
+      const start = horizontal
+        ? toCenter.x >= fromCenter.x
+          ? { x: from.box.x + from.box.w, y: fromCenter.y, idx: 3 }
+          : { x: from.box.x, y: fromCenter.y, idx: 1 }
+        : toCenter.y >= fromCenter.y
+          ? { x: fromCenter.x, y: from.box.y + from.box.h, idx: 2 }
+          : { x: fromCenter.x, y: from.box.y, idx: 0 }
+      const end = horizontal
+        ? toCenter.x >= fromCenter.x
+          ? { x: to.box.x, y: toCenter.y, idx: 1 }
+          : { x: to.box.x + to.box.w, y: toCenter.y, idx: 3 }
+        : toCenter.y >= fromCenter.y
+          ? { x: toCenter.x, y: to.box.y, idx: 0 }
+          : { x: toCenter.x, y: to.box.y + to.box.h, idx: 2 }
+      const x1 = start.x
+      const y1 = start.y
+      const x2 = end.x
+      const y2 = end.y
       const preset =
         call.input.kind === 'elbow'
           ? 'bentConnector3'
@@ -3198,7 +3727,10 @@ async function executeTool(
         wPx: Math.max(Math.abs(x2 - x1), 1),
         hPx: Math.max(Math.abs(y2 - y1), 1),
         fitWidthPx: access.fitWidthPx,
-        stroke: { color: String(call.input.color ?? '#687784'), widthPt: Number(call.input.widthPt) || 1.5 },
+        stroke: {
+          color: String(call.input.color ?? '#687784'),
+          widthPt: Number(call.input.widthPt) || 1.5,
+        },
       })
       if (!r) return fail(t('aiFailNewElement'), 'Connector insertion failed')
       access.applySlide(idx, r.slide)
@@ -3212,8 +3744,8 @@ async function executeTool(
           x2Px: x2,
           y2Px: y2,
           fitWidthPx: access.fitWidthPx,
-          start: { targetId: fromId, idx: 0 },
-          end: { targetId: toId, idx: 0 },
+          start: { targetId: fromId, idx: start.idx },
+          end: { targetId: toId, idx: end.idx },
         })
         if (boundSlide) {
           access.applySlide(idx, boundSlide)
@@ -3229,10 +3761,366 @@ async function executeTool(
       }
     }
 
+    case 'create_research_figure': {
+      const idx = Number(call.input.slideIndex)
+      const slide = slides[idx]
+      if (!slide)
+        return fail(t('aiFailNewElement'), `slideIndex out of range (0-${slides.length - 1})`)
+      if (mode !== 'research') {
+        return fail(
+          t('aiFailNewElement'),
+          'create_research_figure runs in Research Figure Mode only',
+        )
+      }
+      if (!access.runLlm) return fail(t('aiFailNewElement'), 'LLM transport unavailable')
+      const thesis = String(call.input.thesis ?? '').trim()
+      if (!thesis) return fail(t('aiFailNewElement'), 'thesis is required')
+      const notes = String(call.input.notes ?? '').trim()
+      const parseJson = (text: string): unknown => {
+        const fenced = /```(?:json)?\\s*([\\s\\S]*?)```/.exec(text)
+        const raw = (fenced ? fenced[1]! : text).trim()
+        const start = raw.indexOf('{')
+        const end = raw.lastIndexOf('}')
+        return JSON.parse(start >= 0 && end > start ? raw.slice(start, end + 1) : raw)
+      }
+      const plannerUser = [
+        'Canvas: ' + slide.widthPx + 'x' + slide.heightPx + 'px (px, origin top-left)',
+        'Request: ' + thesis,
+        notes ? 'Material notes:\\n' + notes : '',
+      ]
+        .filter(Boolean)
+        .join('\\n')
+      const llm = {
+        semanticPlan: async (_thesis: string, feedback?: string) => {
+          const r = await access.runLlm!(
+            effectivePrompt('research.semantic-planner', RESEARCH_SEMANTIC_PLANNER_PROMPT),
+            feedback
+              ? plannerUser +
+                  '\\n\\nPrevious attempt rejected by schema validation: ' +
+                  feedback +
+                  '\\nFix the issues and output the JSON object again.'
+              : plannerUser,
+          )
+          if (!r.ok) throw new Error(r.error ?? 'planner call failed')
+          return parseJson(r.text ?? '')
+        },
+        compose: async (ctx: {
+          plan: unknown
+          measured: Array<{ id: string; w: number; h: number }>
+          canvas: { w: number; h: number }
+          autonomy: string
+          critique?: string[]
+        }) => {
+          const r = await access.runLlm!(
+            effectivePrompt('research.composition-designer', RESEARCH_COMPOSITION_DESIGNER_PROMPT),
+            JSON.stringify(ctx),
+          )
+          if (!r.ok) return null
+          try {
+            return parseJson(r.text ?? '')
+          } catch {
+            return null
+          }
+        },
+      }
+      const orchestration = await orchestrateFigure(
+        {
+          thesis,
+          canvasW: slide.widthPx,
+          canvasH: slide.heightPx,
+          capability: call.input.capability as CapabilityInput | undefined,
+        },
+        llm,
+      )
+      if (
+        !orchestration.ok ||
+        !orchestration.plan ||
+        !orchestration.best ||
+        !orchestration.routes ||
+        !orchestration.critic ||
+        orchestration.critic.verdict === 'RECOMPOSE'
+      ) {
+        const reason =
+          orchestration.error ??
+          'composition ' +
+            (orchestration.critic?.verdict ?? 'failed') +
+            ': ' +
+            (orchestration.critic?.gateIssues.join('; ') || 'critic below threshold')
+        return fail(t('aiFailNewElement'), reason)
+      }
+      const plan = orchestration.plan
+      const solve = orchestration.best.solve
+      // VisualPlan is strictly model-authored; no keyword fallback is invented
+      // after the composer chose not to decompose a module.
+      const visualPlan = orchestration.visualPlan ?? { modules: [] }
+      const theme =
+        getThemeById(String(call.input.themeId ?? 'academic-blue')) ??
+        getThemeById('academic-blue')!
+      const KIND_BY_TYPE: Record<string, string> = {
+        'data-source': 'data-source',
+        variable: 'input-node',
+        mechanism: 'mechanism-module',
+        process: 'process-node',
+        model: 'model-module',
+        method: 'process-node',
+        actor: 'process-node',
+        evidence: 'evidence-node',
+        outcome: 'output-node',
+        hypothesis: 'evidence-node',
+        annotation: 'annotation',
+        context: 'process-node',
+      }
+      const nodeById = new Map(plan.nodes.map((node) => [node.id, node]))
+      const rectById = new Map<string, RouteRect>(
+        solve.placements.map((placement) => [placement.id, placement]),
+      )
+      const actionId = beginAction('Create research figure (orchestrated)')
+      const createdIds: string[] = []
+      try {
+        let latestSlide = slide
+        const elementIdByNodeId = new Map<string, string>()
+        for (const placement of solve.placements) {
+          throwIfAborted(signal)
+          const node = nodeById.get(placement.id)
+          if (!node) throw new Error('unmeasured node "' + placement.id + '"')
+          const kind = KIND_BY_TYPE[node.type] ?? 'process-node'
+          const colors = resolveComponentColors(kind, theme.roles)
+          const tokens = componentThemeTokens(kind)
+          // Parent box shows ONLY the title. detail keywords have already been
+          // promoted to independent visual units below; the page must not
+          // regress into "big card with text" mode.
+          const paragraphs: EditParagraph[] = [
+            {
+              runs: [
+                {
+                  text: node.visible.title,
+                  bold: true,
+                  fontSize: SEMANTIC_NODE_STYLES[node.type].titleSizePt,
+                  color: colors.text,
+                },
+              ],
+            },
+          ]
+          const parentModule = visualPlan.modules.find((m) => m.moduleId === placement.id)
+          const parentHeight = parentModule
+            ? Math.max(
+                placement.h,
+                Math.min(slide.heightPx - 40, 34 + parentModule.units.length * 36),
+              )
+            : placement.h
+          const r = await window.slidesApi.addElement({
+            slideIndex: idx,
+            kind: getComponentSpec(kind).preset,
+            xPx: placement.x,
+            yPx: placement.y,
+            wPx: placement.w,
+            hPx: parentHeight,
+            fitWidthPx: access.fitWidthPx,
+            paragraphs,
+            fillColor: colors.fill,
+            stroke: { color: colors.stroke, widthPt: 1.25 },
+            semanticMetadata: {
+              role: kind,
+              themeFill: tokens.fill,
+              themeStroke: tokens.stroke,
+              themeText: tokens.text,
+              componentType: 'research-module',
+            },
+          })
+          if (!r) throw new Error('Failed to place node "' + placement.id + '"')
+          createdIds.push(r.sourceId)
+          elementIdByNodeId.set(placement.id, r.sourceId)
+          throwIfAborted(signal)
+          latestSlide = r.slide
+          access.applySlide(idx, r.slide)
+
+          // Micro layout: turn this module's visualUnits into independent PPT
+          // shapes inside the parent box.
+          const module = parentModule
+          if (module) {
+            const microMap = new Map([
+              [placement.id, { x: placement.x, y: placement.y, w: placement.w, h: parentHeight }],
+            ])
+            const micro = layoutMicro([module], microMap)
+            for (const u of micro.units) {
+              throwIfAborted(signal)
+              const role = u.role
+              const shapeKind = (() => {
+                const u2 = module.units.find((x) => x.id === u.id)
+                return u2?.shape ?? ROLE_SHAPE[role]
+              })()
+              const unitColor = resolveComponentColors(
+                KIND_BY_TYPE[node.type] ?? 'process-node',
+                theme.roles,
+              )
+              const unitParagraphs: EditParagraph[] = [
+                {
+                  runs: [
+                    {
+                      text: u.label,
+                      bold: role === 'output' || role === 'substep',
+                      fontSize: role === 'annotation' ? 9.5 : 10.5,
+                      color: unitColor.text,
+                    },
+                  ],
+                  align: 'center',
+                },
+              ]
+              if (u.detail) {
+                unitParagraphs.push({
+                  runs: [{ text: u.detail, fontSize: 9, color: unitColor.subtitle }],
+                  align: 'center',
+                })
+              }
+              const ur = await window.slidesApi.addElement({
+                slideIndex: idx,
+                kind: shapePreset(shapeKind),
+                xPx: u.x,
+                yPx: u.y,
+                wPx: u.w,
+                hPx: Math.max(u.h, 42),
+                fitWidthPx: access.fitWidthPx,
+                paragraphs: unitParagraphs,
+                fillColor: unitColor.fill,
+                stroke: { color: unitColor.stroke, widthPt: 0.75 },
+                semanticMetadata: {
+                  role: 'visual-unit',
+                  themeFill: unitColor.fill,
+                  themeStroke: unitColor.stroke,
+                  themeText: unitColor.text,
+                  componentType: 'research-micro',
+                  ...(u.semanticNodeId ? { semanticNodeId: u.semanticNodeId } : {}),
+                  ...(u.semanticEdgeId ? { semanticEdgeId: u.semanticEdgeId } : {}),
+                },
+              })
+              if (ur) createdIds.push(ur.sourceId)
+              throwIfAborted(signal)
+              if (ur) {
+                latestSlide = ur.slide
+                access.applySlide(idx, ur.slide)
+              }
+            }
+          }
+        }
+        let boundCount = 0
+        for (const route of orchestration.routes) {
+          throwIfAborted(signal)
+          if (route.status !== 'routed' || !route.start || !route.end || !route.kind) continue
+          const fromId = elementIdByNodeId.get(route.fromId)
+          const toId = elementIdByNodeId.get(route.toId)
+          const fromRect = rectById.get(route.fromId)
+          const toRect = rectById.get(route.toId)
+          if (!fromId || !toId || !fromRect || !toRect) continue
+          const p1 = anchorPoint(fromRect, route.start.side)
+          const p2 = anchorPoint(toRect, route.end.side)
+          const cr = await window.slidesApi.addElement({
+            slideIndex: idx,
+            kind: route.kind === 'elbow' ? 'bentConnector3' : 'line',
+            xPx: Math.min(p1.x, p2.x),
+            yPx: Math.min(p1.y, p2.y),
+            wPx: Math.max(Math.abs(p2.x - p1.x), 1),
+            hPx: Math.max(Math.abs(p2.y - p1.y), 1),
+            fitWidthPx: access.fitWidthPx,
+            stroke: {
+              color: connectorColor(theme.roles),
+              widthPt: route.presentation === 'inhibition' ? 2 : 1.5,
+              ...(route.presentation === 'dashed-arrow' || route.presentation === 'inhibition'
+                ? { dash: route.presentation === 'inhibition' ? 'dash' : 'sysDash' }
+                : {}),
+            },
+            semanticMetadata: {
+              role: route.role + '-connector',
+              themeFill: 'none',
+              themeStroke: 'connector',
+              themeText: 'none',
+              componentType: 'research-connector',
+              ...(route.semanticEdgeId ? { semanticEdgeId: route.semanticEdgeId } : {}),
+              ...(route.presentation ? { relationPresentation: route.presentation } : {}),
+            },
+          })
+          if (!cr) throw new Error('Failed to place ' + route.role + ' connector ' + route.key)
+          createdIds.push(cr.sourceId)
+          latestSlide = cr.slide
+          access.applySlide(idx, cr.slide)
+          const boundSlide = await window.slidesApi.editConnectorEndpoints({
+            slideIndex: idx,
+            sourceId: cr.sourceId,
+            x1Px: p1.x,
+            y1Px: p1.y,
+            x2Px: p2.x,
+            y2Px: p2.y,
+            fitWidthPx: access.fitWidthPx,
+            ...(route.role === 'feedback'
+              ? { routeYPx: route.routeY ?? slide.heightPx - Math.round(slide.heightPx * 0.04) }
+              : route.routeY !== undefined
+                ? { routeYPx: route.routeY }
+                : {}),
+            start: { targetId: fromId, idx: route.start.idx },
+            end: { targetId: toId, idx: route.end.idx },
+          })
+          if (!boundSlide) throw new Error('Failed to bind connector ' + route.key)
+          latestSlide = boundSlide
+          access.applySlide(idx, boundSlide)
+          boundCount++
+        }
+        const renderIssues = auditSlideLayout(latestSlide)
+        if (renderIssues.length > 0) {
+          throw new Error('Post-write layout audit failed: ' + renderIssues.join('; '))
+        }
+        completeAction(
+          actionId,
+          'orchestrated figure: ' +
+            solve.placements.length +
+            ' nodes, ' +
+            boundCount +
+            '/' +
+            orchestration.routes.length +
+            ' connectors bound',
+        )
+        return {
+          output:
+            'Created an orchestrated research figure on page ' +
+            (idx + 1) +
+            ': ' +
+            solve.placements.length +
+            ' nodes, ' +
+            boundCount +
+            ' native-bound connectors. Composition: ' +
+            orchestration.best.source +
+            (orchestration.best.priorId ? '/' + orchestration.best.priorId : '') +
+            ' at autonomy ' +
+            orchestration.autonomy +
+            '. Critic: ' +
+            orchestration.critic.verdict +
+            ' (overall ' +
+            orchestration.critic.scores.overall +
+            '/10, crossings ' +
+            orchestration.best.crossings +
+            ', intent drift ' +
+            Math.round(orchestration.best.solve.intentDriftPx) +
+            'px). Element ids: ' +
+            [...elementIdByNodeId.values()].join(', ') +
+            '.',
+          mutated: true,
+          summary: t('aiSumNewShape', { n: idx + 1 }),
+        }
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err)
+        const rollbackErrors = await revertCreatedElements(access, idx, createdIds)
+        revertAction(actionId)
+        return fail(
+          t('aiFailNewElement'),
+          rollbackErrors.length > 0
+            ? reason + ' (rollback incomplete for ' + rollbackErrors.length + ' elements)'
+            : reason,
+        )
+      }
+    }
     case 'create_input_core_output': {
       const idx = Number(call.input.slideIndex)
       const slide = slides[idx]
-      if (!slide) return fail(t('aiFailNewElement'), `slideIndex out of range (0-${slides.length - 1})`)
+      if (!slide)
+        return fail(t('aiFailNewElement'), `slideIndex out of range (0-${slides.length - 1})`)
       type PlanNodeIn = { component?: unknown; title?: unknown; subtitle?: unknown }
       const readNodes = (v: unknown) =>
         Array.isArray(v)
@@ -3249,22 +4137,83 @@ async function executeTool(
       const outputNodes = readNodes(call.input.outputNodes)
       if (inputNodes.length + coreNodes.length + outputNodes.length === 0)
         return fail(t('aiFailNewElement'), 'At least one node is required')
+      const planError = researchRecipePlanError(
+        mode,
+        state,
+        'input-core-output',
+        { input: inputNodes, core: coreNodes, output: outputNodes },
+        call.input.feedback === true,
+      )
+      if (planError) return fail(t('aiFailNewElement'), planError)
+      const recipeNodes = [...inputNodes, ...coreNodes, ...outputNodes]
+      const provenanceError = researchRecipeDataSourceError(call, state, recipeNodes)
+      if (provenanceError) return fail(t('aiFailNewElement'), provenanceError)
+      const sampleNote =
+        countSpecificFigures(researchRecipeText(recipeNodes)) > 0 &&
+        call.input.dataSource === 'sample'
+          ? SAMPLE_DATA_NOTE
+          : ''
 
-      const theme = getThemeById(String(call.input.themeId ?? 'academic-blue')) ?? getThemeById('academic-blue')!
-      const layout = layoutInputCoreOutput({
-        inputNodes,
-        coreNodes,
-        outputNodes,
-        feedback: call.input.feedback === true,
-        canvasW: slide.widthPx,
-        canvasH: slide.heightPx,
-      })
-      const actionId = beginAction('Create Input–Core–Output figure')
+      const theme =
+        getThemeById(String(call.input.themeId ?? 'academic-blue')) ??
+        getThemeById('academic-blue')!
+      let layout: ReturnType<typeof layoutInputCoreOutput>
       try {
+        // Connector topology comes exclusively from the validated FigurePlan's
+        // explicit edges; without a plan there are no connectors to draw.
+        const plan =
+          mode === 'research' && state?.lastFigurePlan?.figureType === 'input-core-output'
+            ? state.lastFigurePlan
+            : null
+        layout = layoutInputCoreOutput({
+          inputNodes,
+          coreNodes,
+          outputNodes,
+          edges: (plan?.edges ?? []).flatMap((edge) =>
+            edge.role === 'main' || edge.role === 'feedback'
+              ? [
+                  {
+                    from: edge.from,
+                    to: edge.to,
+                    role: edge.role,
+                    relation: edge.relation,
+                    ...(edge.label ? { label: edge.label } : {}),
+                  },
+                ]
+              : [],
+          ),
+          canvasW: slide.widthPx,
+          canvasH: slide.heightPx,
+        })
+      } catch (err) {
+        return fail(t('aiFailNewElement'), err instanceof Error ? err.message : String(err))
+      }
+      const geometryAudit = auditInputCoreOutput(layout, slide.widthPx, slide.heightPx, {
+        requireFeedback: call.input.feedback === true,
+      })
+      if (!geometryAudit.ok) {
+        return fail(
+          t('aiFailNewElement'),
+          `Input–Core–Output audit failed:\n${geometryAudit.issues.map((issue) => `- ${issue}`).join('\n')}`,
+        )
+      }
+      const actionId = beginAction('Create Input–Core–Output figure')
+      const createdIds: string[] = []
+      try {
+        let latestSlide = slide
         const nodeIds: string[] = []
         for (const el of layout.elements) {
-          const text = el.subtitle ? `${el.title}\n${el.subtitle}` : el.title
+          throwIfAborted(signal)
           const colors = resolveComponentColors(el.component, theme.roles)
+          const tokens = componentThemeTokens(el.component)
+          const paragraphs: EditParagraph[] = [
+            {
+              runs: [{ text: el.title, bold: true, fontSize: el.titleFontPt, color: colors.text }],
+            },
+            ...(el.subtitle
+              ? [{ runs: [{ text: el.subtitle, fontSize: el.bodyFontPt, color: colors.subtitle }] }]
+              : []),
+          ]
           const r = await window.slidesApi.addElement({
             slideIndex: idx,
             kind: el.preset,
@@ -3273,13 +4222,24 @@ async function executeTool(
             wPx: el.w,
             hPx: el.h,
             fitWidthPx: access.fitWidthPx,
-            text,
+            paragraphs,
             fillColor: colors.fill,
             stroke: { color: colors.stroke, widthPt: 1.25 },
+            semanticMetadata: {
+              role: el.component,
+              themeFill: tokens.fill,
+              themeStroke: tokens.stroke,
+              themeText: tokens.text,
+              componentType: 'research-module',
+            },
           })
-          if (!r) return fail(t('aiFailNewElement'), `Failed to place node "${el.title}"`)
+          if (!r) throw new Error(`Failed to place node "${el.title}"`)
+          createdIds.push(r.sourceId)
+          throwIfAborted(signal)
+          latestSlide = r.slide
           access.applySlide(idx, r.slide)
           nodeIds.push(r.sourceId)
+          latestSlide = await fitResearchNodeText(access, idx, r.sourceId, el.title, signal)
           commitAction(actionId, `node ${el.title}`)
         }
         // Main-flow chain + optional feedback loop, endpoints bound so moves follow.
@@ -3290,15 +4250,24 @@ async function executeTool(
           ...layout.connectors.filter((c) => c.role === 'feedback'),
         ]
         for (const c of routes) {
+          throwIfAborted(signal)
           const fromId = nodeIds[c.fromIndex]
           const toId = nodeIds[c.toIndex]
           if (!fromId || !toId || fromId === toId) continue
           const a = seq[c.fromIndex]
           const b = seq[c.toIndex]
-          const x1 = a.x + a.w / 2
-          const y1 = a.y + a.h / 2
-          const x2 = b.x + b.w / 2
-          const y2 = b.y + b.h / 2
+          const start =
+            c.role === 'feedback'
+              ? { x: a.x + a.w / 2, y: a.y + a.h, idx: 2 }
+              : { x: a.x + a.w, y: a.y + a.h / 2, idx: 3 }
+          const end =
+            c.role === 'feedback'
+              ? { x: b.x + b.w / 2, y: b.y + b.h, idx: 2 }
+              : { x: b.x, y: b.y + b.h / 2, idx: 1 }
+          const x1 = start.x
+          const y1 = start.y
+          const x2 = end.x
+          const y2 = end.y
           const preset =
             c.role === 'feedback'
               ? 'bentConnector3'
@@ -3314,41 +4283,254 @@ async function executeTool(
             hPx: Math.max(Math.abs(y2 - y1), 1),
             fitWidthPx: access.fitWidthPx,
             stroke: { color: connectorColor(theme.roles), widthPt: 1.5 },
+            semanticMetadata: {
+              role: `${c.role}-connector`,
+              themeFill: 'none',
+              themeStroke: 'connector',
+              themeText: 'none',
+              componentType: 'research-connector',
+            },
           })
-          if (!cr) continue
+          if (!cr) throw new Error(`Failed to place ${c.role} connector`)
+          createdIds.push(cr.sourceId)
+          throwIfAborted(signal)
+          latestSlide = cr.slide
           access.applySlide(idx, cr.slide)
-          try {
-            const boundSlide = await window.slidesApi.editConnectorEndpoints({
-              slideIndex: idx,
-              sourceId: cr.sourceId,
-              x1Px: x1,
-              y1Px: y1,
-              x2Px: x2,
-              y2Px: y2,
-              fitWidthPx: access.fitWidthPx,
-              start: { targetId: fromId, idx: 0 },
-              end: { targetId: toId, idx: 0 },
-            })
-            if (boundSlide) {
-              access.applySlide(idx, boundSlide)
-              boundCount++
-            }
-          } catch {
-            // keep unbound line
-          }
+          const boundSlide = await window.slidesApi.editConnectorEndpoints({
+            slideIndex: idx,
+            sourceId: cr.sourceId,
+            x1Px: x1,
+            y1Px: y1,
+            x2Px: x2,
+            y2Px: y2,
+            fitWidthPx: access.fitWidthPx,
+            ...(c.laneY != null ? { routeYPx: c.laneY } : {}),
+            start: { targetId: fromId, idx: start.idx },
+            end: { targetId: toId, idx: end.idx },
+          })
+          if (!boundSlide) throw new Error(`Failed to bind ${c.role} connector`)
+          throwIfAborted(signal)
+          latestSlide = boundSlide
+          access.applySlide(idx, boundSlide)
+          boundCount++
+        }
+        const renderIssues = auditSlideLayout(latestSlide)
+        if (renderIssues.length > 0) {
+          throw new Error(`Post-write layout audit failed: ${renderIssues.join('; ')}`)
         }
         completeAction(
           actionId,
           `${seq.length} nodes, ${routes.length} connectors (${boundCount} bound)`,
         )
         return {
-          output: `Created an Input–Core–Output framework on page ${idx + 1}: ${seq.length} nodes across three zones, ${routes.length} connectors (${boundCount} endpoint-bound). Element ids: ${nodeIds.filter(Boolean).join(', ')}.`,
+          output: `Created an Input–Core–Output framework on page ${idx + 1}: ${seq.length} nodes across three zones, ${routes.length} connectors (${boundCount} endpoint-bound). Element ids: ${nodeIds.filter(Boolean).join(', ')}.${sampleNote}${formatAudit(renderIssues)}`,
           mutated: true,
           summary: t('aiSumNewShape', { n: idx + 1 }),
         }
       } catch (err) {
-        completeAction(actionId, `aborted: ${err instanceof Error ? err.message : String(err)}`)
-        throw err
+        const reason = err instanceof Error ? err.message : String(err)
+        const rollbackErrors = await revertCreatedElements(access, idx, createdIds)
+        const rollbackNote = rollbackErrors.length
+          ? ` Rollback failed for: ${rollbackErrors.join(', ')}.`
+          : ' Created elements were reverted.'
+        revertAction(actionId, reason + rollbackNote)
+        return fail(
+          t('aiFailNewElement'),
+          `Research figure creation failed: ${reason}.${rollbackNote}`,
+        )
+      }
+    }
+
+    case 'create_horizontal_pipeline': {
+      const idx = Number(call.input.slideIndex)
+      const slide = slides[idx]
+      if (!slide)
+        return fail(t('aiFailNewElement'), `slideIndex out of range (0-${slides.length - 1})`)
+      const rawNodes = Array.isArray(call.input.nodes) ? call.input.nodes : []
+      const nodes = rawNodes
+        .map((node) => {
+          const n = node as { component?: unknown; title?: unknown; subtitle?: unknown }
+          return {
+            component: String(n.component ?? 'process-node'),
+            title: String(n.title ?? ''),
+            ...(n.subtitle != null ? { subtitle: String(n.subtitle) } : {}),
+          }
+        })
+        .filter((node) => node.title)
+      if (!nodes.length) return fail(t('aiFailNewElement'), 'At least one node is required')
+      const planError = researchRecipePlanError(mode, state, 'horizontal-pipeline', {
+        pipeline: nodes,
+      })
+      if (planError) return fail(t('aiFailNewElement'), planError)
+      const provenanceError = researchRecipeDataSourceError(call, state, nodes)
+      if (provenanceError) return fail(t('aiFailNewElement'), provenanceError)
+      const sampleNote =
+        countSpecificFigures(researchRecipeText(nodes)) > 0 && call.input.dataSource === 'sample'
+          ? SAMPLE_DATA_NOTE
+          : ''
+
+      let layout: ReturnType<typeof layoutHorizontalPipeline>
+      try {
+        // Connector topology comes exclusively from the validated FigurePlan's
+        // explicit edges; without a plan there are no connectors to draw.
+        const plan =
+          mode === 'research' && state?.lastFigurePlan?.figureType === 'horizontal-pipeline'
+            ? state.lastFigurePlan
+            : null
+        layout = layoutHorizontalPipeline({
+          nodes,
+          edges: (plan?.edges ?? []).flatMap((edge) =>
+            edge.role === 'main' || edge.role === 'feedback'
+              ? [
+                  {
+                    from: edge.from,
+                    to: edge.to,
+                    role: edge.role,
+                    relation: edge.relation,
+                    ...(edge.label ? { label: edge.label } : {}),
+                  },
+                ]
+              : [],
+          ),
+          canvasW: slide.widthPx,
+          canvasH: slide.heightPx,
+        })
+      } catch (err) {
+        return fail(t('aiFailNewElement'), err instanceof Error ? err.message : String(err))
+      }
+      const audit = auditHorizontalPipeline(layout, slide.widthPx, slide.heightPx)
+      if (!audit.ok) {
+        return fail(
+          t('aiFailNewElement'),
+          `Horizontal Pipeline audit failed:\n${audit.issues.map((issue) => `- ${issue}`).join('\n')}`,
+        )
+      }
+
+      const theme =
+        getThemeById(String(call.input.themeId ?? 'academic-blue')) ??
+        getThemeById('academic-blue')!
+      const actionId = beginAction('Create Horizontal Pipeline')
+      const createdIds: string[] = []
+      try {
+        let latestSlide = slide
+        const nodeIds: string[] = []
+        for (const el of layout.elements) {
+          throwIfAborted(signal)
+          const colors = resolveComponentColors(el.component, theme.roles)
+          const tokens = componentThemeTokens(el.component)
+          const paragraphs: EditParagraph[] = [
+            {
+              runs: [{ text: el.title, bold: true, fontSize: el.titleFontPt, color: colors.text }],
+            },
+            ...(el.subtitle
+              ? [{ runs: [{ text: el.subtitle, fontSize: el.bodyFontPt, color: colors.subtitle }] }]
+              : []),
+          ]
+          const r = await window.slidesApi.addElement({
+            slideIndex: idx,
+            kind: el.preset,
+            xPx: el.x,
+            yPx: el.y,
+            wPx: el.w,
+            hPx: el.h,
+            fitWidthPx: access.fitWidthPx,
+            paragraphs,
+            fillColor: colors.fill,
+            stroke: { color: colors.stroke, widthPt: 1.25 },
+            semanticMetadata: {
+              role: el.component,
+              themeFill: tokens.fill,
+              themeStroke: tokens.stroke,
+              themeText: tokens.text,
+              componentType: 'research-module',
+            },
+          })
+          if (!r) throw new Error(`Failed to place node "${el.title}"`)
+          createdIds.push(r.sourceId)
+          throwIfAborted(signal)
+          latestSlide = r.slide
+          access.applySlide(idx, r.slide)
+          nodeIds.push(r.sourceId)
+          latestSlide = await fitResearchNodeText(access, idx, r.sourceId, el.title, signal)
+          commitAction(actionId, `node ${el.title}`)
+        }
+
+        for (const c of layout.connectors) {
+          throwIfAborted(signal)
+          const fromId = nodeIds[c.fromIndex]
+          const toId = nodeIds[c.toIndex]
+          if (!fromId || !toId)
+            throw new Error(`Missing connector endpoint for ${c.fromIndex} -> ${c.toIndex}`)
+          const a = layout.elements[c.fromIndex]!
+          const b = layout.elements[c.toIndex]!
+          const x1 = a.x + a.w
+          const y1 = a.y + a.h / 2
+          const x2 = b.x
+          const y2 = b.y + b.h / 2
+          const cr = await window.slidesApi.addElement({
+            slideIndex: idx,
+            kind: c.kind === 'curved' ? 'curvedConnector3' : 'line',
+            xPx: Math.min(x1, x2),
+            yPx: Math.min(y1, y2),
+            wPx: Math.max(Math.abs(x2 - x1), 1),
+            hPx: Math.max(Math.abs(y2 - y1), 1),
+            fitWidthPx: access.fitWidthPx,
+            stroke: { color: connectorColor(theme.roles), widthPt: 1.5 },
+            semanticMetadata: {
+              role: `${c.role}-connector`,
+              themeFill: 'none',
+              themeStroke: 'connector',
+              themeText: 'none',
+              componentType: 'research-connector',
+            },
+          })
+          if (!cr) throw new Error(`Failed to place ${c.role} connector`)
+          createdIds.push(cr.sourceId)
+          throwIfAborted(signal)
+          latestSlide = cr.slide
+          access.applySlide(idx, cr.slide)
+          const boundSlide = await window.slidesApi.editConnectorEndpoints({
+            slideIndex: idx,
+            sourceId: cr.sourceId,
+            x1Px: x1,
+            y1Px: y1,
+            x2Px: x2,
+            y2Px: y2,
+            fitWidthPx: access.fitWidthPx,
+            ...(c.laneY != null ? { routeYPx: c.laneY } : {}),
+            start: { targetId: fromId, idx: 3 },
+            end: { targetId: toId, idx: 1 },
+          })
+          if (!boundSlide) throw new Error(`Failed to bind ${c.role} connector`)
+          throwIfAborted(signal)
+          latestSlide = boundSlide
+          access.applySlide(idx, boundSlide)
+          commitAction(actionId, `connector ${c.fromIndex + 1}->${c.toIndex + 1}`)
+        }
+        const renderIssues = auditSlideLayout(latestSlide)
+        if (renderIssues.length > 0) {
+          throw new Error(`Post-write layout audit failed: ${renderIssues.join('; ')}`)
+        }
+        completeAction(
+          actionId,
+          `${layout.elements.length} nodes, ${layout.connectors.length} connectors`,
+        )
+        return {
+          output: `Created a horizontal research pipeline on page ${idx + 1}: ${layout.elements.length} nodes and ${layout.connectors.length} bound connectors. Element ids: ${nodeIds.join(', ')}.${sampleNote}${formatAudit(renderIssues)}`,
+          mutated: true,
+          summary: t('aiSumNewShape', { n: idx + 1 }),
+        }
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err)
+        const rollbackErrors = await revertCreatedElements(access, idx, createdIds)
+        const rollbackNote = rollbackErrors.length
+          ? ` Rollback failed for: ${rollbackErrors.join(', ')}.`
+          : ' Created elements were reverted.'
+        revertAction(actionId, reason + rollbackNote)
+        return fail(
+          t('aiFailNewElement'),
+          `Research figure creation failed: ${reason}.${rollbackNote}`,
+        )
       }
     }
 

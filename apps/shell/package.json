@@ -1,11 +1,11 @@
 {
   "name": "@genoffice/shell",
-  "productName": "GenOffice",
+  "productName": "Metis Diagram",
   "version": "0.8.0",
   "license": "Apache-2.0",
   "homepage": "https://github.com/genspark-ai/genoffice",
   "private": true,
-  "description": "Unified GenOffice shell: one app hosting the docs and sheets modules behind a home/launcher window",
+  "description": "Metis Diagram desktop shell hosting the canvas editor behind a home/launcher window",
   "main": "out/main/index.js",
   "desktopName": "genoffice.desktop",
   "scripts": {
@@ -22,13 +22,11 @@
     "@genoffice/agent-core": "*",
     "@genoffice/ai-provider": "*",
     "@genoffice/ai-search": "*",
-    "@genoffice/docs": "*",
     "@genoffice/docx-engine": "*",
     "@genoffice/electron-utils": "*",
     "@genoffice/i18n": "*",
     "@genoffice/pptx-engine": "*",
     "@genoffice/pptx-render": "*",
-    "@genoffice/sheets": "*",
     "@genoffice/slides": "*",
     "@genoffice/ui": "*",
     "@types/react": "^19.2.14",
@@ -45,5 +43,5 @@
     "vite": "^7.3.1",
     "vitest": "^4.1.10"
   },
-  "author": "GenOffice"
+  "author": "Metis Diagram"
 }

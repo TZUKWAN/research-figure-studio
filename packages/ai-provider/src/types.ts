@@ -27,6 +27,12 @@ export interface AiProviderConfig {
   model: string
   /** required for custom; for other direct providers it overrides the default endpoint (regional mirrors) */
   baseUrl?: string | undefined
+  /** user toggle: this model accepts image input (multimodal) */
+  vision?: boolean | undefined
+  /** probed / hand-entered context window (input tokens) */
+  maxContextTokens?: number | undefined
+  /** probed / hand-entered completion ceiling (output tokens) */
+  maxOutputTokens?: number | undefined
 }
 
 export interface AiProviderMeta {

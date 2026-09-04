@@ -61,7 +61,7 @@ export async function save(ctx: ActionCtx, quiet = false): Promise<boolean> {
 export async function saveAs(ctx: ActionCtx): Promise<void> {
   await flushActiveEdit(ctx)
   await ctx.flushNotes()
-  const name = ctx.path?.split('/').pop() ?? 'presentation.pptx'
+  const name = ctx.path?.split('/').pop() ?? `${t('appUntitledPresentation')}.pptx`
   const r = await window.slidesApi.saveAs(name)
   if (r.ok) {
     if (r.slides) adoptSavedSlides(ctx, r.slides)

@@ -4,12 +4,12 @@ import { Dropdown } from '@genoffice/ui'
 import type { AiSettings } from '@genoffice/ai-provider'
 import { useI18n } from './locale'
 import type { StringKey, TFunc } from './locale'
-import type { AccountStatus, AiCatalogEntry, UiTheme } from '../../shared/home-api'
+import type { AiCatalogEntry, UiTheme } from '../../shared/home-api'
 import { ProviderLogo } from './provider-logos'
 import './settings.css'
 
-// ── Settings modal (opened from the account menu) ─────────
-// Genspark-style two-pane dialog: section nav on the left, fields on the right.
+// ── Settings modal (opened from the settings entry) ───────
+// Two-pane dialog: section nav on the left, fields on the right.
 // All values go through the existing home IPC; nothing is stored locally.
 
 // sorted by ISO 639 language code — native-script labels have no natural
@@ -48,21 +48,12 @@ const CHANNEL_OPTIONS = [
   { value: 'beta', labelKey: 'channelBeta' },
 ] as const satisfies readonly { value: 'stable' | 'beta'; labelKey: StringKey }[]
 
-/** GitHub-style abbreviated stargazer count (2591 → "2.6k") — the number is
- * social proof, not a metric; the cached/exact value would only look stale */
-function formatStars(n: number): string {
-  if (n < 1000) return String(n)
-  const k = n / 1000
-  return `${k >= 100 ? Math.round(k) : (Math.round(k * 10) / 10).toString().replace(/\.0$/, '')}k`
-}
-
-type SectionId = 'account' | 'aiModel' | 'general' | 'about'
+type SectionId = 'aiModel' | 'standards' | 'general'
 
 const SECTIONS: readonly { id: SectionId; labelKey: StringKey }[] = [
-  { id: 'account', labelKey: 'setSecAccount' },
   { id: 'aiModel', labelKey: 'setSecAiModel' },
+  { id: 'standards', labelKey: 'setSecStandards' },
   { id: 'general', labelKey: 'setSecGeneral' },
-  { id: 'about', labelKey: 'setSecAbout' },
 ]
 
 function SectionIcon({ id }: { id: SectionId }) {
@@ -84,15 +75,15 @@ function SectionIcon({ id }: { id: SectionId }) {
       </svg>
     )
   }
-  if (id === 'account') {
+  if (id === 'standards') {
     return (
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-        <circle cx="8" cy="5.2" r="2.9" stroke="currentColor" strokeWidth="1.3" />
         <path
-          d="M2.7 13.6a5.5 5.5 0 0 1 10.6 0"
+          d="M3 3.5h10M3 3.5v9M3 12.5h6M13 3.5V9a1.5 1.5 0 0 1-1.5 1.5H8"
           stroke="currentColor"
           strokeWidth="1.3"
           strokeLinecap="round"
+          strokeLinejoin="round"
         />
       </svg>
     )
@@ -111,13 +102,7 @@ function SectionIcon({ id }: { id: SectionId }) {
       </svg>
     )
   }
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <circle cx="8" cy="8" r="6.3" stroke="currentColor" strokeWidth="1.3" />
-      <path d="M8 7.4v3.4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-      <circle cx="8" cy="5.1" r="0.8" fill="currentColor" />
-    </svg>
-  )
+  return null
 }
 
 /** label-over-value field row with an optional right-aligned action */
@@ -145,28 +130,165 @@ function Field({
   )
 }
 
+/** Standards pane: view / edit / reset the AI drawing prompt text. Only prompt
+ * TEXT is editable 鈥?layout rules, the Component Registry and QA thresholds stay code-owned. */
+function StandardsPane({ t, lang }: { t: TFunc; lang: string }) {
+  const [defs, setDefs] = useState<
+    { id: string; titleZh: string; titleEn: string; descZh: string; descEn: string }[]
+  >([])
+  const [defaults, setDefaults] = useState<Record<string, string>>({})
+  const [overrides, setOverrides] = useState<Record<string, string>>({})
+  const [activeId, setActiveId] = useState<string | null>(null)
+  const [draft, setDraft] = useState('')
+  const [savedFlash, setSavedFlash] = useState(false)
+  const [loadError, setLoadError] = useState(false)
+
+  useEffect(() => {
+    let alive = true
+    void Promise.all([
+      window.aiOffice.getPromptDefaults?.(),
+      window.aiOffice.getPromptOverrides?.(),
+    ])
+      .then(([defaultsResult, overrideResult]) => {
+        if (!alive) return
+        setDefs(defaultsResult?.defs ?? [])
+        setDefaults(defaultsResult?.agent ?? {})
+        setOverrides(overrideResult ?? {})
+        const first = defaultsResult?.defs?.[0]?.id ?? null
+        setActiveId((cur) => cur ?? first)
+      })
+      .catch(() => setLoadError(true))
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  const active = defs.find((d) => d.id === activeId) ?? null
+  const title = (d: { titleZh: string; titleEn: string }) => (lang === 'zh' ? d.titleZh : d.titleEn)
+  const desc = (d: { descZh: string; descEn: string }) => (lang === 'zh' ? d.descZh : d.descEn)
+  const isOverridden = active != null && overrides[active.id] != null
+
+  const pick = (id: string) => {
+    setActiveId(id)
+    setDraft('')
+    setSavedFlash(false)
+  }
+  const saveOverride = async () => {
+    if (!active) return
+    await window.aiOffice.setPromptOverride(active.id, draft)
+    setOverrides((prev) => ({ ...prev, [active.id]: draft }))
+    setSavedFlash(true)
+    window.setTimeout(() => setSavedFlash(false), 2000)
+  }
+  const resetOverride = async () => {
+    if (!active) return
+    await window.aiOffice.clearPromptOverride(active.id)
+    setOverrides((prev) => {
+      const next = { ...prev }
+      delete next[active.id]
+      return next
+    })
+    setDraft('')
+    setSavedFlash(true)
+    window.setTimeout(() => setSavedFlash(false), 2000)
+  }
+
+  if (loadError) {
+    return (
+      <>
+        <h3 className="set-pane-title">{t('setSecStandards')}</h3>
+        <p className="set-field-desc">{t('setStandardsLoadError')}</p>
+      </>
+    )
+  }
+
+  return (
+    <>
+      <h3 className="set-pane-title">{t('setSecStandards')}</h3>
+      <div className="set-field-desc set-ai-note">{t('setStandardsNote')}</div>
+      <div className="set-standards">
+        <nav className="set-standards-list" aria-label={t('setSecStandards')}>
+          {defs.map((d) => (
+            <button
+              key={d.id}
+              className={`set-nav-item${activeId === d.id ? ' active' : ''}`}
+              aria-current={activeId === d.id}
+              onClick={() => pick(d.id)}
+            >
+              {title(d)}
+              {overrides[d.id] != null && <span className="set-standards-modified">✎</span>}
+            </button>
+          ))}
+        </nav>
+        <div className="set-standards-editor">
+          {active && (
+            <>
+              <div className="set-field-text">
+                <div className="set-field-label">{title(active)}</div>
+                <div className="set-field-desc">{desc(active)}</div>
+              </div>
+              <textarea
+                className="set-prompt-editor"
+                value={draft || overrides[active.id] || defaults[active.id] || ''}
+                onChange={(e) => setDraft(e.target.value)}
+                spellCheck={false}
+              />
+              <div className="set-pane-footer">
+                {savedFlash && <span className="set-ai-status ok">{t('setAiSaved')}</span>}
+                {isOverridden ? (
+                  <button
+                    className="set-btn"
+                    onClick={() => {
+                      void resetOverride()
+                      setDraft('')
+                    }}
+                  >
+                    {t('setStandardsReset')}
+                  </button>
+                ) : (
+                  <span />
+                )}
+                <button
+                  className="set-btn primary"
+                  disabled={
+                    !draft.trim() || draft === (overrides[active.id] ?? defaults[active.id])
+                  }
+                  onClick={() => void saveOverride()}
+                >
+                  {t('setStandardsSave')}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </>
+  )
+}
+
 /** AI model pane: provider / model / key / base URL, saved to userData/ai-settings.json */
 function AiModelPane({ t }: { t: TFunc }) {
-  const [catalog] = useState<AiCatalogEntry[]>(() => window.aiOffice.getAiProviders?.() ?? [])
+  // presets were removed: the only offered provider is the user's own OpenAI-compatible endpoint
+  const [catalog] = useState<AiCatalogEntry[]>(() =>
+    (window.aiOffice.getAiProviders?.() ?? []).filter((c) => c.id === 'custom'),
+  )
   const [settings, setSettings] = useState<AiSettings | null>(null)
   const [dirty, setDirty] = useState(false)
   const [saved, setSaved] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ ok: boolean; error?: string } | null>(null)
+  // model discovery for custom endpoints
+  const [probing, setProbing] = useState(false)
+  const [probedModels, setProbedModels] = useState<
+    { id: string; contextLength?: number; maxOutputTokens?: number }[]
+  >([])
 
   useEffect(() => {
     let alive = true
     void window.aiOffice.getAiSettings?.().then((s) => {
       if (!alive || !s) return
-      // The switch is disabled with genspark, so never present it stranded
-      // off. Display-only: s.provider may be the activeProvider fallback for
-      // a half-configured BYOK selection, so writing anything back here would
-      // clobber the stored choice — the main process heals a genuine legacy
-      // genspark+off file itself, judged on the raw stored provider.
-      if (s.provider === 'genspark' && s.gskToolsEnabled === false) {
-        s = { ...s, gskToolsEnabled: true }
-      }
-      setSettings(s)
+      const provider = catalog.some((entry) => entry.id === s.provider) ? s.provider : 'custom'
+      setSettings(provider === s.provider ? s : { ...s, provider })
     })
     return () => {
       alive = false
@@ -174,13 +296,17 @@ function AiModelPane({ t }: { t: TFunc }) {
   }, [])
 
   if (!settings) return null
-  const provider = settings.provider
+  const provider = catalog.some((c) => c.id === settings.provider) ? settings.provider : 'custom'
   const meta = catalog.find((c) => c.id === provider)
   const config = settings.providers[provider] ?? {
     apiKey: '',
     model: meta?.defaultModel ?? '',
   }
-  const isGenspark = provider === 'genspark'
+  // effective base URL: unsaved input wins so probing works before saving
+  const effectiveBaseUrl = config.baseUrl?.trim() || meta?.defaultBaseUrl || ''
+  const modelOptions = Array.from(
+    new Set([...(probedModels.map((m) => m.id) ?? []), ...(meta?.models ?? [])]),
+  )
 
   const touch = () => {
     setDirty(true)
@@ -195,13 +321,43 @@ function AiModelPane({ t }: { t: TFunc }) {
     touch()
   }
   const selectProvider = (id: AiSettings['provider']) => {
-    // cloud tools cannot be off with genspark (chat runs through gsk anyway)
-    setSettings({
-      ...settings,
-      provider: id,
-      ...(id === 'genspark' ? { gskToolsEnabled: true } : {}),
-    })
+    setSettings({ ...settings, provider: id })
+    setProbedModels([])
     touch()
+  }
+  const probe = async () => {
+    setProbing(true)
+    setTestResult(null)
+    try {
+      const r = await window.aiOffice.probeModels?.({
+        baseUrl: effectiveBaseUrl,
+        apiKey: config.apiKey,
+      })
+      if (r?.ok && r.models) {
+        setProbedModels(r.models)
+        const found = r.models.find((m) => m.id === config.model)
+        if (found) {
+          updateConfig({
+            ...(found.contextLength ? { maxContextTokens: found.contextLength } : {}),
+            ...(found.maxOutputTokens ? { maxOutputTokens: found.maxOutputTokens } : {}),
+          })
+        }
+      } else {
+        setTestResult({ ok: false, error: r?.error ?? 'Model discovery failed' })
+      }
+    } catch (err) {
+      setTestResult({ ok: false, error: err instanceof Error ? err.message : String(err) })
+    } finally {
+      setProbing(false)
+    }
+  }
+  const pickModel = (id: string) => {
+    const found = probedModels.find((m) => m.id === id)
+    updateConfig({
+      model: id,
+      ...(found?.contextLength ? { maxContextTokens: found.contextLength } : {}),
+      ...(found?.maxOutputTokens ? { maxOutputTokens: found.maxOutputTokens } : {}),
+    })
   }
   const save = () => {
     window.aiOffice
@@ -250,96 +406,128 @@ function AiModelPane({ t }: { t: TFunc }) {
           onPick={(v) => selectProvider(v as AiSettings['provider'])}
         />
       </div>
-      <div className="set-field-desc set-ai-note">
-        {isGenspark ? t('setAiGensparkHint') : t('setAiByokNote')}
-      </div>
+      <div className="set-field-desc set-ai-note">{t('setAiByokNote')}</div>
       <div className="set-field">
         <div className="set-field-text">
           <label className="set-field-label">{t('setAiModelId')}</label>
         </div>
-        {meta && meta.models.length > 0 ? (
+        <div className="set-model-row">
           <Dropdown
             className="set-dd"
-            value={config.model || meta.defaultModel}
+            value={config.model || meta?.defaultModel || ''}
             ariaLabel={t('setAiModelId')}
-            options={meta.models.map((m) => ({ value: m, label: m }))}
-            onPick={(m) => updateConfig({ model: m })}
+            options={modelOptions.map((m) => ({ value: m, label: m }))}
+            onPick={(m) => pickModel(String(m))}
           />
-        ) : (
-          <input
-            id="set-ai-model"
-            className="set-input"
-            type="text"
-            value={config.model}
-            placeholder="model-id"
-            spellCheck={false}
-            onChange={(e) => updateConfig({ model: e.target.value })}
-          />
-        )}
+          <button
+            className="set-btn"
+            disabled={probing || !effectiveBaseUrl}
+            onClick={() => void probe()}
+          >
+            {probing ? t('setAiProbing') : t('setAiProbe')}
+          </button>
+        </div>
       </div>
-      {!isGenspark && (
-        <>
-          <div className="set-field">
-            <div className="set-field-text">
-              <div className="set-field-stack">
-                <label className="set-field-label" htmlFor="set-ai-key">
-                  {t('setAiApiKey')}
-                </label>
-                <div className="set-field-desc">{t('setAiKeyHint')}</div>
-              </div>
-            </div>
-            <input
-              id="set-ai-key"
-              className="set-input"
-              type="password"
-              value={config.apiKey}
-              placeholder={meta?.keyPlaceholder ?? 'API Key'}
-              spellCheck={false}
-              autoComplete="off"
-              onChange={(e) => updateConfig({ apiKey: e.target.value.trim() })}
-            />
-          </div>
-          <div className="set-field">
-            <div className="set-field-text">
-              <div className="set-field-stack">
-                <label className="set-field-label" htmlFor="set-ai-base-url">
-                  {t('setAiBaseUrl')}
-                </label>
-                {!meta?.needsBaseUrl && (
-                  <div className="set-field-desc">{t('setAiBaseUrlHint')}</div>
-                )}
-              </div>
-            </div>
-            <input
-              id="set-ai-base-url"
-              className="set-input"
-              type="text"
-              value={config.baseUrl ?? ''}
-              placeholder={meta?.needsBaseUrl ? 'https://…/v1' : meta?.defaultBaseUrl}
-              spellCheck={false}
-              onChange={(e) => updateConfig({ baseUrl: e.target.value.trim() })}
-            />
-          </div>
-        </>
-      )}
       <div className="set-field">
         <div className="set-field-text">
           <div className="set-field-stack">
-            <div className="set-field-label">{t('setAiGskTools')}</div>
-            <div className="set-field-desc">{t('setAiGskToolsDesc')}</div>
+            <label className="set-field-label" htmlFor="set-ai-ctx">
+              {t('setAiMaxContext')}
+            </label>
+            <div className="set-field-desc">{t('setAiMaxContextHint')}</div>
           </div>
         </div>
-        {/* locked on with the genspark provider — chat runs through gsk anyway */}
+        <input
+          id="set-ai-ctx"
+          className="set-input"
+          type="number"
+          min={512}
+          step={512}
+          value={config.maxContextTokens ?? ''}
+          placeholder={t('setAiUnknown')}
+          onChange={(e) =>
+            updateConfig({
+              maxContextTokens: e.target.value ? Number(e.target.value) : undefined,
+            })
+          }
+        />
+      </div>
+      <div className="set-field">
+        <div className="set-field-text">
+          <div className="set-field-stack">
+            <label className="set-field-label" htmlFor="set-ai-maxout">
+              {t('setAiMaxOutput')}
+            </label>
+            <div className="set-field-desc">{t('setAiMaxOutputHint')}</div>
+          </div>
+        </div>
+        <input
+          id="set-ai-maxout"
+          className="set-input"
+          type="number"
+          min={128}
+          step={128}
+          value={config.maxOutputTokens ?? ''}
+          placeholder={t('setAiUnknown')}
+          onChange={(e) =>
+            updateConfig({
+              maxOutputTokens: e.target.value ? Number(e.target.value) : undefined,
+            })
+          }
+        />
+      </div>
+      <div className="set-field">
+        <div className="set-field-text">
+          <div className="set-field-stack">
+            <div className="set-field-label">{t('setAiVision')}</div>
+            <div className="set-field-desc">{t('setAiVisionHint')}</div>
+          </div>
+        </div>
         <button
           className="set-switch"
           role="switch"
-          aria-checked={settings.gskToolsEnabled !== false}
-          aria-label={t('setAiGskTools')}
-          disabled={isGenspark}
-          onClick={() => {
-            setSettings({ ...settings, gskToolsEnabled: settings.gskToolsEnabled === false })
-            touch()
-          }}
+          aria-checked={config.vision === true}
+          aria-label={t('setAiVision')}
+          onClick={() => updateConfig({ vision: config.vision !== true })}
+        />
+      </div>
+      <div className="set-field">
+        <div className="set-field-text">
+          <div className="set-field-stack">
+            <label className="set-field-label" htmlFor="set-ai-key">
+              {t('setAiApiKey')}
+            </label>
+            <div className="set-field-desc">{t('setAiKeyHint')}</div>
+          </div>
+        </div>
+        <input
+          id="set-ai-key"
+          className="set-input"
+          type="password"
+          value={config.apiKey}
+          placeholder={meta?.keyPlaceholder ?? 'API Key'}
+          spellCheck={false}
+          autoComplete="off"
+          onChange={(e) => updateConfig({ apiKey: e.target.value.trim() })}
+        />
+      </div>
+      <div className="set-field">
+        <div className="set-field-text">
+          <div className="set-field-stack">
+            <label className="set-field-label" htmlFor="set-ai-base-url">
+              {t('setAiBaseUrl')}
+            </label>
+            {!meta?.needsBaseUrl && <div className="set-field-desc">{t('setAiBaseUrlHint')}</div>}
+          </div>
+        </div>
+        <input
+          id="set-ai-base-url"
+          className="set-input"
+          type="text"
+          value={config.baseUrl ?? ''}
+          placeholder={meta?.needsBaseUrl ? 'https://…/v1' : meta?.defaultBaseUrl}
+          spellCheck={false}
+          onChange={(e) => updateConfig({ baseUrl: e.target.value.trim() })}
         />
       </div>
       <div className="set-pane-footer">
@@ -421,42 +609,15 @@ function AiStatusPill({ status }: { status: AiStatus | null }) {
 }
 
 export interface SettingsModalProps {
-  status: AccountStatus | null
-  loggingOut: boolean
-  /** browser sign-in in progress (spinner shows on the account entry) */
-  loginWaiting: boolean
-  /** device auth URL while waiting — rescue actions when the browser did not auto-open */
-  loginUrl: string | null
-  urlCopied: boolean
-  onOpenLoginUrl: () => void
-  onCopyLoginUrl: () => void
   onClose: () => void
-  /** closes the modal and launches the Genspark login flow (progress shows on the account entry) */
-  onLogin: () => void
-  onLogout: () => void
 }
 
-export function SettingsModal({
-  status,
-  loggingOut,
-  loginWaiting,
-  loginUrl,
-  urlCopied,
-  onOpenLoginUrl,
-  onCopyLoginUrl,
-  onClose,
-  onLogin,
-  onLogout,
-}: SettingsModalProps) {
+export function SettingsModal({ onClose }: SettingsModalProps) {
   const { lang, setLang, t } = useI18n()
-  const [section, setSection] = useState<SectionId>('account')
+  const [section, setSection] = useState<SectionId>('aiModel')
   const [theme, setTheme] = useState<UiTheme>('system')
   const [saveDir, setSaveDir] = useState('')
-  const [analyticsOn, setAnalyticsOn] = useState(true)
-  const [analyticsSaving, setAnalyticsSaving] = useState(false)
-  const [channel, setChannel] = useState<'stable' | 'beta'>('stable')
   const [appVersion, setAppVersion] = useState('')
-  const [githubStars, setGithubStars] = useState<number | null>(null)
 
   useEffect(() => {
     let alive = true
@@ -466,17 +627,8 @@ export function SettingsModal({
     void window.aiOffice.getDefaultSaveDir?.().then((dir) => {
       if (alive && dir) setSaveDir(dir)
     })
-    void window.aiOffice.getAnalyticsEnabled?.().then((on) => {
-      if (alive) setAnalyticsOn(on !== false)
-    })
-    void window.aiOffice.getUpdateChannel?.().then((ch) => {
-      if (alive) setChannel(ch)
-    })
     void window.aiOffice.getAppVersion?.().then((v) => {
       if (alive && v) setAppVersion(v)
-    })
-    void window.aiOffice.githubStars?.().then((n) => {
-      if (alive && n !== null) setGithubStars(n)
     })
     return () => {
       alive = false
@@ -503,9 +655,6 @@ export function SettingsModal({
       if (dir) setSaveDir(dir)
     })
   }
-
-  const loggedIn = status?.loggedIn ?? false
-  const email = status?.email ?? ''
 
   return (
     <div
@@ -543,55 +692,8 @@ export function SettingsModal({
             ))}
           </nav>
           <div className="set-pane">
-            {section === 'account' && (
-              <>
-                <h3 className="set-pane-title">{t('setSecAccount')}</h3>
-                <Field label={t('setEmail')} value={loggedIn ? email : t('setNotLoggedIn')} />
-                {loggedIn && (
-                  <Field
-                    label={t('credits')}
-                    value={
-                      status?.creditBalance === undefined
-                        ? '—'
-                        : Math.floor(status.creditBalance).toLocaleString('en-US')
-                    }
-                    action={
-                      <button
-                        className="set-btn"
-                        data-tip={t('creditsTip')}
-                        onClick={() => void window.aiOffice.openCreditUsage?.()}
-                      >
-                        {t('setViewUsage')}
-                      </button>
-                    }
-                  />
-                )}
-                <div className="set-pane-footer">
-                  {loggedIn ? (
-                    <button className="set-btn danger" disabled={loggingOut} onClick={onLogout}>
-                      {loggingOut ? t('loggingOut') : t('logout')}
-                    </button>
-                  ) : (
-                    <>
-                      {loginWaiting && loginUrl && (
-                        <>
-                          <button className="set-btn" onClick={onOpenLoginUrl}>
-                            {t('loginOpenManually')}
-                          </button>
-                          <button className="set-btn" onClick={onCopyLoginUrl}>
-                            {urlCopied ? t('loginCopied') : t('loginCopyUrl')}
-                          </button>
-                        </>
-                      )}
-                      <button className="set-btn primary" onClick={onLogin}>
-                        {loginWaiting ? t('waitingShort') : t('loginGenspark')}
-                      </button>
-                    </>
-                  )}
-                </div>
-              </>
-            )}
             {section === 'aiModel' && <AiModelPane t={t} />}
+            {section === 'standards' && <StandardsPane t={t} lang={lang} />}
             {section === 'general' && (
               <>
                 <h3 className="set-pane-title">{t('setSecGeneral')}</h3>
@@ -629,73 +731,6 @@ export function SettingsModal({
                   action={
                     <button className="set-btn" onClick={changeSaveDir}>
                       {t('setChange')}
-                    </button>
-                  }
-                />
-                <div className="set-field">
-                  <div className="set-field-text">
-                    <div className="set-field-stack">
-                      <div className="set-field-label">{t('setAnalytics')}</div>
-                      <div className="set-field-desc">{t('setAnalyticsDesc')}</div>
-                    </div>
-                  </div>
-                  <button
-                    className="set-switch"
-                    role="switch"
-                    aria-checked={analyticsOn}
-                    aria-label={t('setAnalytics')}
-                    disabled={analyticsSaving}
-                    onClick={() => {
-                      const next = !analyticsOn
-                      setAnalyticsSaving(true)
-                      void window.aiOffice
-                        .setAnalyticsEnabled(next)
-                        .then((persisted) => {
-                          if (persisted) setAnalyticsOn(next)
-                        })
-                        .catch(() => {})
-                        .finally(() => setAnalyticsSaving(false))
-                    }}
-                  />
-                </div>
-              </>
-            )}
-            {section === 'about' && (
-              <>
-                <h3 className="set-pane-title">{t('setSecAbout')}</h3>
-                <Field label={t('versionLabel')} value={appVersion || '—'} />
-                <div className="set-field">
-                  <div className="set-field-text">
-                    <label className="set-field-label">{t('updateChannel')}</label>
-                  </div>
-                  <Dropdown
-                    className="set-dd"
-                    value={channel}
-                    ariaLabel={t('updateChannel')}
-                    options={CHANNEL_OPTIONS.map((opt) => ({
-                      value: opt.value,
-                      label: t(opt.labelKey),
-                    }))}
-                    onPick={(v) => {
-                      const next = v === 'beta' ? 'beta' : 'stable'
-                      setChannel(next)
-                      void window.aiOffice.setUpdateChannel(next)
-                    }}
-                  />
-                </div>
-                <Field
-                  label={t('setGithub')}
-                  value={
-                    githubStars === null
-                      ? 'github.com/genspark-ai/genoffice'
-                      : `github.com/genspark-ai/genoffice · ★ ${formatStars(githubStars)}`
-                  }
-                  action={
-                    <button
-                      className="set-btn"
-                      onClick={() => void window.aiOffice.openGitHubRepo?.()}
-                    >
-                      {t('starOnGitHub')}
                     </button>
                   }
                 />

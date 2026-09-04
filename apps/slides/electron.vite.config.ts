@@ -28,6 +28,7 @@ const workspaceAlias = {
   // Metafile (EMF/WMF) rasterizer shared with the docs engine (renderer-only: needs canvas)
   '@genoffice/docx-engine/metafile': resolve(here, '../../packages/docx-engine/src/metafile.ts'),
   '@genoffice/research-harness': resolve(here, '../../packages/research-harness/src/index.ts'),
+  '@genoffice/theme-engine': resolve(here, '../../packages/theme-engine/src/index.ts'),
 }
 
 export default defineConfig({
@@ -42,6 +43,8 @@ export default defineConfig({
         exclude: [
           '@genoffice/pptx-engine',
           '@genoffice/pptx-render',
+          '@genoffice/research-harness',
+          '@genoffice/theme-engine',
           '@genoffice/ai-search',
           '@genoffice/file-parse',
           '@genoffice/electron-utils',
@@ -62,4 +65,3 @@ export default defineConfig({
     },
   },
 })
-

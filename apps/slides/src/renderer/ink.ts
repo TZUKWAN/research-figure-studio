@@ -1,7 +1,7 @@
 import type { PictureRenderNode, RenderNode, RenderSlide } from '@genoffice/pptx-render'
 
 /**
- * Freehand ink (Draw tab) — editor-side model. Same mechanism as apps/docs ink, but a
+ * Freehand ink (Draw tab) — editor-side model for a
  * slide is a fixed canvas: no paragraph anchors needed; ink coordinates use page px
  * directly (fitWidth viewport).
  *

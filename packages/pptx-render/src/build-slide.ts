@@ -377,6 +377,7 @@ function buildShape(
     type: el.type,
     box,
     sourceId: el.id,
+    ...(el.semanticMetadata ? { semanticMetadata: el.semanticMetadata } : {}),
     fill: resolveFill(el.fill, vp, media),
     ...(el.fillOverlay ? { fillOverlay: resolveFill(el.fillOverlay, vp, media) } : {}),
     ...(el.placeholder ? { placeholder: el.placeholder } : {}),
@@ -400,7 +401,17 @@ function buildShape(
     node.cornerRadiusPx = Math.min(box.w, box.h) / 2
   } else if (isConnectorPreset(el.presetGeometry)) {
     // Connectors: after baking flips into the points, clear the box flip flags (the render container no longer mirrors)
-    const pts = connectorPoints(el.presetGeometry!, box.w, box.h, box.flipH, box.flipV, el.adjust)
+    const routeY =
+      el.adjust?.rfsRouteY != null ? emuToPx(el.adjust.rfsRouteY, vp.scale) - box.y : undefined
+    const pts = connectorPoints(
+      el.presetGeometry!,
+      box.w,
+      box.h,
+      box.flipH,
+      box.flipV,
+      el.adjust,
+      routeY,
+    )
     const isCurved = /^curvedConnector/.test(el.presetGeometry ?? '')
     const bezier = isCurved ? connectorBezier(pts) : undefined
     const strokeWidth = el.stroke?.width ?? 12700

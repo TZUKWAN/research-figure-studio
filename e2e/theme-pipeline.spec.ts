@@ -1,6 +1,3 @@
-import { mkdtemp, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { test, expect, type ElectronApplication, type Page } from '@playwright/test'
 import { launchShell, closeAndSaveVideo, waitForPageWithUrl } from './helpers'
 
@@ -10,7 +7,11 @@ function themeAttr(page: Page): Promise<string | null> {
 
 function hasHomeApi(page: Page): Promise<boolean> {
   return page
-    .evaluate(() => Boolean((window as unknown as { aiOffice?: unknown }).aiOffice))
+    .evaluate(
+      () =>
+        Boolean((window as unknown as { aiOffice?: unknown }).aiOffice) &&
+        Boolean(document.querySelector('.app-frame')),
+    )
     .catch(() => false)
 }
 
@@ -35,21 +36,16 @@ function setTheme(page: Page, theme: 'light' | 'dark' | 'system'): Promise<void>
 }
 
 test.describe('theme pipeline', () => {
-  test('setTheme reaches home and editor tabs, persists across relaunch', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'genoffice-theme-'))
-    const mdPath = join(dir, 'doc.md')
-    await writeFile(mdPath, '# Doc\n\nBody.\n')
-
+  test('setTheme reaches Shell and Slides tabs, persists across relaunch', async () => {
     const launched = await launchShell({
       onboardingSeen: true,
       videoDir: 'theme-pipeline',
-      openFile: mdPath,
     })
     const { app } = launched
     try {
       const shellPage = await findShellPage(app)
-      const editorPage = await waitForPageWithUrl(app, 'markdown/out')
-      await expect(editorPage.locator('.doc-editor')).toBeVisible()
+      const editorPage = await waitForPageWithUrl(app, 'slides/out')
+      await editorPage.waitForSelector('.stage-wrap canvas', { timeout: 20_000 })
       expect(await themeAttr(shellPage)).toBeNull()
       expect(await themeAttr(editorPage)).toBeNull()
 
@@ -78,7 +74,10 @@ test.describe('theme pipeline', () => {
     })
     try {
       const shellPage = await findShellPage(relaunched.app)
+      const editorPage = await waitForPageWithUrl(relaunched.app, 'slides/out')
+      await editorPage.waitForSelector('.stage-wrap canvas', { timeout: 20_000 })
       await expect.poll(() => themeAttr(shellPage)).toBe('dark')
+      await expect.poll(() => themeAttr(editorPage)).toBe('dark')
       expect(await relaunched.app.evaluate(({ nativeTheme }) => nativeTheme.themeSource)).toBe(
         'dark',
       )

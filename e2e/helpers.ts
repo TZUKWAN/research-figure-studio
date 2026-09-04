@@ -190,3 +190,24 @@ export async function waitForPageWithUrl(
     await app.waitForEvent('window', { timeout: Math.min(remaining, 1_000) }).catch(() => {})
   }
 }
+
+/** Activate the Shell Home tab; a normal launch initially opens a Slides tab. */
+export async function activateHome(app: ElectronApplication): Promise<Page> {
+  const page = await waitForPageWithUrl(app, 'shell/out')
+  await page.waitForSelector('.app-frame', { timeout: 30_000 })
+  await page.waitForSelector('.tab-bar .tab-item', { timeout: 30_000 })
+  await page.evaluate(async () => {
+    const api = (
+      window as unknown as {
+        aiOfficeTabs: { list(): Promise<unknown>; activate(id: string): Promise<void> }
+      }
+    ).aiOfficeTabs
+    await api.list()
+    await api.activate('home')
+  })
+  await page.locator('.tab-bar .tab-item.tab-home.active').waitFor({
+    state: 'visible',
+    timeout: 30_000,
+  })
+  return page
+}

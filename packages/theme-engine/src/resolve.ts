@@ -1,7 +1,7 @@
 /**
  * Resolve semantic component roles to concrete hex colors for a given theme.
  * Pure function: theme + registry kind → fill/stroke/text, so a theme swap
- * re-colors without touching layout (PRD §43 Theme 验收标准).
+ * re-colors without touching layout (PRD section 43 theme acceptance criteria).
  */
 
 import type { ThemeRoles } from './presets.js'
@@ -11,6 +11,13 @@ export interface ComponentColors {
   stroke: string
   text: string
   subtitle?: string
+}
+
+export interface ComponentThemeTokens {
+  fill: keyof ThemeRoles
+  stroke: keyof ThemeRoles
+  text: keyof ThemeRoles
+  subtitle: keyof ThemeRoles
 }
 
 /** Per-kind token binding (mirrors research-harness registry kinds). */
@@ -26,20 +33,24 @@ const KIND_BINDING: Record<string, { fill: keyof ThemeRoles; stroke: keyof Theme
   'section-container': { fill: 'surface', stroke: 'border' },
 }
 
-export function resolveComponentColors(
-  kind: string,
-  roles: ThemeRoles,
-): ComponentColors {
+export function componentThemeTokens(kind: string): ComponentThemeTokens {
   const b = KIND_BINDING[kind] ?? { fill: 'surface' as const, stroke: 'primary' as const }
-  const fill = roles[b.fill]
-  const stroke = roles[b.stroke]
-  // Contrast rule: dark fills get light text and vice versa (relative luminance).
-  const lightFill = luminance(fill) > 0.55
+  return { ...b, text: 'textPrimary', subtitle: 'textSecondary' }
+}
+
+export function resolveComponentColors(kind: string, roles: ThemeRoles): ComponentColors {
+  const tokens = componentThemeTokens(kind)
+  const fill = roles[tokens.fill]
+  const stroke = roles[tokens.stroke]
+  const text = pickReadableText(roles, fill)
+  // Keep the secondary tone where it meets body-text contrast; otherwise use the same
+  // readable foreground as the title instead of rendering a low-contrast subtitle.
+  const subtitle = contrastRatio(roles.textSecondary, fill) >= 4.5 ? roles.textSecondary : text
   return {
     fill,
     stroke,
-    text: lightFill ? roles.textPrimary : pickReadableOnDark(roles, fill),
-    subtitle: lightFill ? roles.textSecondary : roles.textSecondary,
+    text,
+    subtitle,
   }
 }
 
@@ -69,9 +80,12 @@ export function contrastRatio(a: string, b: string): number {
   return (hi + 0.05) / (lo + 0.05)
 }
 
-function pickReadableOnDark(roles: ThemeRoles, onFill: string): string {
-  // Pick whichever reads better ON THE ACTUAL FILL; fall back to near-white.
-  const cPrimary = contrastRatio(roles.textPrimary, onFill)
-  const cLight = contrastRatio('#F2F5F8', onFill)
-  return cPrimary >= cLight ? roles.textPrimary : '#F2F5F8'
+function pickReadableText(roles: ThemeRoles, onFill: string): string {
+  if (contrastRatio(roles.textPrimary, onFill) >= 4.5) return roles.textPrimary
+  // Choose against the actual fill; both extreme fallbacks are needed for accent
+  // roles that can be light in a dark theme.
+  const candidates = [roles.textPrimary, roles.textSecondary, '#FFFFFF', '#000000']
+  return candidates.reduce((best, candidate) =>
+    contrastRatio(candidate, onFill) > contrastRatio(best, onFill) ? candidate : best,
+  )
 }

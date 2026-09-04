@@ -6,15 +6,13 @@ body:
     id: app
     attributes:
       label: App
-      description: Which part of the suite is affected?
+      description: Which part of Metis Diagram is affected?
       options:
-        - GenOffice Docs (docs)
-        - GenOffice Sheets (sheets)
-        - GenOffice Slides (slides)
-        - GenOffice PDF (pdf)
-        - GenOffice Markdown (markdown)
-        - Shell / home screen
-        - AI panel / providers
+        - Canvas editor
+        - Home screen / project list
+        - AI panel / BYOK providers
+        - File import, export, or PowerPoint compatibility
+        - Theme, language, or accessibility
         - Build / packaging
         - Other
     validations:

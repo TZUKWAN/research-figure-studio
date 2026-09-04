@@ -20,16 +20,16 @@ import {
   AiCreditsError,
   AiTimeoutError,
   isAiNetworkError,
+  chatForProvider,
   defaultAiSettings,
-  activeProvider,
   cloudToolsEnabled,
   resolveAiSettings,
   setRescueFetch,
   streamForProvider,
+  type AiChatRequest,
   type AiSettings,
   type AiStreamChunk,
   type AiStreamRequest,
-  type GenSparkAccountStatus,
   type LegacyAiSettings,
 } from '@genoffice/ai-provider'
 import { fetchRemoteImage } from '@genoffice/electron-utils'
@@ -40,12 +40,20 @@ import {
   gskApiKey,
   gskGenerateImage,
   gskAnalyzeMedia,
-  gskLoginInfo,
   hasGskAuth,
 } from '@genoffice/ai-search'
 import { addPicture, editPictureSrcRect, replacePictureBytes } from '@genoffice/pptx-engine'
 import { matchesElementRef } from '@genoffice/pptx-engine/identity'
 import { coverCropFractions } from '../shared/cover-crop'
+import {
+  AGENT_SYSTEM_PROMPT,
+  QC_GEOMETRY_SYSTEM_PROMPT,
+  QC_VISUAL_SYSTEM_PROMPT,
+  RESEARCH_AGENT_SYSTEM_PROMPT,
+  RESEARCH_COMPOSITION_DESIGNER_PROMPT,
+  RESEARCH_SEMANTIC_PLANNER_PROMPT,
+  PROMPT_DEFS,
+} from '../shared/prompt-defaults'
 import type { AiRunFailure } from '../shared/ipc'
 import { EMU_PER_PX_96 } from '@genoffice/pptx-render'
 import { tm } from './i18n-main'
@@ -109,33 +117,137 @@ export function registerAiIpc(): void {
 
   ipcMain.handle('ai:get-settings', (): AiSettings => {
     const stored = readJson<Partial<AiSettings> & LegacyAiSettings>(AI_SETTINGS_PATH(), {})
-    const settings = resolveAiSettings(stored, defaultAiSettings())
-    // a stored BYOK provider is honored when usable; half-filled configs fall back to genspark
-    settings.provider = activeProvider(settings)
-    return settings
-  })
-
-  // Genspark account (gsk login state): the auth source for AI features; when logged out the frontend uses this to guide login
-  ipcMain.handle(
-    'ai:gsk-status',
-    async (_event, withEmail?: boolean): Promise<GenSparkAccountStatus> => {
-      if (!hasGskAuth()) return { loggedIn: false }
-      if (!withEmail) return { loggedIn: true }
-      const info = await gskLoginInfo()
-      return info?.email ? { loggedIn: true, email: info.email } : { loggedIn: true }
-    },
-  )
-
-  ipcMain.handle('ai:gsk-login', () => {
-    ensureGenofficeLogin((url) => void shell.openExternal(url))
+    return resolveAiSettings(stored, defaultAiSettings())
   })
 
   ipcMain.handle('ai:set-settings', (_event, settings: AiSettings) => {
     writeJson(AI_SETTINGS_PATH(), settings)
   })
 
+  // ── Standards (Settings): user-editable AI drawing prompts ──
+  // Only prompt TEXT is editable here; layout rules, the Component Registry and
+  // QA thresholds stay code-owned. Overrides live in userData/prompt-overrides.json.
+  const PROMPT_OVERRIDES_PATH = () => join(app.getPath('userData'), 'prompt-overrides.json')
+
+  ipcMain.handle('prompts:defaults', () => ({
+    agent: {
+      'agent.presentation': AGENT_SYSTEM_PROMPT,
+      'agent.research': RESEARCH_AGENT_SYSTEM_PROMPT,
+      'qc.visual': QC_VISUAL_SYSTEM_PROMPT,
+      'qc.geometry': QC_GEOMETRY_SYSTEM_PROMPT,
+      'research.semantic-planner': RESEARCH_SEMANTIC_PLANNER_PROMPT,
+      'research.composition-designer': RESEARCH_COMPOSITION_DESIGNER_PROMPT,
+    },
+    defs: PROMPT_DEFS,
+  }))
+
+  ipcMain.handle('prompts:get-overrides', (): Record<string, string> =>
+    readJson<Record<string, string>>(PROMPT_OVERRIDES_PATH(), {}),
+  )
+
+  ipcMain.handle('prompts:set-override', (_event, id: unknown, text: unknown) => {
+    if (typeof id !== 'string' || typeof text !== 'string') return false
+    if (!PROMPT_DEFS.some((d) => d.id === id)) return false
+    const overrides = readJson<Record<string, string>>(PROMPT_OVERRIDES_PATH(), {})
+    overrides[id] = text
+    writeJson(PROMPT_OVERRIDES_PATH(), overrides)
+    return true
+  })
+
+  ipcMain.handle('prompts:clear-override', (_event, id: unknown) => {
+    if (typeof id !== 'string') return false
+    const overrides = readJson<Record<string, string>>(PROMPT_OVERRIDES_PATH(), {})
+    delete overrides[id]
+    writeJson(PROMPT_OVERRIDES_PATH(), overrides)
+    return true
+  })
+
+  // Model discovery for custom OpenAI-compatible endpoints: GET {baseUrl}/models.
+  // Returns model ids; when the listing carries metadata (OpenRouter-style
+  // context_length / max_completion_tokens) it is passed through so the
+  // settings UI can auto-fill context/output ceilings.
+  ipcMain.handle(
+    'ai:probe-models',
+    async (
+      _event,
+      query: { baseUrl: string; apiKey: string },
+    ): Promise<{
+      ok: boolean
+      models?: { id: string; contextLength?: number; maxOutputTokens?: number }[]
+      error?: string
+    }> => {
+      const base = String(query?.baseUrl ?? '')
+        .trim()
+        .replace(/\/+$/, '')
+      if (!base) return { ok: false, error: 'missing base URL' }
+      try {
+        const res = await net.fetch(`${base}/models`, {
+          headers: {
+            Accept: 'application/json',
+            ...(query.apiKey ? { Authorization: `Bearer ${query.apiKey}` } : {}),
+          },
+        })
+        if (!res.ok) return { ok: false, error: `HTTP ${res.status}` }
+        const body = (await res.json()) as {
+          data?: Array<{
+            id?: string
+            context_length?: number
+            max_completion_tokens?: number
+            top_provider?: { context_length?: number; max_completion_tokens?: number }
+          }>
+        }
+        const models = (body.data ?? [])
+          .filter((m) => typeof m.id === 'string' && m.id)
+          .map((m) => ({
+            id: m.id as string,
+            contextLength: m.context_length ?? m.top_provider?.context_length,
+            maxOutputTokens: m.max_completion_tokens ?? m.top_provider?.max_completion_tokens,
+          }))
+        return { ok: true, models }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    },
+  )
+
   ipcMain.handle('ai:log-run-failure', (_event, entry: AiRunFailure) => {
     appendRunFailure(entry)
+  })
+
+  // One-shot connectivity probe used by the Shell settings "Test connection" button.
+  // Mirrors the input-validation + genspark key fallback from ai:stream but returns a
+  // single AiChatResponse instead of streaming chunks.
+  ipcMain.handle('ai:chat', async (_event, request: AiChatRequest) => {
+    const provider = request?.settings?.provider
+    let config = provider ? request.settings.providers?.[provider] : undefined
+    if (provider === 'genspark' && config && !config.apiKey) {
+      config = { ...config, apiKey: gskApiKey() }
+    }
+    if (!config?.apiKey) {
+      return {
+        ok: false,
+        error: provider === 'genspark' ? tm('errGskNotLoggedIn') : tm('errNoApiKey', { provider }),
+      }
+    }
+    if (!config.model) {
+      return { ok: false, error: tm('errNoModel') }
+    }
+    try {
+      const result = await chatForProvider(
+        provider,
+        config,
+        String(request.system ?? ''),
+        String(request.user ?? ''),
+      )
+      if (!result.ok) {
+        console.error(`[ai-chat] (${provider}/${config.model}) failed:`, result.error)
+      }
+      return result
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error(`[ai-chat] (${provider}/${config.model}) failed:`, msg)
+      return { ok: false, error: msg }
+    }
   })
 
   ipcMain.handle('ai:stream', async (event, request: AiStreamRequest) => {
@@ -238,8 +350,8 @@ export function registerAiIpc(): void {
 
 // ── ai:* handlers unique to slides ──────────────────────────────────────
 // Must be registered inside registerSlidesIpc (not registerAiIpc): in shell aggregate mode the
-// generic ai:* channels are registered by docs-main.registerAiIpc, and slides' registerAiIpc is
-// never called; docs does not have these channels, so putting them in the wrong place raises
+// generic ai:* channels are registered by the shell's registerSlidesAiIpc import, and slides'
+// registerAiIpc is never called; these slides-only channels must stay here or Electron raises
 // "No handler registered".
 export function registerSlidesOnlyAiIpc(): void {
   // gsk (Genspark CLI) capabilities: AI image generation / media analysis. Returns an error prompt when not logged in.
@@ -258,8 +370,7 @@ export function registerSlidesOnlyAiIpc(): void {
       if (!hasGskAuth()) return { error: tm('errGskCli') }
       if (!gskCloudToolsOn())
         return {
-          error:
-            'Genspark cloud tools are turned off in Settings (AI Model); enable them to use this tool',
+          error: 'Cloud tools are turned off in Settings (AI Model); enable them to use this tool',
         }
       try {
         const r = await gskGenerateImage({
@@ -284,8 +395,7 @@ export function registerSlidesOnlyAiIpc(): void {
       if (!hasGskAuth()) return { error: tm('errGskCli') }
       if (!gskCloudToolsOn())
         return {
-          error:
-            'Genspark cloud tools are turned off in Settings (AI Model); enable them to use this tool',
+          error: 'Cloud tools are turned off in Settings (AI Model); enable them to use this tool',
         }
       try {
         const text = await gskAnalyzeMedia({

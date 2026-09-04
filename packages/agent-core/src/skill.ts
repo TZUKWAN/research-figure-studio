@@ -28,6 +28,8 @@ export interface AgentSkill {
    * their loops and stop promptly.
    */
   executeTool(call: AgentToolCall, signal?: AbortSignal): ToolExecution | Promise<ToolExecution>
+  /** Clear state that belongs to the current conversation when it is reset. */
+  reset?(): void
   /**
    * Claimed-action guard: inspect the run's final assistant text against the
    * tools that actually executed during the run. Return a corrective
@@ -75,6 +77,9 @@ export function composeSkills(id: string, intro: string, skills: AgentSkill[]): 
         return { output: `Unknown tool: ${call.name}`, isError: true, summary: call.name }
       }
       return skill.executeTool(call, signal)
+    },
+    reset: () => {
+      for (const skill of skills) skill.reset?.()
     },
     verifyResponse: (finalText, executed) => {
       for (const skill of skills) {

@@ -8,7 +8,7 @@
  * them to the model and rebuilds the RenderSlide.
  */
 import type { RenderSlide } from '@genoffice/pptx-render'
-import type { SlideComment, SectionInfo } from '@genoffice/pptx-engine'
+import type { SemanticMetadata, SlideComment, SectionInfo } from '@genoffice/pptx-engine'
 import type {
   AiSettings,
   AiStreamChunk,
@@ -65,7 +65,7 @@ export interface OpenResult {
   defaultFont?: string
 }
 
-// ---- Chat attachments (local files fed to the agent via tools; structure copied from apps/docs) ----
+// ---- Chat attachments (local files fed to the agent via tools) ----
 
 /** Image attachment extensions: no text extraction; read as base64 on send and passed to the model as multimodal images with the user message */
 export const ATTACHMENT_IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp'])
@@ -398,6 +398,8 @@ export interface AddElementOp {
   fillColor?: string
   /** Shape stroke (solid color + point width) */
   stroke?: { color: string; widthPt: number }
+  /** Research Figure Studio semantic payload, persisted in the element's cNvPr. */
+  semanticMetadata?: SemanticMetadata
 }
 
 export interface DeleteElementOp {
@@ -878,6 +880,8 @@ export interface EditConnectorEndpointsOp {
   x2Px: number
   y2Px: number
   fitWidthPx: number
+  /** Optional absolute viewport y coordinate for a routed elbow lane. */
+  routeYPx?: number
   start?: { targetId: string; idx: number } | null
   end?: { targetId: string; idx: number } | null
 }
@@ -1215,6 +1219,7 @@ export interface SlidesApi {
     mode?: 'replace' | 'append' | 'replace_at' | 'insert_at',
     atIndex?: number,
     deckName?: string,
+    ownerToken?: string,
   ) => Promise<
     | (OpenResult & {
         appendedFrom?: number
@@ -1479,6 +1484,9 @@ export interface SlidesApi {
       The outermost end registers an AI rollback point and returns its id (null when nothing changed). */
   beginHistoryBatch: () => Promise<boolean>
   endHistoryBatch: () => Promise<number | null>
+  /** Claim/release the session's canonical-deck mutation slot for one renderer AI run. */
+  aiRunBegin: (ownerToken: string) => Promise<boolean>
+  aiRunEnd: (ownerToken: string) => Promise<boolean>
   /** Apply an edit script's collected primitives as ONE atomic op transaction (the executor rolls back on any failure); returns the rebuilt slide or a guided error */
   applyEditScript: (
     op: ApplyEditScriptOp,
@@ -1486,7 +1494,7 @@ export interface SlidesApi {
   /** AI batch surface: apply raw ops as one transaction (atomic/per_op, dry-run supported) */
   applyTxn: (op: ApplyTxnOp) => Promise<ApplyTxnResult | null>
   /** Roll the deck back to an AI rollback point; returns the restored full RenderSlide array, null when the id is unknown */
-  aiSnapshotRestore: (id: number) => Promise<RenderSlide[] | null>
+  aiSnapshotRestore: (id: number, ownerToken?: string) => Promise<RenderSlide[] | null>
   /** Undo/redo (main-process snapshot history): returns the restored full RenderSlide array, null when nothing to undo */
   undo: () => Promise<RenderSlide[] | null>
   redo: () => Promise<RenderSlide[] | null>
@@ -1552,12 +1560,16 @@ export interface SlidesApi {
   onRenamed: (handler: (newPath: string) => void) => () => void
   getAiSettings: () => Promise<AiSettings>
   setAiSettings: (settings: AiSettings) => Promise<void>
+  getPromptDefaults: () => Promise<{
+    agent: Record<string, string>
+    defs: { id: string; titleZh: string; titleEn: string; descZh: string; descEn: string }[]
+  }>
+  getPromptOverrides: () => Promise<Record<string, string>>
+  setPromptOverride: (id: string, text: string) => Promise<boolean>
+  clearPromptOverride: (id: string) => Promise<boolean>
   aiStream: (request: AiStreamRequest) => Promise<void>
   aiStreamCancel: (requestId: string) => Promise<void>
   /** Genspark account status (gsk login state); with withEmail also fetches the email (needs a network request, slower) */
-  aiGskStatus: (withEmail?: boolean) => Promise<GenSparkAccountStatus>
-  /** Open the browser to log into Genspark (fire-and-forget; aiGskStatus turns logged-in once done) */
-  aiGskLogin: () => Promise<void>
   /** Record a run that ended without a usable reply, for post-mortem (fire-and-forget, never throws) */
   aiLogRunFailure: (entry: AiRunFailure) => Promise<void>
   webSearch: (

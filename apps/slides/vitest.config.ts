@@ -31,10 +31,8 @@ export default defineConfig({
         '../../packages/pptx-render/src/preset-geometry.ts',
       ),
       '@genoffice/pptx-render': resolve(here, '../../packages/pptx-render/src/index.ts'),
-      '@genoffice/research-harness': resolve(
-        here,
-        '../../packages/research-harness/src/index.ts',
-      ),
+      '@genoffice/research-harness': resolve(here, '../../packages/research-harness/src/index.ts'),
+      '@genoffice/theme-engine': resolve(here, '../../packages/theme-engine/src/index.ts'),
       '@genoffice/docx-engine/metafile': resolve(
         here,
         '../../packages/docx-engine/src/metafile.ts',
@@ -44,6 +42,7 @@ export default defineConfig({
   test: {
     include: ['tests/**/*.test.ts'],
     environment: 'jsdom',
+    setupFiles: ['./tests/setup.ts'],
     testTimeout: 20000,
   },
 })

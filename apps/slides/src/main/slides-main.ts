@@ -1,7 +1,7 @@
 /**
  * GenOffice Slides main process — pptx parsing/render-tree building/edit application/saving all live
  * here (Node side). The renderer only gets plain-data RenderSlide; edit intents are sent back
- * here to apply. Structure mirrors apps/docs: exports embeddable configure/register/start for
+ * here to apply. Exports embeddable configure/register/start for
  * future shell reuse.
  */
 import {
@@ -52,7 +52,13 @@ import { matchesElementRef } from '@genoffice/pptx-engine/identity'
 import { buildPagePptx, parsePageSpec } from './page-spec'
 import { sniffImageMime } from './media-mime'
 import { getUiLang, normalizeLang, setUiLang } from '@genoffice/i18n'
-import { ProjectStore } from '@genoffice/project-store'
+import {
+  assertAppendChatArgs,
+  assertLoadChatArgs,
+  assertRebindChatArgs,
+  assertResolveChatArgs,
+  ProjectStore,
+} from '@genoffice/project-store'
 import {
   copyElementData,
   findGroupChild,
@@ -225,6 +231,14 @@ import {
   type OpLogEntry,
   type Session,
 } from './session-state'
+import {
+  acquireAiMutation,
+  canRestoreAiSnapshot,
+  claimAiRun,
+  isAiMutationOwner,
+  isAiRunOwner,
+  releaseAiRun,
+} from './ai-run-state'
 import { registerAiIpc, registerSlidesOnlyAiIpc } from './ai-ipc'
 import { listPrivateFontFaces, getPrivateFontData } from './fonts'
 import {
@@ -245,6 +259,7 @@ const lastSlidePaste = new Map<number, { afterIndex: number; undoLen: number }>(
 // by slides:cloud-page-generate are readable (the renderer can't point the reader at arbitrary files)
 const CLOUD_PAGE_PREFIX = 'cloudpptx:'
 const issuedCloudPages = new Set<string>()
+const AI_RUN_STALE_ERROR = 'stale AI run'
 import { registerPresenterIpc } from './presenter-show'
 import { registerAttachmentIpc } from './attachments-ipc'
 
@@ -743,7 +758,7 @@ async function openAndBuild(
   }
 }
 
-/** Directory where AI-generated drafts are saved: the configurable default save folder (falls back to <Documents>/GenOffice) */
+/** Directory where AI-generated drafts are saved: the configurable default save folder (falls back to <Documents>/Metis SD) */
 function getDraftsDir(): string {
   return configuredDefaultSaveDir(app)
 }
@@ -1380,6 +1395,7 @@ export function registerSlidesIpc(): void {
           target: { slide: op.slideIndex, el: op.sourceId },
           p1: { x: toEmu(op.x1Px), y: toEmu(op.y1Px) },
           p2: { x: toEmu(op.x2Px), y: toEmu(op.y2Px) },
+          ...(op.routeYPx != null ? { routeY: toEmu(op.routeYPx) } : {}),
           start: op.start,
           end: op.end,
         },
@@ -1662,6 +1678,7 @@ export function registerSlidesIpc(): void {
       mode?: 'replace' | 'append' | 'replace_at' | 'insert_at',
       atIndex?: number,
       deckName?: string,
+      ownerToken?: string,
     ): Promise<
       | (OpenResult & {
           appendedFrom?: number
@@ -1672,6 +1689,16 @@ export function registerSlidesIpc(): void {
         })
       | { error: string }
     > => {
+      const runOwnerToken = ownerToken?.trim() ? ownerToken : undefined
+      const mutationSession = sessions.get(e.sender.id)
+      const mutationState = mutationSession?.aiRun
+      const releaseMutation = mutationState ? await acquireAiMutation(mutationState) : undefined
+      const ownsMutation = () =>
+        isAiMutationOwner(mutationState, sessions.get(e.sender.id)?.aiRun, runOwnerToken)
+      if (!ownsMutation()) {
+        releaseMutation?.()
+        return { error: AI_RUN_STALE_ERROR }
+      }
       // Every page arrives as a cloud marker (cloudpptx:<path> written by
       // slides:cloud-page-generate, pointing at a one-slide pptx temp file); this handler only
       // reads and lands the bytes.
@@ -1722,6 +1749,7 @@ export function registerSlidesIpc(): void {
           }
           let merged = 0
           if (sources.length > 0) {
+            if (!ownsMutation()) return { error: AI_RUN_STALE_ERROR }
             pushHistory(existing)
             const r = journaledTxn(existing, 'generate', {
               isolation: 'per_op',
@@ -1779,6 +1807,7 @@ export function registerSlidesIpc(): void {
           if (!source) {
             return { error: tm('errMergeFailed') }
           }
+          if (!ownsMutation()) return { error: AI_RUN_STALE_ERROR }
           pushHistory(existing)
           const r = journaledTxn(existing, 'generate', {
             ops: [{ op: 'insertSlidePptx', source, at: atIndex, replace: true }],
@@ -1825,6 +1854,7 @@ export function registerSlidesIpc(): void {
           if (!source) {
             return { error: tm('errMergeFailed') }
           }
+          if (!ownsMutation()) return { error: AI_RUN_STALE_ERROR }
           pushHistory(existing)
           const r = journaledTxn(existing, 'generate', {
             ops: [{ op: 'insertSlidePptx', source, at: atIndex }],
@@ -1851,7 +1881,9 @@ export function registerSlidesIpc(): void {
 
         // replace mode: assemble the whole batch into one multi-page pptx as the new deck base.
         const { bytes } = await assembleDeck()
+        if (!ownsMutation()) return { error: AI_RUN_STALE_ERROR }
         const opened = await openPptx(bytes)
+        if (!ownsMutation()) return { error: AI_RUN_STALE_ERROR }
         const replaceSession: Session = {
           path: '',
           opened,
@@ -1875,6 +1907,8 @@ export function registerSlidesIpc(): void {
         }
       } catch (err) {
         return { error: err instanceof Error ? err.message : String(err) }
+      } finally {
+        releaseMutation?.()
       }
     },
   )
@@ -1919,6 +1953,7 @@ export function registerSlidesIpc(): void {
                 },
               }
             : {}),
+          ...(op.semanticMetadata ? { semanticMetadata: op.semanticMetadata } : {}),
         },
       ],
     })
@@ -3946,6 +3981,20 @@ export function registerSlidesIpc(): void {
     else e.sender.paste()
   })
 
+  ipcMain.handle('slides:ai-run-begin', (e, ownerToken: unknown) => {
+    const session = sessions.get(e.sender.id)
+    if (!session || typeof ownerToken !== 'string') return false
+    return claimAiRun((session.aiRun ??= {}), ownerToken)
+  })
+
+  ipcMain.handle('slides:ai-run-end', (e, ownerToken: unknown) => {
+    const session = sessions.get(e.sender.id)
+    if (!session || typeof ownerToken !== 'string' || !session.aiRun) return false
+    if (!isAiRunOwner(session.aiRun, ownerToken)) return false
+    releaseAiRun(session.aiRun, ownerToken)
+    return true
+  })
+
   ipcMain.handle('slides:history-batch-begin', (e) => {
     const session = sessions.get(e.sender.id)
     if (!session) return false
@@ -3960,12 +4009,21 @@ export function registerSlidesIpc(): void {
     return before ? registerAiSnapshot(session, before) : null
   })
 
-  ipcMain.handle('slides:ai-snapshot-restore', (e, id: number) => {
-    const session = sessions.get(e.sender.id)
-    if (!session || session.masterEdit || session.historyBatch) return null
-    if (!restoreAiSnapshot(session, id)) return null
-    scheduleDeckBroadcast(session)
-    return buildAllRenderSlides(session.opened, session.fitWidthPx)
+  ipcMain.handle('slides:ai-snapshot-restore', async (e, id: number, ownerToken?: string) => {
+    const requestState = sessions.get(e.sender.id)?.aiRun
+    const releaseMutation = requestState ? await acquireAiMutation(requestState) : undefined
+    try {
+      // Re-read after the queue wait: openPptx/new-blank may have replaced this
+      // sender's session meanwhile, so the stale tokenized rollback must neither
+      // mutate the superseded deck nor hand its slides back (canRestoreAiSnapshot).
+      const session = sessions.get(e.sender.id)
+      if (!session || !canRestoreAiSnapshot(requestState, session, ownerToken)) return null
+      if (!restoreAiSnapshot(session, id)) return null
+      scheduleDeckBroadcast(session)
+      return buildAllRenderSlides(session.opened, session.fitWidthPx)
+    } finally {
+      releaseMutation?.()
+    }
   })
 
   ipcMain.handle('slides:undo', (e) => {
@@ -4266,8 +4324,8 @@ html, body { margin: 0; padding: 0; }
 }
 
 // ── project-store IPC (standalone mode) ───────────────────────────────────
-// In shell mode docs-main.registerProjectIpc registers these centrally (idempotent guard,
-// registers once). Slides standalone calls this function.
+// In shell mode apps/shell registers this centrally (the guard keeps registration idempotent).
+// Slides standalone calls this function directly.
 
 let slidesProjectStore: ProjectStore | null = null
 let slidesProjectIpcRegistered = false
@@ -4281,75 +4339,48 @@ export function registerProjectIpc(): void {
   if (slidesProjectIpcRegistered) return
   slidesProjectIpcRegistered = true
 
-  ipcMain.handle(
-    'project:resolveChat',
-    (_event, args: { filePath: string | null; tempChatId?: string }) => {
-      const store = getSlidesProjectStore()
-      store.ensureDefaultProject()
-      if (!args.filePath) {
-        return { projectId: 'default', chatId: args.tempChatId ?? `unsaved-${Date.now()}` }
-      }
-      return store.resolveChatForFile(args.filePath)
-    },
-  )
+  ipcMain.handle('project:resolveChat', (_event, rawArgs: unknown) => {
+    const args = assertResolveChatArgs(rawArgs)
+    const store = getSlidesProjectStore()
+    store.ensureDefaultProject()
+    if (!args.filePath) {
+      return { projectId: 'default', chatId: args.tempChatId ?? `unsaved-${Date.now()}` }
+    }
+    return store.resolveChatForFile(args.filePath)
+  })
 
-  ipcMain.handle(
-    'project:appendChat',
-    (
-      _event,
-      args: {
-        projectId: string
-        chatId: string
-        role: 'user' | 'assistant'
-        text: string
-        tools?: Array<{
-          name: string
-          summary: string
-          isError?: boolean
-          input?: string
-          output?: string
-        }>
-        attachments?: Array<{ name: string; path?: string; ext?: string; sizeBytes?: number }>
-      },
-    ) => {
-      const msg: Parameters<ProjectStore['appendChatMessage']>[2] = {
-        role: args.role,
-        text: args.text,
-      }
-      if (args.tools) msg.tools = args.tools
-      if (args.attachments) msg.attachments = args.attachments
-      getSlidesProjectStore().appendChatMessage(args.projectId, args.chatId, msg)
-    },
-  )
+  ipcMain.handle('project:appendChat', (_event, rawArgs: unknown) => {
+    const args = assertAppendChatArgs(rawArgs)
+    const msg: Parameters<ProjectStore['appendChatMessage']>[2] = {
+      role: args.role,
+      text: args.text,
+    }
+    if (args.tools) msg.tools = args.tools
+    if (args.attachments) msg.attachments = args.attachments
+    getSlidesProjectStore().appendChatMessage(args.projectId, args.chatId, msg)
+  })
 
-  ipcMain.handle(
-    'project:loadChat',
-    (_event, args: { projectId: string; chatId: string; limit?: number }) => {
-      return getSlidesProjectStore().loadChat(args.projectId, args.chatId, args.limit ?? 200)
-    },
-  )
+  ipcMain.handle('project:loadChat', (_event, rawArgs: unknown) => {
+    const args = assertLoadChatArgs(rawArgs)
+    return getSlidesProjectStore().loadChat(args.projectId, args.chatId, args.limit ?? 200)
+  })
 
-  ipcMain.handle(
-    'project:rebindChat',
-    (
-      _event,
-      args: { projectId: string; tempChatId: string; newChatId?: string; newFilePath?: string },
-    ) => {
-      const store = getSlidesProjectStore()
-      if (args.newFilePath) {
-        return store.rebindChatToFile(args.projectId, args.tempChatId, args.newFilePath)
-      }
-      if (args.newChatId) store.rebindChat(args.projectId, args.tempChatId, args.newChatId)
-      return { projectId: args.projectId, chatId: args.newChatId ?? args.tempChatId }
-    },
-  )
+  ipcMain.handle('project:rebindChat', (_event, rawArgs: unknown) => {
+    const args = assertRebindChatArgs(rawArgs)
+    const store = getSlidesProjectStore()
+    if (args.newFilePath) {
+      return store.rebindChatToFile(args.projectId, args.tempChatId, args.newFilePath)
+    }
+    if (args.newChatId) store.rebindChat(args.projectId, args.tempChatId, args.newChatId)
+    return { projectId: args.projectId, chatId: args.newChatId ?? args.tempChatId }
+  })
 }
 
 export function createSlidesWindow(openPath?: string | null): BrowserWindow {
   const win = new BrowserWindow({
     width: 1280,
     height: 840,
-    title: 'GenOffice Slides',
+    title: 'Metis Diagram',
     ...(process.platform === 'darwin'
       ? { titleBarStyle: 'hiddenInset' as const }
       : {

@@ -3,9 +3,6 @@ import type { IpcRendererEvent } from 'electron'
 import { AI_PROVIDERS, getProviderAdapter } from '@genoffice/ai-provider'
 import type { AiSettings } from '@genoffice/ai-provider'
 import type {
-  AccountLoginEvent,
-  AccountStatus,
-  CloudProjectsSnapshot,
   HomeApi,
   RecentEntry,
   RecentPage,
@@ -76,20 +73,8 @@ const homeApi: HomeApi = {
   async browse() {
     await ipcRenderer.invoke(HOME_CHANNELS.browse)
   },
-  async newDoc(opts) {
-    await ipcRenderer.invoke(HOME_CHANNELS.newDoc, opts)
-  },
-  async newSheet(opts) {
-    await ipcRenderer.invoke(HOME_CHANNELS.newSheet, opts)
-  },
   async newSlide(opts) {
     await ipcRenderer.invoke(HOME_CHANNELS.newSlide, opts)
-  },
-  async newMarkdown(opts) {
-    await ipcRenderer.invoke(HOME_CHANNELS.newMarkdown, opts)
-  },
-  async newPdf(opts) {
-    await ipcRenderer.invoke(HOME_CHANNELS.newPdf, opts)
   },
   async removeRecent(paths) {
     await ipcRenderer.invoke(HOME_CHANNELS.removeRecent, paths)
@@ -133,36 +118,9 @@ const homeApi: HomeApi = {
     if (channel !== 'stable' && channel !== 'beta') throw new Error('Invalid update channel.')
     await ipcRenderer.invoke(HOME_CHANNELS.setUpdateChannel, channel)
   },
-  async accountStatus() {
-    const result: unknown = await ipcRenderer.invoke(HOME_CHANNELS.accountStatus)
-    return (result ?? { loggedIn: false }) as AccountStatus
-  },
-  async accountLogin() {
-    const result: unknown = await ipcRenderer.invoke(HOME_CHANNELS.accountLogin)
-    return result === true
-  },
-  onAccountLogin(handler) {
-    const listener = (_event: IpcRendererEvent, ev: AccountLoginEvent) => handler(ev)
-    ipcRenderer.on(HOME_CHANNELS.accountLoginEvent, listener)
-    return () => ipcRenderer.removeListener(HOME_CHANNELS.accountLoginEvent, listener)
-  },
-  async openLoginUrl() {
-    await ipcRenderer.invoke(HOME_CHANNELS.accountLoginOpenUrl)
-  },
-  async accountLogout() {
-    await ipcRenderer.invoke(HOME_CHANNELS.accountLogout)
-  },
   async getAppVersion() {
     const result: unknown = await ipcRenderer.invoke(HOME_CHANNELS.getAppVersion)
     return typeof result === 'string' ? result : ''
-  },
-  async onboardingSeen() {
-    const result: unknown = await ipcRenderer.invoke(HOME_CHANNELS.onboardingSeen)
-    return result === true
-  },
-  async setOnboardingSeen() {
-    const result: unknown = await ipcRenderer.invoke(HOME_CHANNELS.setOnboardingSeen)
-    return result === true
   },
   async getTheme() {
     const result: unknown = await ipcRenderer.invoke(HOME_CHANNELS.getTheme)
@@ -172,15 +130,6 @@ const homeApi: HomeApi = {
     if (theme !== 'light' && theme !== 'dark' && theme !== 'system')
       throw new Error('Invalid theme.')
     await ipcRenderer.invoke(HOME_CHANNELS.setTheme, theme)
-  },
-  async getAnalyticsEnabled() {
-    const result: unknown = await ipcRenderer.invoke(HOME_CHANNELS.getAnalyticsEnabled)
-    return result !== false
-  },
-  async setAnalyticsEnabled(enabled) {
-    if (typeof enabled !== 'boolean') throw new Error('Invalid analytics consent.')
-    const result: unknown = await ipcRenderer.invoke(HOME_CHANNELS.setAnalyticsEnabled, enabled)
-    return result === true
   },
   async getDefaultSaveDir() {
     const result: unknown = await ipcRenderer.invoke(HOME_CHANNELS.getDefaultSaveDir)
@@ -197,55 +146,35 @@ const homeApi: HomeApi = {
     ipcRenderer.on('app:theme-changed', listener)
     return () => ipcRenderer.removeListener('app:theme-changed', listener)
   },
-  async openGenTeam() {
-    await ipcRenderer.invoke(HOME_CHANNELS.openGenTeam)
-  },
-  async openCreditUsage() {
-    await ipcRenderer.invoke(HOME_CHANNELS.openCreditUsage)
-  },
-  async openGitHubRepo() {
-    await ipcRenderer.invoke(HOME_CHANNELS.openGitHubRepo)
-  },
-  async githubStars() {
-    const result: unknown = await ipcRenderer.invoke(HOME_CHANNELS.githubStars)
-    return typeof result === 'number' && Number.isFinite(result) ? result : null
-  },
-  async starPromptShouldShow() {
-    const result: unknown = await ipcRenderer.invoke(HOME_CHANNELS.starPromptShouldShow)
-    const raw = (result ?? {}) as { show?: unknown; docOpens?: unknown }
-    return {
-      show: raw.show === true,
-      docOpens:
-        typeof raw.docOpens === 'number' && Number.isFinite(raw.docOpens) ? raw.docOpens : 0,
-    }
-  },
-  async starPromptAction(action) {
-    if (action !== 'starred' && action !== 'later') throw new Error('Invalid star prompt action.')
-    await ipcRenderer.invoke(HOME_CHANNELS.starPromptAction, action)
-  },
-  async cloudProjectsCached() {
-    const result: unknown = await ipcRenderer.invoke(HOME_CHANNELS.cloudProjectsCached)
-    return asCloudProjectsSnapshot(result)
-  },
-  async cloudProjectsSync() {
-    // failures (network / CLI) resolve to null so the renderer keeps whatever it has
-    try {
-      const result: unknown = await ipcRenderer.invoke(HOME_CHANNELS.cloudProjects)
-      return asCloudProjectsSnapshot(result)
-    } catch {
-      return null
-    }
-  },
-  async openCloudProject(projectUrl) {
-    if (typeof projectUrl !== 'string' || !projectUrl) throw new Error('Invalid project URL.')
-    await ipcRenderer.invoke(HOME_CHANNELS.openCloudProject, projectUrl)
-  },
-  // AI settings channels are registered once by the shell's aggregated docs handlers
+  // AI settings channels are registered once by the shell main process.
   async getAiSettings() {
     return (await ipcRenderer.invoke('ai:get-settings')) as AiSettings
   },
   async setAiSettings(settings) {
     await ipcRenderer.invoke('ai:set-settings', settings)
+  },
+  async getPromptDefaults() {
+    const result: unknown = await ipcRenderer.invoke('prompts:defaults')
+    return result as {
+      agent: Record<string, string>
+      defs: { id: string; titleZh: string; titleEn: string; descZh: string; descEn: string }[]
+    }
+  },
+  async getPromptOverrides() {
+    const result: unknown = await ipcRenderer.invoke('prompts:get-overrides')
+    return result as Record<string, string>
+  },
+  async setPromptOverride(id, text) {
+    if (typeof id !== 'string' || !id || typeof text !== 'string') {
+      throw new Error('Invalid prompt override.')
+    }
+    const result: unknown = await ipcRenderer.invoke('prompts:set-override', id, text)
+    return result === true
+  },
+  async clearPromptOverride(id) {
+    if (typeof id !== 'string' || !id) throw new Error('Invalid prompt override.')
+    const result: unknown = await ipcRenderer.invoke('prompts:clear-override', id)
+    return result === true
   },
   getAiProviders() {
     return AI_PROVIDERS.map((meta) => {
@@ -260,6 +189,14 @@ const homeApi: HomeApi = {
       return { ...meta, defaultBaseUrl }
     })
   },
+  async probeModels(query) {
+    const result: unknown = await ipcRenderer.invoke('ai:probe-models', query)
+    return result as {
+      ok: boolean
+      models?: { id: string; contextLength?: number; maxOutputTokens?: number }[]
+      error?: string
+    }
+  },
   async testAiSettings(settings) {
     const result: unknown = await ipcRenderer.invoke('ai:chat', {
       settings,
@@ -271,17 +208,6 @@ const homeApi: HomeApi = {
       ? { ok: true }
       : { ok: false, error: typeof raw.error === 'string' ? raw.error : 'Connection failed' }
   },
-}
-
-function asCloudProjectsSnapshot(result: unknown): CloudProjectsSnapshot | null {
-  if (
-    result &&
-    typeof result === 'object' &&
-    Array.isArray((result as CloudProjectsSnapshot).projects)
-  ) {
-    return result as CloudProjectsSnapshot
-  }
-  return null
 }
 
 contextBridge.exposeInMainWorld('aiOffice', homeApi)
@@ -310,6 +236,10 @@ const projectApi: ProjectHomeApi = {
   async moveFile(filePath, projectId) {
     await ipcRenderer.invoke(PROJECT_CHANNELS.moveFile, { filePath, projectId })
   },
+  async importFiles(projectId) {
+    const result: unknown = await ipcRenderer.invoke(PROJECT_CHANNELS.importFiles, { projectId })
+    return Array.isArray(result) ? (result as string[]) : []
+  },
   async getTimeline(projectId, limit) {
     const result: unknown = await ipcRenderer.invoke(PROJECT_CHANNELS.timeline, {
       projectId,
@@ -334,9 +264,6 @@ const tabsApi: TabsApi = {
   },
   async showMenu(x, y) {
     await ipcRenderer.invoke(TABS_CHANNELS.showMenu, x, y)
-  },
-  async showNewMenu(x, y) {
-    await ipcRenderer.invoke(TABS_CHANNELS.showNewMenu, x, y)
   },
   async reorder(id, toIndex) {
     await ipcRenderer.invoke(TABS_CHANNELS.reorder, id, toIndex)

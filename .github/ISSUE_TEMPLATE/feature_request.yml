@@ -5,16 +5,15 @@ body:
   - type: dropdown
     id: app
     attributes:
-      label: App
+      label: Area
       options:
-        - GenOffice Docs (docs)
-        - GenOffice Sheets (sheets)
-        - GenOffice Slides (slides)
-        - GenOffice PDF (pdf)
-        - GenOffice Markdown (markdown)
-        - Shell / home screen
-        - AI panel / providers
-        - Whole suite
+        - Canvas editor
+        - Home screen / project list
+        - AI panel / BYOK providers
+        - File import, export, or PowerPoint compatibility
+        - Theme, language, or accessibility
+        - Build / packaging
+        - Whole product
     validations:
       required: true
   - type: textarea

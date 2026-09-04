@@ -11,7 +11,8 @@ import type { AiProviderId } from '../src/types'
 describe('defaultAiSettings', () => {
   it('gives every provider its default model and an empty key by default', () => {
     const settings = defaultAiSettings()
-    expect(settings.provider).toBe('genspark')
+    expect(settings.provider).toBe('custom')
+    expect(AI_PROVIDERS.some((provider) => provider.id === settings.provider)).toBe(true)
     for (const meta of AI_PROVIDERS) {
       expect(settings.providers[meta.id].apiKey).toBe('')
       expect(settings.providers[meta.id].model).toBe(meta.defaultModel)
@@ -29,12 +30,11 @@ describe('defaultAiSettings', () => {
 
 describe('provider model catalog', () => {
   it('offers DeepSeek Vision Exp only through the direct BYOK provider', () => {
-    const genspark = AI_PROVIDERS.find((provider) => provider.id === 'genspark')!
     const deepseek = AI_PROVIDERS.find((provider) => provider.id === 'deepseek')!
 
     expect(deepseek.models).toContain('deepseek-v4-flash-vision-exp')
-    expect(genspark.models).not.toContain('deep-seek-v4-flash')
-    expect(genspark.models).not.toContain('deep-seek-v4-flash-vision-exp-openrouter')
+    // the retired login provider is absent from the catalog entirely
+    expect(AI_PROVIDERS.find((provider) => provider.id === 'genspark')).toBeUndefined()
   })
 })
 
@@ -62,6 +62,27 @@ describe('resolveAiSettings', () => {
   it('defaults the legacy base URL to the OpenAI endpoint when omitted', () => {
     const resolved = resolveAiSettings({ apiKey: 'legacy-key' }, defaultAiSettings())
     expect(resolved.providers.custom.baseUrl).toBe('https://api.openai.com/v1')
+  })
+
+  it('migrates a legacy Genspark selection to the BYOK default without discarding provider configs', () => {
+    const defaults = defaultAiSettings()
+    const resolved = resolveAiSettings(
+      {
+        provider: 'genspark',
+        providers: {
+          genspark: { apiKey: 'legacy-key', model: 'legacy-model' },
+          gemini: { apiKey: 'stored-gemini-key', model: 'gemini-2.5-pro' },
+        } as never,
+      },
+      defaults,
+    )
+
+    expect(resolved.provider).toBe('custom')
+    expect(resolved.providers.genspark).toEqual({ apiKey: 'legacy-key', model: 'legacy-model' })
+    expect(resolved.providers.gemini).toEqual({
+      apiKey: 'stored-gemini-key',
+      model: 'gemini-2.5-pro',
+    })
   })
 
   it('merges stored multi-provider settings over the defaults, provider by provider', () => {
@@ -134,12 +155,14 @@ describe('resolveAiSettings', () => {
 })
 
 describe('activeProvider', () => {
-  it('honors a configured BYOK provider and falls back to genspark otherwise', () => {
+  it('requires a configured BYOK provider for runtime requests without changing its stored selection', () => {
     const settings = defaultAiSettings()
-    expect(activeProvider(settings)).toBe('genspark')
+    expect(settings.provider).toBe('custom')
+    expect(activeProvider(settings)).toBe('custom') // custom's default model is empty
 
     settings.provider = 'kimi'
-    expect(activeProvider(settings)).toBe('genspark') // no key yet
+    expect(settings.provider).toBe('kimi')
+    expect(activeProvider(settings)).toBe('custom') // no key yet
     settings.providers.kimi.apiKey = 'sk-user'
     expect(activeProvider(settings)).toBe('kimi')
   })
@@ -148,17 +171,17 @@ describe('activeProvider', () => {
     const settings = defaultAiSettings()
     settings.provider = 'custom'
     settings.providers.custom.apiKey = 'k'
-    expect(activeProvider(settings)).toBe('genspark')
+    expect(activeProvider(settings)).toBe('custom')
     settings.providers.custom.baseUrl = 'http://localhost:1234/v1'
-    expect(activeProvider(settings)).toBe('genspark') // custom's default model is empty
+    expect(activeProvider(settings)).toBe('custom') // custom's default model is empty
     settings.providers.custom.model = 'my-model'
     expect(activeProvider(settings)).toBe('custom')
   })
 
-  it('falls back to genspark for unknown ids from a hand-edited settings file', () => {
+  it('falls back to custom for unknown ids from a hand-edited settings file', () => {
     const settings = defaultAiSettings()
     settings.provider = 'nonsense' as AiProviderId
-    expect(activeProvider(settings)).toBe('genspark')
+    expect(activeProvider(settings)).toBe('custom')
   })
 
   it('genspark never requires a key (injected from the gsk login at request time)', () => {

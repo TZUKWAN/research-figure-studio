@@ -1,67 +1,77 @@
-# 裁剪侦察报告（Task 2 产出）
+# Trim Survey Report (Task 2 Output, Historical)
 
-日期：2026-08-26 · 分支 research-studio · 基线 0a2c25d
+> Historical audit record from 2026-08-26. The decisions and evidence below are
+> retained for research traceability; paths, line numbers, and staged actions
+> describe that earlier trim and are not current development instructions.
 
-## 0. 结论变更（相对设计文档 v1.1 §5.2）
+Date: 2026-08-26 · Branch: research-studio · Baseline: 0a2c25d
 
-| 原删除清单项 | 实测裁决 | 依据 |
-|---|---|---|
-| packages/docx-engine | **改为保留** | `apps/slides/src/renderer/image-loader.ts:7` 经 vite/tsconfig alias 直连 `@genoffice/docx-engine/metafile`（slides/electron.vite.config.ts:29、vitest.config.ts:34、tsconfig.json:17）；附件链 `slides attachments-ipc.ts:12 → file-parse(src/docx.ts:1) → docx-engine`。metafile.ts 仅 69 行依赖本地 vendor emf-converter |
-| packages/pdf2docx | 维持删除 | 仅 shell 的 PDF 转换工具链使用（见下），科研绘图 P0 无 PDF 导入需求；删除需同步手术 shell |
-| apps/docs·sheets·pdf·markdown | 维持删除 | 但 shell/src/main/index.ts 是六合一宿主，需按 §2 分步手术 |
+## 0. Decision Changes (Compared with Design Document v1.1 Section 5.2)
 
-## 1. 引用点清单
+| Original removal item            | Verified decision | Evidence                                                                                                                                                                                                                                                                                                                                                                                          |
+| -------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| packages/docx-engine             | **Keep**          | `apps/slides/src/renderer/image-loader.ts:7` resolves `@genoffice/docx-engine/metafile` through the Vite/TypeScript aliases (`slides/electron.vite.config.ts:29`, `vitest.config.ts:34`, `tsconfig.json:17`). The attachment chain is `slides attachments-ipc.ts:12 -> file-parse(src/docx.ts:1) -> docx-engine`. `metafile.ts` is only 69 lines and depends on the local vendor `emf-converter`. |
+| packages/pdf2docx                | Keep removed      | Used only by the shell PDF conversion toolchain below. PDF import is not a P0 research-figure requirement; removal must be synchronized with the shell surgery.                                                                                                                                                                                                                                   |
+| apps/docs, sheets, pdf, markdown | Keep removed      | `shell/src/main/index.ts` is a six-editor host and must be edited in the staged sequence from Section 2.                                                                                                                                                                                                                                                                                          |
 
-### A. shell/src/main/index.ts（核心手术对象，~4000 行）
-- L92-117 区间内含多段多行 import（docs/sheets 相关符号待逐段确认）
-- L118 `../../../docs/src/main/docs-main` → 删
-- L119 `../../../sheets/src/gateway/csv-import` (blankXlsxBuffer) → 删
-- L120 `../../../pdf/src/main/blank-pdf` (blankPdfBuffer) → 删
-- L121-137 `sheets-main` 多符号 → 删
-- L138-149 `slides-main` → **保留**
-- L150-160 `pdf-main` → 删
-- L161 `pdf/src/shared/ipc` (PDF_CHANNELS) → 删
-- L162-164 `./pdf2(docx|pptx|xlsx)-local` → 删（文件一并删）
-- L165 `./pdf-password-dialog` → 待定：仅服务 PDF 打开密码流，随 pdf 删除一并移除（含 preload/renderer 的 pdf-password 入口，electron.vite.config.ts:18/32）
-- L166-175 `markdown-main` → 删
-- 使用点：L3675/3749/3813/3864/3923/3974 三个 convertPdf* handler；TabKind case 分发（2343/2393/2961 一带）待精确圈定
-- L198-199 注释提及 apps/docs/out 等 → 改注释
+## 1. Historical Reference Inventory
 
-### B. electron-builder.cjs（506 行）
-- L78 断言数组 `'../pdf/node_modules/harfbuzzjs/hb-subset.wasm'` → 删条目
-- L87-137 OCR helper 编译段（VISION_OCR_HELPER / WIN_OCR_HELPER 指向 pdf2docx/ocr-helper）→ 整段删；**win32 构建时 L127 会因文件缺失直接 throw，是 dist:dir 硬阻塞**
-- L179-195 assertUniversalSidecar（sheets xlsx-sidecar）→ 函数删 + L474 调用点删
-- L197-211 assertModuleTreesPresent 五目录 → 只留 `../slides/out`
-- L235-253 extraResources modules 五映射 → 只留 slides
-- L256-263 pdfium.wasm / hb-subset.wasm 条目 → 删（服务 pdf 文本引擎）
-- L264-274 OCR helper 两条 extraResources → 删
-- L291-346 fileAssociations → 只留 pptx
-- L348-372 mac / L373-386 win / L393-438 linux 的 xlsx-sidecar extraResources → 删
-- L471-477 beforePack 同步简化
+### A. shell/src/main/index.ts (primary surgery target, approximately 4,000 lines)
 
-### C. shell 其他文件
-- src/main/pdf2docx-local.ts / pdf2pptx-local.ts / pdf2xlsx-local.ts / pdf-password-dialog.ts → 随手术删
-- src/preload/pdf-password.ts、src/renderer/pdf-password.html → 删（electron.vite.config.ts L18/L32 input 同步删）
-- src/shared/home-api.ts / tabs-api.ts 的 TabKind → 收缩为 slides（home renderer 卡片同步收缩，Step B 圈定）
-- tsconfig.json include L25 `../../packages/pdf2docx/src/bidi-js.d.ts` → 删行
-- package.json L26 `@genoffice/docx-engine` → **保留**（docx-engine 保留所致）
-- cloud-projects.ts:3 依赖 @genoffice/ai-search → ai-search 保留 ✓
+- Lines 92-117 contain several multiline imports; confirm the docs/sheets symbols individually.
+- Line 118 `../../../docs/src/main/docs-main` -> remove.
+- Line 119 `../../../sheets/src/gateway/csv-import` (`blankXlsxBuffer`) -> remove.
+- Line 120 `../../../pdf/src/main/blank-pdf` (`blankPdfBuffer`) -> remove.
+- Lines 121-137: remove the `sheets-main` symbols.
+- Lines 138-149: keep `slides-main`.
+- Lines 150-160: remove `pdf-main`.
+- Line 161: remove `pdf/src/shared/ipc` (`PDF_CHANNELS`).
+- Lines 162-164: remove `./pdf2(docx|pptx|xlsx)-local` and the files.
+- Line 165: `./pdf-password-dialog` is pending; it serves only the PDF password flow and can be removed with PDF support, including the preload/renderer password entry (`electron.vite.config.ts:18/32`).
+- Lines 166-175: remove `markdown-main`.
+- Usage sites: lines 3675/3749/3813/3864/3923/3974 contain three `convertPdf*` handlers; the `TabKind` case dispatch near lines 2343/2393/2961 still needs exact scoping.
+- Lines 198-199 mention apps/docs/out in comments; rewrite those comments.
+
+### B. electron-builder.cjs (506 lines)
+
+- Line 78: remove `'../pdf/node_modules/harfbuzzjs/hb-subset.wasm'` from the assertion list.
+- Lines 87-137: remove the OCR helper build block (`VISION_OCR_HELPER` / `WIN_OCR_HELPER` point to `pdf2docx/ocr-helper`). **On win32, line 127 throws when the file is missing, which blocks `dist:dir`.**
+- Lines 179-195: remove `assertUniversalSidecar` (the sheets xlsx sidecar) and its call at line 474.
+- Lines 197-211: reduce `assertModuleTreesPresent` from five directories to `../slides/out`.
+- Lines 235-253: reduce the five `extraResources` module mappings to Slides only.
+- Lines 256-263: remove the `pdfium.wasm` / `hb-subset.wasm` entries used by the PDF text engine.
+- Lines 264-274: remove the two OCR helper `extraResources` entries.
+- Lines 291-346: keep only the pptx file association.
+- Lines 348-372, 373-386, and 393-438: remove xlsx-sidecar resources from macOS, Windows, and Linux.
+- Lines 471-477: simplify `beforePack` accordingly.
+
+### C. Other shell files
+
+- Remove `src/main/pdf2docx-local.ts`, `pdf2pptx-local.ts`, `pdf2xlsx-local.ts`, and `pdf-password-dialog.ts` with the surgery.
+- Remove `src/preload/pdf-password.ts` and `src/renderer/pdf-password.html`; synchronize the `electron.vite.config.ts` inputs at lines 18 and 32.
+- Reduce `TabKind` in `src/shared/home-api.ts` and `tabs-api.ts` to Slides; reduce the Home renderer cards in Step B.
+- Remove line 25 of `tsconfig.json`, which includes `../../packages/pdf2docx/src/bidi-js.d.ts`.
+- Keep `@genoffice/docx-engine` at line 26 of `package.json` because docx-engine is retained.
+- Keep `@genoffice/ai-search` from `cloud-projects.ts:3`; the dependency remains live.
 
 ### D. e2e/
-- playwright：11 个 sheets-*.spec、pdf-fit-zoom、markdown-tab.spec 随 app 失效 → 删除文件；home/new-file-tab/onboarding 可能断言六编辑器入口 → Step B 后实测裁定；slides-font-manager/theme-* 保留
-- Phase 1 不以 e2e 通过为收口标准（记录待适配）
+
+- Remove the 11 `sheets-*.spec` files, `pdf-fit-zoom`, and `markdown-tab.spec` because their apps are removed. Re-evaluate whether `home/new-file-tab/onboarding` assert six editor entries after Step B; keep `slides-font-manager/theme-*`.
+- Phase 1 does not use passing e2e tests as its completion gate; record the required adaptations.
 
 ### E. .github/workflows/ci.yml
-- 含 docs/sheets/markdown/pdf2docx 引用 → 本地无 CI 执行；做最小清理（删除明确指向被删 app 的 job/矩阵条目），不作为冒烟关卡
 
-### F. 无碍确认
-- 根 package.json workspaces 通配 apps/* packages/* → 删目录即可
-- fixtures/ 保留（不影响构建）
-- pptx-render→pptx-engine、ai-provider→agent-core 依赖方向全部健康
-- scripts/ pagination-baseline*.msj、tools/*.py 服务 docs 字体工程 → 保留不动（不进构建图）
+- It contains docs/sheets/markdown/pdf2docx references. CI is not run locally; make the minimum cleanup by removing jobs and matrix entries that explicitly target deleted apps. Do not use this as a smoke-test gate.
 
-## 2. 分步执行序（Task 3 细化为三波，每波独立验证）
+### F. Safe-to-retain checks
 
-- **Wave 3a**：删 `packages/pdf2docx` + ee/ → shell/index.ts 移除三个 convertPdf* handler 与相关 import/文件 → typecheck(slides+shell)
-- **Wave 3b**：删 `apps/{docs,sheets,pdf,markdown}` → index.ts 大手术（import/初始化/case 分支/Home renderer TabKind 收缩）→ typecheck + vitest(slides+pptx-engine) + dev 冒烟前置检查
-- **Wave 3c**：electron-builder.cjs 按 §B 清理 → npm install 重生成 lockfile → dist:dir 冒烟
+- The root `package.json` uses `apps/*` and `packages/*` workspace globs, so directory removal is sufficient.
+- Keep `fixtures/`; it does not affect the build.
+- The `pptx-render -> pptx-engine` and `ai-provider -> agent-core` dependency directions are healthy.
+- Keep `scripts/pagination-baseline*.mjs` and `tools/*.py`, which serve the Docs font tooling and are outside the build graph.
+
+## 2. Historical Staged Execution (Task 3 Split into Independently Verified Waves)
+
+- **Wave 3a**: remove `packages/pdf2docx` and `ee/`; remove the three `convertPdf*` handlers, related imports, and files from `shell/index.ts`; run `typecheck(slides+shell)`.
+- **Wave 3b**: remove `apps/{docs,sheets,pdf,markdown}`; perform the import/initialization/case-branch surgery in `index.ts` and reduce the Home renderer `TabKind`; run typecheck, Vitest for Slides and pptx-engine, and the preflight dev smoke check.
+- **Wave 3c**: clean `electron-builder.cjs` according to Section B; run `npm install` to regenerate the lockfile; run the `dist:dir` smoke check.

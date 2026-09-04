@@ -4,7 +4,7 @@
  * calling the LLM to write HTML and landing it. Page count is guaranteed by the for loop -> cures
  * "planned N pages but only 1 remains" for good.
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { createSlidesSkill, type DeckAccess } from '../src/renderer/ai/slides-skill'
 import type { RenderSlide } from '@genoffice/pptx-render'
 import type { AgentToolCall } from '../src/shared/ipc'
@@ -183,6 +183,46 @@ const deckCall = (n: number, insertMode?: 'replace' | 'append'): AgentToolCall =
 })
 
 describe('generate_deck self-driven page-by-page generation', () => {
+  it('passes the cancellation signal to page landing so a stale result cannot write', async () => {
+    let releaseLanding!: () => void
+    const landing = new Promise<void>((resolve) => {
+      releaseLanding = resolve
+    })
+    let landingStarted!: () => void
+    const started = new Promise<void>((resolve) => {
+      landingStarted = resolve
+    })
+    const controller = new AbortController()
+    let wrote = false
+    const { access } = makeAccess()
+    const landGeneratedPages = vi.fn(
+      async (
+        _markers: string[],
+        _mode: 'replace' | 'append' | 'insert_at' = 'replace',
+        _deckName?: string,
+        _insertAt?: number,
+        signal?: AbortSignal,
+      ) => {
+        landingStarted()
+        await landing
+        if (signal?.aborted) return { ok: false, error: 'cancelled' }
+        wrote = true
+        return { ok: true, pages: 1 }
+      },
+    )
+    access.landGeneratedPages = landGeneratedPages
+
+    const resultPromise = createSlidesSkill(access).executeTool!(deckCall(1), controller.signal)
+    await started
+    controller.abort()
+    releaseLanding()
+
+    await resultPromise
+    expect(landGeneratedPages).toHaveBeenCalled()
+    expect(landGeneratedPages.mock.calls[0]?.[4]).toBe(controller.signal)
+    expect(wrote).toBe(false)
+  })
+
   it('plans 5 pages → tool loop calls the LLM 5 times to write pages → lands 5 pages → progress complete', async () => {
     const { access, genPageCalls, getPages } = makeAccess()
     const skill = createSlidesSkill(access)

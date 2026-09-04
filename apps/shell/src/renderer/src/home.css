@@ -1,21 +1,21 @@
 /* Shared chrome/AI-panel tokens come from @genoffice/ui/tokens.css (imported
  * before this file in main.tsx); only shell-specific tokens live here. */
 :root {
-  /* Genspark DS v4.1: guide/onboarding accent is the brand blue */
-  --accent: #0f7fff;
-  --accent-hover: #0e72e5;
+  /* Anthropic-style warm scheme: terracotta accent on cream surfaces */
+  --accent: #d97757;
+  --accent-hover: #c4633f;
   /* selected-option tint for the shared dropdown (gs-dd) */
-  --accent-soft: #eaf0fd;
+  --accent-soft: #f8ece3;
   --modal-width-sm: 480px;
-  --avatar-bg: #e8ebef;
-  --badge-bg: #eaf0fd;
-  --checkbox-bg: #ececec;
-  --timeline-user-bg: #eef1f5;
-  --timeline-user-text: #5a6170;
+  --avatar-bg: #ede9e0;
+  --badge-bg: #f8ece3;
+  --checkbox-bg: #ecebe6;
+  --timeline-user-bg: #f1efe8;
+  --timeline-user-text: #5f5b52;
   /* lift for the active segment in gray-track tab pills */
   --shadow-pill: 0 1px 2px rgb(0 0 0 / 8%);
 
-  /* genoffice-logo.svg is pure black-and-white; dark themes flip it to 1 */
+  /* text wordmark replaces the old logo image; no inversion needed */
   --logo-invert: 0;
 }
 
@@ -23,11 +23,11 @@
 
 /* Explicit dark: [data-theme="dark"] on <html> */
 [data-theme='dark'] {
-  --accent: #3f99ff;
-  --accent-hover: #5ba5ff;
-  --accent-soft: #24354d;
+  --accent: #e08a67;
+  --accent-hover: #efa07e;
+  --accent-soft: #3d2c24;
   --avatar-bg: #333;
-  --badge-bg: #2a3a4a;
+  --badge-bg: #3d2c24;
   --checkbox-bg: #333;
   --timeline-user-bg: #2a2a3a;
   --timeline-user-text: #b0b0c0;
@@ -38,11 +38,11 @@
 /* System dark: no data-theme or data-theme="system" — follow OS preference */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']):not([data-theme='dark']) {
-    --accent: #3f99ff;
-    --accent-hover: #5ba5ff;
-    --accent-soft: #24354d;
+    --accent: #e08a67;
+    --accent-hover: #efa07e;
+    --accent-soft: #3d2c24;
     --avatar-bg: #333;
-    --badge-bg: #2a3a4a;
+    --badge-bg: #3d2c24;
     --checkbox-bg: #333;
     --timeline-user-bg: #2a2a3a;
     --timeline-user-text: #b0b0c0;
@@ -121,6 +121,15 @@ body.vib .home {
   height: 28px;
   width: auto;
   filter: invert(var(--logo-invert));
+}
+
+.logo-wordmark {
+  font-family: var(--font-display);
+  font-size: 19px;
+  line-height: 28px;
+  letter-spacing: 0.2px;
+  color: var(--text-primary);
+  white-space: nowrap;
 }
 
 .sidebar-nav {
@@ -358,10 +367,11 @@ body.vib .home {
 
 .hero-title {
   margin: 0;
-  font-size: 28px;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-  line-height: 1.3;
+  font-family: var(--font-display);
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1.35;
   color: var(--text-primary);
 }
 
@@ -1292,7 +1302,7 @@ body.vib .home {
   animation: menu-in 0.1s ease;
 }
 
-/* empty-project onboarding copy — centered in the space below the toolbar */
+/* empty-list hint copy — centered in the space below the toolbar */
 .content:has(.proj-empty) {
   display: flex;
   flex-direction: column;

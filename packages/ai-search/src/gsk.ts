@@ -30,6 +30,8 @@ import { genofficeApiKey } from './genoffice-auth'
 const SEARCH_TIMEOUT_MS = 60_000
 const GENERATE_TIMEOUT_MS = 600_000
 const MAX_BUFFER = 32 * 1024 * 1024
+export const HOSTED_TOOL_UNAVAILABLE_MESSAGE =
+  'This hosted tool is unavailable because no compatible local configuration was found.'
 
 // ── CLI resolution & auth ───────────────────────────────────────────
 
@@ -386,7 +388,7 @@ async function toolCliPost(
   signal?: AbortSignal,
 ): Promise<unknown> {
   const key = gskApiKey()
-  if (!key) throw new Error('Not logged in to Genspark (gsk login)')
+  if (!key) throw new Error(HOSTED_TOOL_UNAVAILABLE_MESSAGE)
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   const onAbort = () => controller.abort()

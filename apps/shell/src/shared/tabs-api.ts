@@ -1,4 +1,4 @@
-export type TabKind = 'home' | 'docs' | 'sheets' | 'slides' | 'pdf' | 'markdown'
+export type TabKind = 'home' | 'slides'
 
 /** one open tab in the top tab strip; Home is always id 'home' and not closable */
 export interface TabSummary {
@@ -20,18 +20,17 @@ export interface TabsApi {
    */
   showMenu(x: number, y: number): Promise<void>
   /**
-   * pop up the native "+" new-file menu (new doc/sheet/slides, open local
+   * pop up the native "+" new-file menu (new Slides, open local Slides
    * file) at (x, y) in window CSS coordinates. Native for the same reason
    * as showMenu.
    */
-  showNewMenu(x: number, y: number): Promise<void>
   /** move a tab to a new index in the strip; Home stays pinned at index 0 */
   reorder(id: string, toIndex: number): Promise<void>
   /** subscribe to tab list changes (open/close/activate/title updates); returns unsubscribe */
   onChanged(handler: (tabs: TabSummary[]) => void): () => void
   /**
    * fire-and-forget: a pointerdown landed on the shell chrome (tab strip).
-   * Document tabs are sibling WebContentsViews that see neither the event nor
+   * Slides tabs are sibling WebContentsViews that see neither the event nor
    * a focus change, so the shell relays it for them to dismiss popovers.
    */
   notifyChromePressed(): void
@@ -46,7 +45,6 @@ export const TABS_CHANNELS = {
   activate: 'tabs:activate',
   close: 'tabs:close',
   showMenu: 'tabs:show-menu',
-  showNewMenu: 'tabs:show-new-menu',
   reorder: 'tabs:reorder',
   changed: 'tabs:changed',
   chromePressed: 'tabs:chrome-pressed',

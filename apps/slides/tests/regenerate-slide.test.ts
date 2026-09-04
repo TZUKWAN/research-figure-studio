@@ -55,6 +55,40 @@ describe('regenerate_slide', () => {
     expect(r.output).toContain('page 2')
   })
 
+  it('passes the cancellation signal to landing so a stale redo cannot write', async () => {
+    let release!: () => void
+    const pending = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const controller = new AbortController()
+    let wrote = false
+    const regenerateSlide = vi.fn(
+      async (_slideIndex: number, _marker: string, signal?: AbortSignal) => {
+        await pending
+        if (signal?.aborted) return { ok: false, error: 'cancelled' }
+        wrote = true
+        return { ok: true }
+      },
+    )
+    const skill = createSlidesSkill(
+      mkAccess([page], { regenerateSlide, generatePageCloud: cloudOk(), retryBackoffMs: 0 }),
+    )
+
+    const resultPromise = skill.executeTool!(
+      call('regenerate_slide', { slideIndex: 0, brief: 'redo' }),
+      controller.signal,
+    )
+    await Promise.resolve()
+    await Promise.resolve()
+    controller.abort()
+    release()
+
+    const result = await resultPromise
+    expect(regenerateSlide).toHaveBeenCalledWith(0, 'cloudpptx:/tmp/p.pptx', controller.signal)
+    expect(wrote).toBe(false)
+    expect(result.isError).toBe(true)
+  })
+
   it('slideIndex out of range → errors without invoking the pipeline', async () => {
     const regenerateSlide = vi.fn(async () => ({ ok: true }))
     const skill = createSlidesSkill(

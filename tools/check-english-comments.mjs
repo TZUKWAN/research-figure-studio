@@ -6,7 +6,7 @@
 // Functional CJK string literals are fine (i18n resources, test fixture
 // text, zh-UI matchers), as are the AI prompt guides (runtime resources that
 // legitimately show CJK examples).
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
@@ -21,6 +21,8 @@ const root = spawnSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf
 
 const violations = []
 for (const file of git.stdout.trim().split('\n')) {
+  // A deleted tracked file remains in git ls-files until the change is committed.
+  if (!existsSync(join(root, file))) continue
   const isCode = /\.(ts|tsx|mjs|cjs|js)$/.test(file)
   const isDoc = /\.(md|html?)$/.test(file) && !file.includes('/ai/prompts/')
   if (!isCode && !isDoc) continue

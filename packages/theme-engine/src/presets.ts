@@ -1,6 +1,6 @@
 /**
  * Academic preset palettes. Roles are semantic: swapping a theme re-colors a
- * figure without touching layout, text or structure (PRD §43 Theme 验收).
+ * figure without touching layout, text or structure (PRD section 43 theme acceptance).
  * Colors are #RRGGBB.
  */
 

@@ -37,6 +37,7 @@ import type {
   ProjectSummary,
   TimelineEntry,
 } from './types.js'
+import { assertStorageId } from './ipc.js'
 
 // ────────────────────────────────────────────────────────────
 // Internal helpers
@@ -96,7 +97,7 @@ export class ProjectStore {
   }
 
   private projectDir(projectId: string): string {
-    return join(this.baseDir, projectId)
+    return join(this.baseDir, assertStorageId(projectId, 'project id'))
   }
 
   private projectJsonPath(projectId: string): string {
@@ -108,7 +109,7 @@ export class ProjectStore {
   }
 
   private chatPath(projectId: string, chatId: string): string {
-    return join(this.chatsDir(projectId), `${chatId}.jsonl`)
+    return join(this.chatsDir(projectId), `${assertStorageId(chatId, 'chat id')}.jsonl`)
   }
 
   // ── seq counters (in-memory cache, initialized from JSONL line count on first read) ──
@@ -346,10 +347,11 @@ export class ProjectStore {
    * A bad JSONL line is skipped without crashing.
    */
   loadChat(projectId: string, chatId: string, limit = 200): ChatMessage[] {
-    const pending = this.pendingFirstWrite.get(this.seqKey(projectId, chatId)) ?? []
-    const filePath = this.chatPath(projectId, chatId)
-    const messages: ChatMessage[] = [...pending]
+    let messages: ChatMessage[] = []
     try {
+      const pending = this.pendingFirstWrite.get(this.seqKey(projectId, chatId)) ?? []
+      const filePath = this.chatPath(projectId, chatId)
+      messages = [...pending]
       if (existsSync(filePath)) {
         const raw = readFileSync(filePath, 'utf8')
         const lines = raw.split('\n').filter((l) => l.trim())
@@ -380,9 +382,9 @@ export class ProjectStore {
    * Lists metadata of all chats in a project.
    */
   listChats(projectId: string): ChatMeta[] {
-    const dir = this.chatsDir(projectId)
-    if (!existsSync(dir)) return []
     try {
+      const dir = this.chatsDir(projectId)
+      if (!existsSync(dir)) return []
       const files = readdirSync(dir).filter((f) => f.endsWith('.jsonl'))
       return files.map((f) => {
         const chatId = f.replace(/\.jsonl$/, '')

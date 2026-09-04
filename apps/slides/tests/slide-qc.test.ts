@@ -13,6 +13,8 @@ import {
   isQcEnabled,
   qcSlidePage,
   settingsSupportVision,
+  guardDeckAccess,
+  restoreOwnedSnapshot,
 } from '../src/renderer/ai/slide-qc'
 import { defaultAiSettings, type AiProviderId } from '@genoffice/ai-provider'
 import type { DeckAccess } from '../src/renderer/ai/slides-skill'
@@ -93,6 +95,84 @@ describe('createSlideFixSkill', () => {
   })
 })
 
+describe('guardDeckAccess', () => {
+  it('blocks QC writes after its owner becomes stale', () => {
+    let current = true
+    let slideWrites = 0
+    let deckWrites = 0
+    const guarded = guardDeckAccess(
+      {
+        ...access,
+        applySlide: () => {
+          slideWrites++
+        },
+        applyDeck: () => {
+          deckWrites++
+        },
+      },
+      () => current,
+    )
+
+    guarded.applySlide(0, {} as never)
+    guarded.applyDeck([])
+    current = false
+    guarded.applySlide(0, {} as never)
+    guarded.applyDeck([])
+
+    expect(slideWrites).toBe(1)
+    expect(deckWrites).toBe(1)
+  })
+})
+
+describe('restoreOwnedSnapshot', () => {
+  it('does not invoke the restore operation after its owner becomes stale', async () => {
+    let restoreCalls = 0
+    let applied = 0
+
+    const result = await restoreOwnedSnapshot(
+      7,
+      async () => {
+        restoreCalls++
+        return []
+      },
+      () => false,
+      () => {
+        applied++
+      },
+    )
+
+    expect(result).toBe('stale')
+    expect(restoreCalls).toBe(0)
+    expect(applied).toBe(0)
+  })
+
+  it('does not publish a restored deck when ownership expires during restore', async () => {
+    let release!: () => void
+    const pending = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let current = true
+    let applied = 0
+
+    const resultPromise = restoreOwnedSnapshot(
+      7,
+      async () => {
+        await pending
+        return []
+      },
+      () => current,
+      () => {
+        applied++
+      },
+    )
+    current = false
+    release()
+
+    expect(await resultPromise).toBe('stale')
+    expect(applied).toBe(0)
+  })
+})
+
 describe('isQcEnabled', () => {
   it("localStorage 'ai-slides-qc'='0' is the kill switch", () => {
     localStorage.removeItem('ai-slides-qc')
@@ -116,10 +196,19 @@ describe('vision capability fallback', () => {
 
   it('does not send screenshots to text-only models under a vision-capable provider', () => {
     const settings = defaultAiSettings()
-    settings.providers.genspark.model = 'deep-seek-v4-flash'
+    settings.provider = 'anthropic'
+    settings.providers.anthropic = { apiKey: '', model: '' }
+    settings.providers.anthropic.model = 'deepseek-v4-flash'
     expect(settingsSupportVision(settings)).toBe(false)
-    settings.providers.genspark.model = 'claude-opus-4-7'
+    settings.providers.anthropic.model = 'claude-sonnet-5'
     expect(settingsSupportVision(settings)).toBe(true)
+    // the explicit multimodal toggle overrides the model heuristic both ways
+    settings.providers.anthropic.model = 'deepseek-v4-flash'
+    settings.providers.anthropic.vision = true
+    expect(settingsSupportVision(settings)).toBe(true)
+    settings.providers.anthropic.vision = false
+    settings.providers.anthropic.model = 'claude-sonnet-5'
+    expect(settingsSupportVision(settings)).toBe(false)
   })
 
   it('recognizes image-capability errors from optimistic custom endpoints', () => {

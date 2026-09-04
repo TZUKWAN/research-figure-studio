@@ -21,12 +21,6 @@ export { Markdown, type MarkdownNav } from './Markdown'
 export { isSymbolFontFamily } from './symbol-fonts'
 export { BUILTIN_FONT_FAMILIES, fontFamiliesFor } from './font-list'
 export {
-  WORDART_PRESETS,
-  wordArtSolidColor,
-  wordArtStrokePx,
-  type WordArtPreset,
-} from './wordart-presets'
-export {
   SHAPE_GALLERY_GROUPS,
   ShapePreview,
   shapeClipCss,

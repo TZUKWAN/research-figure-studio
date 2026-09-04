@@ -2162,6 +2162,7 @@ export function setElementConnection(
     start?: { id: number; idx: number } | null
     end?: { id: number; idx: number } | null
   },
+  routeYEmu?: number | null,
 ): boolean {
   const el = slide.elements.find((e) => e.id === elementId)
   if (!el) return false
@@ -2170,9 +2171,11 @@ export function setElementConnection(
   xml = xml.replace(/<p:cNvCxnSpPr([^>]*)\/>/, '<p:cNvCxnSpPr$1></p:cNvCxnSpPr>')
   const m = /<p:cNvCxnSpPr([^>]*)>([\s\S]*?)<\/p:cNvCxnSpPr>/.exec(xml)
   if (!m) return false
-  const curSt = /<a:stCxn\b[^>]*\/>/.exec(m[2]!)?.[0] ?? ''
-  const curEnd = /<a:endCxn\b[^>]*\/>/.exec(m[2]!)?.[0] ?? ''
-  let rest = m[2]!.replace(/<a:stCxn\b[^>]*\/>|<a:endCxn\b[^>]*\/>/g, '')
+  const endpointTag = (name: 'st' | 'end') =>
+    new RegExp(`<a:${name}Cxn\\b[^>]*(?:\\/\\s*>|>[\\s\\S]*?<\\/a:${name}Cxn>)`)
+  const curSt = endpointTag('st').exec(m[2]!)?.[0] ?? ''
+  const curEnd = endpointTag('end').exec(m[2]!)?.[0] ?? ''
+  let rest = m[2]!.replace(endpointTag('st'), '').replace(endpointTag('end'), '')
   // Schema order: cxnSpLocks? stCxn? endCxn? extLst?
   let locks = ''
   const lockM = /<a:cxnSpLocks\b[^>]*(?:\/>|>[\s\S]*?<\/a:cxnSpLocks>)/.exec(rest)
@@ -2188,6 +2191,20 @@ export function setElementConnection(
     xml.slice(0, m.index) +
     `<p:cNvCxnSpPr${m[1]}>${locks}${stTag}${endTag}${rest}</p:cNvCxnSpPr>` +
     xml.slice(m.index + m[0].length)
+  if (routeYEmu !== undefined) {
+    const nextXml = patchConnectorRouteY(xml, routeYEmu)
+    if (!nextXml) return false
+    xml = nextXml
+    if (el.type !== 'shape' && el.type !== 'text') return false
+    if (routeYEmu === null) {
+      if (el.adjust) {
+        const { rfsRouteY: _removed, ...rest } = el.adjust
+        el.adjust = Object.keys(rest).length ? rest : undefined
+      }
+    } else {
+      el.adjust = { ...(el.adjust ?? {}), rfsRouteY: Math.round(routeYEmu) }
+    }
+  }
   el.dirty = el.dirtyTransform = el.dirtyFill = el.dirtyStroke = false
   el.dirtyPPr = undefined
   el.anchor.originalXml = xml
@@ -2197,6 +2214,28 @@ export function setElementConnection(
     start || end ? { ...(start ? { start } : {}), ...(end ? { end } : {}) } : undefined
   slide.structureDirty = true
   return true
+}
+
+/** Persist the editor-only absolute route lane in the connector's avLst. */
+function patchConnectorRouteY(xml: string, routeYEmu: number | null): string | null {
+  const geom = /<a:prstGeom\b([^>]*)>([\s\S]*?)<\/a:prstGeom>/.exec(xml)
+  if (!geom) return null
+  const routeTag = /<a:gd\b[^>]*\bname="rfsRouteY"[^>]*\/\s*>/g
+  const nextTag = routeYEmu === null ? '' : `<a:gd name="rfsRouteY" fmla="val ${Math.round(routeYEmu)}"/>`
+  let body = geom[2]!.replace(routeTag, '')
+  const av = /<a:avLst\b([^>]*)>([\s\S]*?)<\/a:avLst>/.exec(body)
+  if (av) {
+    const inner = av[2]!.trim()
+    body = body.slice(0, av.index) + `<a:avLst${av[1]}>${inner}${nextTag}</a:avLst>` + body.slice(av.index + av[0].length)
+  } else {
+    const self = /<a:avLst\b([^>]*)\/\s*>/.exec(body)
+    if (self) {
+      body = body.slice(0, self.index) + `<a:avLst${self[1]}>${nextTag}</a:avLst>` + body.slice(self.index + self[0].length)
+    } else if (nextTag) {
+      body = `<a:avLst>${nextTag}</a:avLst>` + body
+    }
+  }
+  return xml.slice(0, geom.index) + `<a:prstGeom${geom[1]}>${body}</a:prstGeom>` + xml.slice(geom.index + geom[0].length)
 }
 
 // title/ctrTitle share one slot; content placeholders (body/obj/subTitle/untyped) match by idx

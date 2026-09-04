@@ -1,17 +1,11 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-
-/**
- * TabManager (src/main/tab-manager.ts): tab list state, activation,
- * close guards, and view lifecycle inside the shell's single window.
- * Electron and the per-module main entrypoints are mocked; only the
- * manager's own observable behavior is asserted.
- */
 
 interface FakeWebContents {
   id: number
   on: ReturnType<typeof vi.fn>
   close: ReturnType<typeof vi.fn>
-  reload: ReturnType<typeof vi.fn>
   isDestroyed: ReturnType<typeof vi.fn>
   listeners: Map<string, () => void>
 }
@@ -22,6 +16,16 @@ interface FakeView {
   setBounds: ReturnType<typeof vi.fn>
 }
 
+interface FakeShellWindow {
+  on: ReturnType<typeof vi.fn>
+  isDestroyed: ReturnType<typeof vi.fn>
+  getContentBounds: () => { x: number; y: number; width: number; height: number }
+  contentView: {
+    addChildView: ReturnType<typeof vi.fn>
+    removeChildView: ReturnType<typeof vi.fn>
+  }
+}
+
 let nextWebContentsId = 1
 
 function makeFakeView(): FakeView {
@@ -30,11 +34,8 @@ function makeFakeView(): FakeView {
     webContents: {
       id: nextWebContentsId++,
       listeners,
-      on: vi.fn((event: string, handler: () => void) => {
-        listeners.set(event, handler)
-      }),
+      on: vi.fn((event: string, handler: () => void) => listeners.set(event, handler)),
       close: vi.fn(),
-      reload: vi.fn(),
       isDestroyed: vi.fn(() => false),
     },
     setVisible: vi.fn(),
@@ -43,50 +44,6 @@ function makeFakeView(): FakeView {
 }
 
 vi.mock('electron', () => ({ BrowserWindow: class {} }))
-
-const createDocsView = vi.fn(() => makeFakeView())
-const docsQueryDirty = vi.fn(() => Promise.resolve(false))
-const markDocsNewBlank = vi.fn()
-const requestDocsClose = vi.fn(() => Promise.resolve(true))
-const setActiveDocsResolver = vi.fn()
-const teardownDocsRenderer = vi.fn()
-
-vi.mock('../../docs/src/main/docs-main', () => ({
-  createDocsView: (...args: unknown[]) => createDocsView(...(args as [])),
-  docsQueryDirty: (...args: unknown[]) => docsQueryDirty(...(args as [])),
-  markDocsNewBlank: (...args: unknown[]) => markDocsNewBlank(...args),
-  requestDocsClose: (...args: unknown[]) => requestDocsClose(...(args as [])),
-  setActiveDocsResolver: (...args: unknown[]) => setActiveDocsResolver(...args),
-  teardownDocsRenderer: (...args: unknown[]) => teardownDocsRenderer(...args),
-}))
-
-const createPdfView = vi.fn(() => makeFakeView())
-const pdfIsDirty = vi.fn(() => false)
-const clearPdfDirty = vi.fn()
-const requestPdfClose = vi.fn(() => Promise.resolve(true))
-
-vi.mock('../../pdf/src/main/pdf-main', () => ({
-  createPdfView: (...args: unknown[]) => createPdfView(...(args as [])),
-  pdfIsDirty: (...args: unknown[]) => pdfIsDirty(...(args as [])),
-  clearPdfDirty: (...args: unknown[]) => clearPdfDirty(...(args as [])),
-  requestPdfClose: (...args: unknown[]) => requestPdfClose(...(args as [])),
-}))
-
-const createSheetsView = vi.fn(() => makeFakeView())
-const queueWorkbookForView = vi.fn()
-const requestSheetsClose = vi.fn(() => Promise.resolve(true))
-const setActiveSheetsWebContents = vi.fn()
-const setSheetsNewBlank = vi.fn()
-const sheetsPendingEditCount = vi.fn(() => 0)
-
-vi.mock('../../sheets/src/main/sheets-main', () => ({
-  createSheetsView: (...args: unknown[]) => createSheetsView(...(args as [])),
-  queueWorkbookForView: (...args: unknown[]) => queueWorkbookForView(...args),
-  requestSheetsClose: (...args: unknown[]) => requestSheetsClose(...(args as [])),
-  setActiveSheetsWebContents: (...args: unknown[]) => setActiveSheetsWebContents(...args),
-  setSheetsNewBlank: (...args: unknown[]) => setSheetsNewBlank(...args),
-  sheetsPendingEditCount: (...args: unknown[]) => sheetsPendingEditCount(...(args as [])),
-}))
 
 const createSlidesView = vi.fn(() => makeFakeView())
 const requestSlidesClose = vi.fn(() => Promise.resolve(true))
@@ -106,14 +63,19 @@ const TAB_STRIP_HEIGHT = 40
 const WINDOW_WIDTH = 800
 const WINDOW_HEIGHT = 600
 
-interface FakeShellWindow {
-  on: ReturnType<typeof vi.fn>
-  isDestroyed: ReturnType<typeof vi.fn>
-  getContentBounds: () => { x: number; y: number; width: number; height: number }
-  contentView: {
-    addChildView: ReturnType<typeof vi.fn>
-    removeChildView: ReturnType<typeof vi.fn>
-  }
+let shellWindow: FakeShellWindow
+let onChanged: ReturnType<typeof vi.fn>
+let applyMenuFor: ReturnType<typeof vi.fn>
+let manager: TabManager
+
+function lastCreatedView(): FakeView {
+  return createSlidesView.mock.results.at(-1)!.value as FakeView
+}
+
+function resizeHandler(): () => void {
+  const call = shellWindow.on.mock.calls.find(([event]) => event === 'resize')
+  expect(call).toBeDefined()
+  return call![1] as () => void
 }
 
 function makeShellWindow(): FakeShellWindow {
@@ -125,22 +87,14 @@ function makeShellWindow(): FakeShellWindow {
   }
 }
 
-let shellWindow: FakeShellWindow
-let onChanged: ReturnType<typeof vi.fn>
-let applyMenuFor: ReturnType<typeof vi.fn>
-let manager: TabManager
-
-function lastCreatedView(factory: ReturnType<typeof vi.fn>): FakeView {
-  return factory.mock.results.at(-1)!.value as FakeView
+function readShellSource(relativePath: string): string {
+  return readFileSync(join(__dirname, '../src', relativePath), 'utf8')
 }
 
 beforeEach(() => {
   vi.clearAllMocks()
   nextWebContentsId = 1
-  docsQueryDirty.mockImplementation(() => Promise.resolve(false))
-  requestDocsClose.mockImplementation(() => Promise.resolve(true))
-  pdfIsDirty.mockImplementation(() => false)
-  sheetsPendingEditCount.mockImplementation(() => 0)
+  requestSlidesClose.mockImplementation(() => Promise.resolve(true))
   slidesIsDirty.mockImplementation(() => false)
   shellWindow = makeShellWindow()
   onChanged = vi.fn()
@@ -152,139 +106,135 @@ beforeEach(() => {
   )
 })
 
-describe('initial state', () => {
-  it('starts with only the non-closable, active Home tab', () => {
+describe('TabManager in the slides-only shell', () => {
+  it('exposes only Home and Slides in the shell call chain', () => {
+    const homeApi = readShellSource('shared/home-api.ts')
+    const tabsApi = readShellSource('shared/tabs-api.ts')
+    const preload = readShellSource('preload/index.ts')
+    const home = readShellSource('renderer/src/Home.tsx')
+    const tabBar = readShellSource('renderer/src/TabBar.tsx')
+    const appFrame = readShellSource('renderer/src/AppFrame.tsx')
+    const main = readShellSource('main/index.ts')
+    const strings = readShellSource('renderer/src/strings.ts')
+
+    expect(homeApi).not.toMatch(/newDoc|newSheet|newMarkdown|newPdf/)
+    expect(preload).not.toMatch(/newDoc|newSheet|newMarkdown|newPdf/)
+    expect(strings).not.toMatch(/^\s+(newDoc|newSheet|newMarkdown|newPdf|filterPdf|filterMd):/m)
+    expect(main).not.toMatch(
+      /^\s*(menuNewDoc|menuNewSheet|menuNewMarkdown|menuNewPdf|untitledSheet|untitledDoc|untitledMarkdown|untitledPdf|filterWord|filterExcel|filterPpt|filterMarkdown|filterPdf):/m,
+    )
+    expect(tabsApi).toContain("export type TabKind = 'home' | 'slides'")
+    expect(tabsApi).not.toMatch(/'docs'|'sheets'|'pdf'|'markdown'/)
+    const localFilters = home.match(/const FILTERS:[\s\S]*?\n\]/)?.[0] ?? ''
+    expect(localFilters).not.toMatch(/filterDocs|filterSheets|filterPdf|filterMd/)
+    expect(home).toContain("const OPEN_LOCAL_EXTENSIONS = '.pptx'")
+    expect(tabBar).not.toMatch(
+      /DocIcon|SheetIcon|PdfIcon|MarkdownIcon|docs:|sheets:|pdf:|markdown:/,
+    )
+    expect(appFrame).not.toMatch(/docs\/sheets/)
+    expect(main).not.toMatch(/docs and sheets modules|apps\/docs\/out|apps\/sheets\/out/)
+    expect(main).toMatch(/const OPEN_DIALOG_EXTENSIONS = \[\s*'pptx',?\s*\]/)
+    expect(main).toMatch(/ipcMain\.handle\(HOME_CHANNELS\.recents/)
+    expect(main).toMatch(/ipcMain\.handle\(HOME_CHANNELS\.starred/)
+    expect(main).toMatch(/ipcMain\.handle\(HOME_CHANNELS\.statPaths/)
+    expect(main).toMatch(/ipcMain\.handle\(HOME_CHANNELS\.toggleStar/)
+    expect(main).toMatch(/ipcMain\.handle\(HOME_CHANNELS\.removeRecent/)
+    expect(main).toMatch(/HOME_CHANNELS\.getDefaultSaveDir/)
+    expect(main).toMatch(/HOME_CHANNELS\.pickDefaultSaveDir/)
+  })
+
+  it('starts with only the active, non-closable Home tab', () => {
     expect(manager.list()).toEqual([
-      { id: 'home', kind: 'home', title: 'GenOffice', closable: false, active: true },
-    ])
-  })
-})
-
-describe('opening tabs', () => {
-  it('opens a docs tab, activates it, and attaches its view to the window', () => {
-    const id = manager.openDocsTab()
-    const tabs = manager.list()
-    expect(tabs).toHaveLength(2)
-    expect(tabs[1]).toMatchObject({
-      id,
-      kind: 'docs',
-      title: 'GenOffice Docs',
-      closable: true,
-      active: true,
-    })
-    expect(tabs[0].active).toBe(false)
-    expect(shellWindow.contentView.addChildView).toHaveBeenCalledTimes(1)
-    expect(applyMenuFor).toHaveBeenLastCalledWith('docs')
-    expect(onChanged).toHaveBeenCalled()
-  })
-
-  it('titles file-backed tabs with the file basename', () => {
-    manager.openDocsTab('/tmp/report.docx')
-    manager.openSheetsTab('/tmp/budget.xlsx')
-    manager.openSlidesTab('/tmp/deck.pptx')
-    manager.openPdfTab('/tmp/scan.pdf')
-    expect(manager.list().map((t) => t.title)).toEqual([
-      'GenOffice',
-      'report.docx',
-      'budget.xlsx',
-      'deck.pptx',
-      'scan.pdf',
+      { id: 'home', kind: 'home', title: 'Metis Diagram', closable: false, active: true },
     ])
   })
 
-  it('uses module default titles for pathless tabs', () => {
-    manager.openSheetsTab()
-    manager.openSlidesTab()
-    expect(manager.list().map((t) => t.title)).toEqual(['GenOffice', 'AI Sheets', 'AI Slides'])
-  })
+  it('opens a slides tab, attaches its view, and activates it', () => {
+    const id = manager.openSlidesTab()
+    const view = lastCreatedView()
 
-  it('assigns unique, monotonic tab ids', () => {
-    const a = manager.openDocsTab()
-    const b = manager.openSheetsTab()
-    expect(a).not.toBe(b)
-    expect(a).toBe('t1')
-    expect(b).toBe('t2')
-  })
-
-  it('forwards the new-blank flag to the module', () => {
-    manager.openDocsTab(undefined, { newBlank: true })
-    expect(markDocsNewBlank).toHaveBeenCalledTimes(1)
-    manager.openSheetsTab(undefined, { newBlank: true })
-    expect(setSheetsNewBlank).toHaveBeenCalledTimes(1)
-  })
-})
-
-describe('activation', () => {
-  it('shows only the activated tab view and lays it out below the tab strip', () => {
-    const docsId = manager.openDocsTab()
-    const docsView = lastCreatedView(createDocsView)
-    manager.openSheetsTab()
-    const sheetsView = lastCreatedView(createSheetsView)
-
-    manager.activateTab(docsId)
-    expect(docsView.setVisible).toHaveBeenLastCalledWith(true)
-    expect(sheetsView.setVisible).toHaveBeenLastCalledWith(false)
-    expect(docsView.setBounds).toHaveBeenLastCalledWith({
+    expect(manager.list()).toEqual([
+      { id: 'home', kind: 'home', title: 'Metis Diagram', closable: false, active: false },
+      { id, kind: 'slides', title: 'AI Canvas', closable: true, active: true },
+    ])
+    expect(shellWindow.contentView.addChildView).toHaveBeenCalledWith(view)
+    expect(view.setVisible).toHaveBeenLastCalledWith(true)
+    expect(view.setBounds).toHaveBeenLastCalledWith({
       x: 0,
       y: TAB_STRIP_HEIGHT,
       width: WINDOW_WIDTH,
       height: WINDOW_HEIGHT - TAB_STRIP_HEIGHT,
     })
-    expect(manager.list().find((t) => t.id === docsId)?.active).toBe(true)
+    expect(setActiveSlidesWebContents).toHaveBeenLastCalledWith(view.webContents)
+    expect(applyMenuFor).toHaveBeenLastCalledWith('slides')
   })
 
-  it('ignores activation of unknown tab ids', () => {
+  it('assigns unique, monotonic IDs to Slides tabs', () => {
+    expect(manager.openSlidesTab()).toBe('t1')
+    expect(manager.openSlidesTab()).toBe('t2')
+  })
+
+  it('shows only the activated Slides view and refreshes its active target', () => {
+    const firstId = manager.openSlidesTab()
+    const firstView = lastCreatedView()
+    manager.openSlidesTab()
+    const secondView = lastCreatedView()
+
+    manager.activateTab(firstId)
+
+    expect(firstView.setVisible).toHaveBeenLastCalledWith(true)
+    expect(secondView.setVisible).toHaveBeenLastCalledWith(false)
+    expect(setActiveSlidesWebContents).toHaveBeenLastCalledWith(firstView.webContents)
+    expect(applyMenuFor).toHaveBeenLastCalledWith('slides')
+  })
+
+  it('uses file basenames and keeps tab file bookkeeping in sync', () => {
+    const id = manager.openSlidesTab('/tmp/deck.pptx')
+    const view = lastCreatedView()
+
+    expect(manager.list()[1]).toMatchObject({ id, title: 'deck.pptx', active: true })
+    manager.setTabFileFor(view.webContents.id, '/tmp/final.pptx')
+    expect(manager.list()[1]).toMatchObject({ title: 'final.pptx' })
+    expect(manager.findSlidesTabByPath('/tmp/final.pptx')).toBe(id)
+
+    const affected = manager.renameTabFile('/tmp/final.pptx', '/tmp/renamed.pptx')
+    expect(affected).toEqual([{ kind: 'slides', webContents: view.webContents }])
+    expect(manager.findSlidesTabByPath('/tmp/renamed.pptx')).toBe(id)
+  })
+
+  it('ignores activation and bookkeeping requests for unknown ids', () => {
     onChanged.mockClear()
-    manager.activateTab('nope')
+    manager.activateTab('missing')
+    manager.setTabFileFor(999, '/tmp/missing.pptx')
     expect(onChanged).not.toHaveBeenCalled()
-    expect(manager.list()[0].active).toBe(true)
+    expect(manager.list()[0]!.active).toBe(true)
   })
 
-  it('routes the active webContents to the matching module', () => {
-    manager.openSheetsTab()
-    const sheetsView = lastCreatedView(createSheetsView)
-    expect(setActiveSheetsWebContents).toHaveBeenLastCalledWith(sheetsView.webContents)
-
+  it('routes fullscreen and bleed bounds over the tab strip', () => {
     manager.openSlidesTab()
-    const slidesView = lastCreatedView(createSlidesView)
-    expect(setActiveSlidesWebContents).toHaveBeenLastCalledWith(slidesView.webContents)
-  })
-
-  it('lets the active view cover the tab strip during HTML fullscreen', () => {
-    manager.openSlidesTab()
-    const view = lastCreatedView(createSlidesView)
-    view.webContents.listeners.get('enter-html-full-screen')!()
-    expect(view.setBounds).toHaveBeenLastCalledWith({
-      x: 0,
-      y: 0,
-      width: WINDOW_WIDTH,
-      height: WINDOW_HEIGHT,
-    })
-    view.webContents.listeners.get('leave-html-full-screen')!()
-    expect(view.setBounds).toHaveBeenLastCalledWith({
+    const view = lastCreatedView()
+    const fullBounds = { x: 0, y: 0, width: WINDOW_WIDTH, height: WINDOW_HEIGHT }
+    const normalBounds = {
       x: 0,
       y: TAB_STRIP_HEIGHT,
       width: WINDOW_WIDTH,
       height: WINDOW_HEIGHT - TAB_STRIP_HEIGHT,
-    })
+    }
+
+    manager.setContentBleed(view.webContents, true)
+    expect(view.setBounds).toHaveBeenLastCalledWith(fullBounds)
+    manager.setContentBleed(view.webContents, false)
+    expect(view.setBounds).toHaveBeenLastCalledWith(normalBounds)
+    view.webContents.listeners.get('enter-html-full-screen')!()
+    expect(view.setBounds).toHaveBeenLastCalledWith(fullBounds)
+    view.webContents.listeners.get('leave-html-full-screen')!()
+    expect(view.setBounds).toHaveBeenLastCalledWith(normalBounds)
   })
-})
 
-describe('window resize layout', () => {
-  function resizeHandler(): () => void {
-    const call = shellWindow.on.mock.calls.find((c) => c[0] === 'resize')
-    expect(call).toBeDefined()
-    return call![1] as () => void
-  }
-
-  it('re-lays out after resize bounds settle (Linux/X11 stale getContentBounds)', async () => {
-    // On X11, `resize` fires before the WM applies maximize bounds, so the first
-    // layout still sees the pre-maximize size. The deferred layout must pick up
-    // the real size on the next turn (see issue #15).
-    manager.openSheetsTab()
-    const view = lastCreatedView(createSheetsView)
+  it('re-lays out after a resize settles and skips it after destruction', async () => {
+    manager.openSlidesTab()
+    const view = lastCreatedView()
     view.setBounds.mockClear()
-
     let width = WINDOW_WIDTH
     let height = WINDOW_HEIGHT
     shellWindow.getContentBounds = () => ({ x: 0, y: 0, width, height })
@@ -296,227 +246,107 @@ describe('window resize layout', () => {
       width: WINDOW_WIDTH,
       height: WINDOW_HEIGHT - TAB_STRIP_HEIGHT,
     })
-
-    // Bounds update after the synchronous layout, as on X11 maximize.
     width = 1920
     height = 1080
     await new Promise<void>((resolve) => setImmediate(resolve))
-
     expect(view.setBounds).toHaveBeenLastCalledWith({
       x: 0,
       y: TAB_STRIP_HEIGHT,
       width: 1920,
       height: 1080 - TAB_STRIP_HEIGHT,
     })
-    expect(view.setBounds).toHaveBeenCalledTimes(2)
-  })
 
-  it('skips deferred layout after the shell window is destroyed', async () => {
-    manager.openSheetsTab()
-    const view = lastCreatedView(createSheetsView)
     view.setBounds.mockClear()
-
     resizeHandler()()
-    expect(view.setBounds).toHaveBeenCalledTimes(1)
-
     shellWindow.isDestroyed.mockReturnValue(true)
     await new Promise<void>((resolve) => setImmediate(resolve))
     expect(view.setBounds).toHaveBeenCalledTimes(1)
   })
-})
 
-describe('closing tabs', () => {
-  it('never closes the Home tab', async () => {
+  it('keeps Home open and removes a clean slides tab', async () => {
     await manager.closeTab('home')
-    expect(manager.list()).toHaveLength(1)
-
-    manager.openHomeTab()
-    manager.closeActiveTab()
-    await Promise.resolve()
-    expect(manager.list()).toHaveLength(1)
-  })
-
-  it('removes a clean tab and falls back to the previous tab', async () => {
-    manager.openSheetsTab()
-    const sheetsView = lastCreatedView(createSheetsView)
-    const slidesId = manager.openSlidesTab()
-
-    await manager.closeTab(slidesId)
-    const tabs = manager.list()
-    expect(tabs.map((t) => t.id)).toEqual(['home', 't1'])
-    expect(tabs[1].active).toBe(true)
-    expect(sheetsView.setVisible).toHaveBeenLastCalledWith(true)
-  })
-
-  it('keeps the current tab active when closing a background tab', async () => {
-    const sheetsId = manager.openSheetsTab()
-    const slidesId = manager.openSlidesTab()
-    await manager.closeTab(sheetsId)
-    expect(manager.list().find((t) => t.id === slidesId)?.active).toBe(true)
-  })
-
-  it('detaches and destroys non-docs views on close', async () => {
-    const id = manager.openSheetsTab()
-    const view = lastCreatedView(createSheetsView)
+    const id = manager.openSlidesTab()
+    const view = lastCreatedView()
     await manager.closeTab(id)
+
+    expect(manager.list()).toEqual([
+      { id: 'home', kind: 'home', title: 'Metis Diagram', closable: false, active: true },
+    ])
     expect(shellWindow.contentView.removeChildView).toHaveBeenCalledWith(view)
     expect(view.webContents.close).toHaveBeenCalledTimes(1)
   })
 
-  it('detaches docs views without destroying the webContents (freeze workaround)', async () => {
-    const id = manager.openDocsTab()
-    const view = lastCreatedView(createDocsView)
-    await manager.closeTab(id)
-    expect(shellWindow.contentView.removeChildView).toHaveBeenCalledWith(view)
-    expect(view.webContents.close).not.toHaveBeenCalled()
-    // the orphaned renderer must be told to go inert (recovery-copy resurrection guard)
-    expect(teardownDocsRenderer).toHaveBeenCalledWith(view.webContents)
+  it('activates the previous Slides tab when closing the active tab', async () => {
+    const firstId = manager.openSlidesTab()
+    const firstView = lastCreatedView()
+    const secondId = manager.openSlidesTab()
+
+    await manager.closeTab(secondId)
+
+    expect(manager.list().map((tab) => tab.id)).toEqual(['home', firstId])
+    expect(manager.list()[1]!.active).toBe(true)
+    expect(firstView.setVisible).toHaveBeenLastCalledWith(true)
   })
 
-  it('closes a clean docs tab after the async dirty query says clean', async () => {
-    const id = manager.openDocsTab()
-    await manager.closeTab(id)
-    expect(docsQueryDirty).toHaveBeenCalledTimes(1)
-    expect(requestDocsClose).not.toHaveBeenCalled()
-    expect(manager.list()).toHaveLength(1)
+  it('keeps the active tab when closing a background Slides tab', async () => {
+    const backgroundId = manager.openSlidesTab()
+    const activeId = manager.openSlidesTab()
+
+    await manager.closeTab(backgroundId)
+
+    expect(manager.list().map((tab) => tab.id)).toEqual(['home', activeId])
+    expect(manager.list()[1]!.active).toBe(true)
   })
 
-  it('keeps a dirty docs tab open when the user cancels the close guard', async () => {
-    docsQueryDirty.mockImplementation(() => Promise.resolve(true))
-    requestDocsClose.mockImplementation(() => Promise.resolve(false))
-    const id = manager.openDocsTab()
-    await manager.closeTab(id)
-    expect(requestDocsClose).toHaveBeenCalledTimes(1)
-    expect(manager.list().map((t) => t.id)).toEqual(['home', id])
-  })
-
-  it('activates a dirty background tab before showing its close guard', async () => {
-    sheetsPendingEditCount.mockImplementation(() => 1)
-    requestSheetsClose.mockImplementation(() => Promise.resolve(false))
-    const sheetsId = manager.openSheetsTab()
-    manager.openSlidesTab()
-
-    await manager.closeTab(sheetsId)
-    expect(requestSheetsClose).toHaveBeenCalledTimes(1)
-    // the guarded tab was brought into view for the prompt
-    expect(manager.list().find((t) => t.id === sheetsId)?.active).toBe(true)
-  })
-
-  it('closes a dirty sheets tab when the guard resolves true', async () => {
-    sheetsPendingEditCount.mockImplementation(() => 1)
-    requestSheetsClose.mockImplementation(() => Promise.resolve(true))
-    const id = manager.openSheetsTab()
-    await manager.closeTab(id)
-    expect(manager.list()).toHaveLength(1)
-  })
-
-  it('does not stack close guards while one prompt is pending', async () => {
-    sheetsPendingEditCount.mockImplementation(() => 1)
+  it('guards dirty tabs and prevents duplicate close prompts', async () => {
+    slidesIsDirty.mockReturnValue(true)
     let resolveGuard!: (ok: boolean) => void
-    requestSheetsClose.mockImplementation(
+    requestSlidesClose.mockImplementation(
       () =>
         new Promise<boolean>((resolve) => {
           resolveGuard = resolve
         }),
     )
-    const id = manager.openSheetsTab()
+    const id = manager.openSlidesTab()
     const first = manager.closeTab(id)
     const second = manager.closeTab(id)
-    resolveGuard(true)
+    resolveGuard(false)
     await Promise.all([first, second])
-    expect(requestSheetsClose).toHaveBeenCalledTimes(1)
-    expect(manager.list()).toHaveLength(1)
-  })
-})
 
-describe('file path bookkeeping', () => {
-  it('updates the tab title when a module opens a file in an existing tab', () => {
-    manager.openDocsTab()
-    const view = lastCreatedView(createDocsView)
-    manager.setTabFileFor(view.webContents.id, '/tmp/final.docx')
-    expect(manager.list()[1].title).toBe('final.docx')
-    expect(manager.findDocsTabByPath('/tmp/final.docx')).toBe('t1')
+    expect(requestSlidesClose).toHaveBeenCalledTimes(1)
+    expect(manager.findSlidesTabByPath('/tmp/missing.pptx')).toBeUndefined()
+    expect(manager.list()).toHaveLength(2)
   })
 
-  it('ignores setTabFileFor for unknown webContents', () => {
+  it('activates a dirty background tab before asking to close it', async () => {
+    slidesIsDirty.mockReturnValue(true)
+    requestSlidesClose.mockImplementation(() => Promise.resolve(false))
+    const backgroundId = manager.openSlidesTab()
+    manager.openSlidesTab()
+
+    await manager.closeTab(backgroundId)
+
+    expect(requestSlidesClose).toHaveBeenCalledTimes(1)
+    expect(manager.list().find((tab) => tab.id === backgroundId)?.active).toBe(true)
+    expect(manager.list()).toHaveLength(3)
+  })
+
+  it('reports dirty slides tabs and keeps Home pinned during reorder', () => {
+    const firstId = manager.openSlidesTab()
+    const firstView = lastCreatedView()
+    const secondId = manager.openSlidesTab()
+    slidesIsDirty.mockImplementation((id: number) => id === firstView.webContents.id)
+
+    expect(manager.dirtySlidesTabs()).toEqual([{ id: firstId, webContents: firstView.webContents }])
+    manager.reorderTab('home', 2)
+    manager.reorderTab(secondId, 1)
+    expect(manager.list().map((tab) => tab.id)).toEqual(['home', secondId, firstId])
+  })
+
+  it('does not report a rename when no Slides tab matches the old path', () => {
     onChanged.mockClear()
-    manager.setTabFileFor(999, '/tmp/x.docx')
+
+    expect(manager.renameTabFile('/tmp/missing.pptx', '/tmp/new.pptx')).toEqual([])
     expect(onChanged).not.toHaveBeenCalled()
-  })
-
-  it('renames matching tabs and reports the affected views', () => {
-    manager.openDocsTab('/tmp/old.docx')
-    const view = lastCreatedView(createDocsView)
-    const affected = manager.renameTabFile('/tmp/old.docx', '/tmp/new.docx')
-    expect(affected).toEqual([{ kind: 'docs', webContents: view.webContents }])
-    expect(manager.list()[1].title).toBe('new.docx')
-    expect(manager.findDocsTabByPath('/tmp/new.docx')).toBe('t1')
-    expect(manager.findDocsTabByPath('/tmp/old.docx')).toBeUndefined()
-  })
-
-  it('returns no affected views when nothing matches a rename', () => {
-    onChanged.mockClear()
-    expect(manager.renameTabFile('/tmp/none.docx', '/tmp/new.docx')).toEqual([])
-    expect(onChanged).not.toHaveBeenCalled()
-  })
-
-  it('finds tabs by kind and path', () => {
-    manager.openSheetsTab('/tmp/a.xlsx')
-    manager.openSlidesTab('/tmp/b.pptx')
-    manager.openPdfTab('/tmp/c.pdf')
-    expect(manager.findSheetsTab()).toBe('t1')
-    expect(manager.findSheetsTabByPath('/tmp/a.xlsx')).toBe('t1')
-    expect(manager.findSlidesTabByPath('/tmp/b.pptx')).toBe('t2')
-    expect(manager.findPdfTabByPath('/tmp/c.pdf')).toBe('t3')
-    expect(manager.findPdfTabByPath('/tmp/missing.pdf')).toBeUndefined()
-  })
-
-  it('reloads an existing pdf tab so a re-export rereads the file from disk', () => {
-    const id = manager.openPdfTab('/tmp/c.pdf')
-    const view = lastCreatedView(createPdfView)
-    manager.reloadTab(id)
-    expect(clearPdfDirty).toHaveBeenCalledWith(view.webContents.id)
-    expect(view.webContents.reload).toHaveBeenCalledTimes(1)
-  })
-
-  it('reports the active pdf tab with its id (so callers can re-activate it)', () => {
-    const pdfId = manager.openPdfTab('/tmp/c.pdf')
-    const active = manager.activePdfTab()
-    expect(active?.id).toBe(pdfId)
-    expect(active?.filePath).toBe('/tmp/c.pdf')
-    manager.openDocsTab()
-    expect(manager.activePdfTab()).toBeUndefined()
-  })
-})
-
-describe('dirty-tab queries (shell close guard)', () => {
-  it('lists only tabs whose module reports unsaved changes', () => {
-    const dirtySheetsId = manager.openSheetsTab()
-    const dirtyView = lastCreatedView(createSheetsView)
-    manager.openSheetsTab()
-    sheetsPendingEditCount.mockImplementation((id: number) =>
-      id === dirtyView.webContents.id ? 3 : 0,
-    )
-
-    const dirty = manager.dirtySheetsTabs()
-    expect(dirty).toEqual([{ id: dirtySheetsId, webContents: dirtyView.webContents }])
-  })
-
-  it('lists dirty pdf and slides tabs', () => {
-    const pdfId = manager.openPdfTab('/tmp/c.pdf')
-    const slidesId = manager.openSlidesTab()
-    expect(manager.dirtyPdfTabs()).toEqual([])
-    expect(manager.dirtySlidesTabs()).toEqual([])
-    pdfIsDirty.mockImplementation(() => true)
-    slidesIsDirty.mockImplementation(() => true)
-    expect(manager.dirtyPdfTabs().map((t) => t.id)).toEqual([pdfId])
-    expect(manager.dirtySlidesTabs().map((t) => t.id)).toEqual([slidesId])
-  })
-
-  it('lists every live docs tab for the async dirtiness sweep', () => {
-    manager.openDocsTab()
-    manager.openSheetsTab()
-    manager.openDocsTab('/tmp/a.docx')
-    expect(manager.docsTabs().map((t) => t.id)).toEqual(['t1', 't3'])
   })
 })

@@ -403,25 +403,23 @@ describe('manual download fallback', () => {
     }
   })
 
-  it('rejects a non-HTTPS baked feed URL', async () => {
+  it('closes the update window when a non-HTTPS feed has no trusted installer link', async () => {
     Object.defineProperty(process, 'resourcesPath', { value: '/res', configurable: true })
     readFileSyncMock.mockReturnValue('url: http://cdn.example.com/mac\n')
     const actions = await failTwiceIntoManual(macFiles)
     actions.onOpenDownload()
-    expect(openExternal).toHaveBeenCalledWith(
-      'https://github.com/genspark-ai/genoffice/releases/latest',
-    )
+    expect(openExternal).not.toHaveBeenCalled()
+    expect(closeUpdateWindow).toHaveBeenCalledTimes(1)
   })
 
-  it('falls back to the generic download page when the feed base cannot be read', async () => {
+  it('closes the update window when the feed base cannot be read', async () => {
     // readFileSyncMock throws by default (no app-update.yml)
     const actions = await failTwiceIntoManual([
       { url: 'https://attacker.example/GenOffice-0.2.0-arm64.dmg' },
     ])
     actions.onOpenDownload()
-    expect(openExternal).toHaveBeenCalledWith(
-      'https://github.com/genspark-ai/genoffice/releases/latest',
-    )
+    expect(openExternal).not.toHaveBeenCalled()
+    expect(closeUpdateWindow).toHaveBeenCalledTimes(1)
   })
 })
 

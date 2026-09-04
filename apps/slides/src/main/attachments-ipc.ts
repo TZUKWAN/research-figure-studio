@@ -1,7 +1,7 @@
 /**
  * Chat attachment IPC for the slides main process, extracted from
  * slides-main.ts: local files are validated/parsed here and fed to the agent
- * (copied from the apps/docs docs-main attachment chain). Channels get the
+ * (shared with the host attachment chain). Channels get the
  * slides: prefix because the shell already registers the global files:*
  * channels via docs.
  */

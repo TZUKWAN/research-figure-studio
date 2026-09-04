@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -109,6 +109,20 @@ describe('appendChatMessage + loadChat', () => {
     expect(msgs).toHaveLength(1)
     expect(msgs[0].role).toBe('user')
     expect(msgs[0].text).toBe('hello')
+  })
+
+  it('rejects path separators in storage ids', () => {
+    const escapedProjectDir = join(tmpDir, 'escape')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    try {
+      store.appendChatMessage('../escape', 'chat1', { role: 'assistant', text: 'must not escape' })
+
+      expect(existsSync(escapedProjectDir)).toBe(false)
+      expect(store.loadChat('../escape', 'chat1')).toEqual([])
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('seq increases monotonically', () => {

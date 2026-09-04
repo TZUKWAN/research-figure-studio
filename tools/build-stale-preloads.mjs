@@ -1,7 +1,7 @@
 /**
  * Rebuild app preloads whose sources are newer than the built artifact.
  *
- * In dev mode the shell loads each app's preload from apps/<app>/out/preload/
+ * In dev mode the shell loads the Slides preload from apps/slides/out/preload/
  * straight off disk; `npm run dev` only starts renderer vite servers and never
  * rebuilds preloads, so after a pull the artifact can silently miss newly added
  * preload APIs (calls fail with "... is not a function" in the renderer console
@@ -13,7 +13,7 @@ import { existsSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
-const APPS = ['docs', 'sheets', 'slides', 'pdf', 'markdown']
+const APPS = ['slides']
 
 /** Newest mtime (ms) under dir, 0 when missing. */
 function newestMtime(dir) {

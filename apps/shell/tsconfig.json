@@ -6,7 +6,7 @@
     "types": ["node", "vite/client"],
     // resolve the sibling source package by path (worktree-safe: a linked
     // node_modules would otherwise typecheck against another checkout) —
-    // same mapping as packages/pdf2docx/tsconfig.json
+    // keep workspace package resolution tied to this checkout
     "paths": {
       "@genoffice/docx-engine": ["../../packages/docx-engine/src/index.ts"],
       "@genoffice/font-metrics": ["../../packages/font-metrics/src/index.ts"],

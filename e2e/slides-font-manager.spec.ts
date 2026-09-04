@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test'
-import { execFileSync } from 'node:child_process'
-import { mkdtemp } from 'node:fs/promises'
+import JSZip from 'jszip'
+import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { launchShell, closeAndSaveVideo, waitForPageWithUrl } from './helpers'
@@ -8,16 +8,28 @@ import { launchShell, closeAndSaveVideo, waitForPageWithUrl } from './helpers'
 /**
  * The fixture deck (one slide whose only run uses the catalog font Rubik) is
  * kept as plain-text OOXML parts under assets/font-manager-rubik/ so no binary
- * lives in the repo; zip them into a real .pptx at test time.
+ * lives in the repo; package them into a real .pptx at test time.
  */
+async function addFixtureFiles(zip: JSZip, dir: string, prefix = ''): Promise<void> {
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    const relativePath = join(prefix, entry.name)
+    const absolutePath = join(dir, entry.name)
+    if (entry.isDirectory()) {
+      await addFixtureFiles(zip, absolutePath, relativePath)
+    } else {
+      zip.file(relativePath.replaceAll('\\', '/'), await readFile(absolutePath))
+    }
+  }
+}
+
 async function buildRubikFixture(): Promise<string> {
   const out = join(
     await mkdtemp(join(tmpdir(), 'genoffice-font-manager-')),
     'font-manager-rubik.pptx',
   )
-  execFileSync('zip', ['-X', '-q', '-r', out, '.'], {
-    cwd: resolve(__dirname, 'assets/font-manager-rubik'),
-  })
+  const zip = new JSZip()
+  await addFixtureFiles(zip, resolve(__dirname, 'assets/font-manager-rubik'))
+  await writeFile(out, await zip.generateAsync({ type: 'nodebuffer', compression: 'STORE' }))
   return out
 }
 

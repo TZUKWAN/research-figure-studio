@@ -26,23 +26,6 @@ export function gensparkAttributionHeaders(baseUrl?: string): Record<string, str
 
 export const AI_PROVIDERS: AiProviderMeta[] = [
   {
-    id: 'genspark',
-    label: 'Genspark',
-    models: [
-      'claude-opus-4-7',
-      'claude-opus-4-8',
-      'claude-sonnet-4-6',
-      'gpt-5.6',
-      'gpt-5.6-terra',
-      'gpt-5.6-luna',
-      'gemini-3.1-pro-preview',
-      'gemini-3-flash-preview',
-      'gemini-3.7-flash',
-    ],
-    defaultModel: 'claude-opus-4-7',
-    keyPlaceholder: 'Not required - sign in to Genspark',
-  },
-  {
     id: 'anthropic',
     label: 'Claude',
     // current-generation ids per platform.claude.com models overview (2026-08)
@@ -166,7 +149,7 @@ export const AI_PROVIDERS: AiProviderMeta[] = [
   },
   {
     id: 'custom',
-    label: 'Custom',
+    label: 'Custom (OpenAI-compatible)',
     models: [],
     defaultModel: '',
     keyPlaceholder: 'API Key',
@@ -191,7 +174,7 @@ export function defaultAiSettings(
       baseUrl: meta.needsBaseUrl ? '' : undefined,
     }
   }
-  return { provider: 'genspark', providers, gskToolsEnabled: true }
+  return { provider: 'custom', providers, gskToolsEnabled: true }
 }
 
 /** false only on an explicit opt-out; absent (pre-toggle settings files) means on */
@@ -203,17 +186,18 @@ export function cloudToolsEnabled(settings: Pick<AiSettings, 'gskToolsEnabled'>)
  * The stored provider selection is honored only when its config is usable
  * (api-key providers need a key and a model id; providers flagged
  * needsBaseUrl also need a base URL). Anything else — including unknown
- * ids from a hand-edited
- * settings file — falls back to genspark, so a half-filled setup degrades
- * to the signed-in default instead of silently disabling AI.
+ * ids from a hand-edited settings file — falls back to the BYOK custom
+ * endpoint, so a half-filled setup degrades to the only offered provider
+ * instead of silently disabling AI. The legacy gsk-login selection stays
+ * wired for old settings files but is no longer reachable from the UI.
  */
 export function activeProvider(settings: AiSettings): AiProviderId {
   const provider = settings.provider
   if (provider === 'genspark') return 'genspark'
   const meta = AI_PROVIDERS.find((m) => m.id === provider)
   const config = settings.providers?.[provider]
-  if (!meta || !config?.apiKey || !config.model) return 'genspark'
-  if (meta.needsBaseUrl && !config.baseUrl) return 'genspark'
+  if (!meta || !config?.apiKey || !config.model) return 'custom'
+  if (meta.needsBaseUrl && !config.baseUrl) return 'custom'
   return provider
 }
 
@@ -274,8 +258,10 @@ export function resolveAiSettings(
     }
     return defaults
   }
+  const provider =
+    stored.provider === 'genspark' ? defaults.provider : (stored.provider ?? defaults.provider)
   return {
-    provider: stored.provider ?? defaults.provider,
+    provider,
     providers: trimConfigs(migrateRetiredModels({ ...defaults.providers, ...stored.providers })),
     gskToolsEnabled: stored.gskToolsEnabled ?? defaults.gskToolsEnabled ?? true,
   }
