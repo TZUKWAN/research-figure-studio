@@ -34,6 +34,17 @@ import { classifyEdges, type EdgeTarget } from '../constraints/edge-aware-solver
 import { normalizeVisualPlan } from '../visual/visualPlan.js'
 import { compositionSignature } from '../composition/priors.js'
 import { auditScientific, type ScientificIssue } from '../critic/scientific-critic.js'
+import {
+  OUTPUT_CONTEXT_DEFAULT_WIDTH_MM,
+  OUTPUT_CONTEXT_MIN_TEXT_PT,
+  publicationAudit,
+  qualityThresholdFor,
+} from '../contract/figure-contract.js'
+import {
+  domainPresentationDefault,
+  resolveDomain,
+  DOMAIN_PROFILES,
+} from '../contract/domain-profile.js'
 
 export interface OrchestratorLlm {
   /** semantic planner: research meaning ONLY (no coordinates/colors) */
@@ -69,6 +80,10 @@ export interface OrchestrationInput {
   nodeSpec?: FigureNodeSpec
   measure?: typeof measureNode
   maxRecompose?: number
+  /** publication contract (P1): venue, final size, forbidden claims, provenance */
+  contract?: import('../contract/figure-contract.js').FigureContract
+  /** domain hint when no contract is supplied */
+  domainHint?: string
 }
 
 export type OrchestrationStage =
@@ -102,6 +117,7 @@ export type AppliedRepair =
   | 'L5 RECOMPOSE (composition redesign)'
   | 'L6 SEMANTIC_REPLAN'
   | 'CONTENT_REDUCE'
+  | 'TYPOGRAPHY_FIX'
 
 export interface OrchestrationResult {
   ok: boolean
@@ -112,8 +128,12 @@ export interface OrchestrationResult {
   best?: CompositionCandidate
   /** model-authored decomposition already scoped to semantic node IDs */
   visualPlan?: import('../visual/visualPlan.js').VisualPlan
+  /** resolved scientific domain (P1): drives renderer primitives + connector language */
+  domain?: import('../contract/domain-profile.js').ScientificDomain
   /** relations deliberately expressed through position/grouping rather than a connector */
   unrenderedRelations?: RoutedEdge[]
+  /** ranked candidate summary (P2 art direction): the set the winner was chosen from */
+  candidates?: Array<{ source: string; priorId: string | null; score: number; crossings: number }>
   routes?: RoutedEdge[]
   critic?: CriticVerdict
   repairs?: AppliedRepair[]
@@ -148,11 +168,32 @@ export async function orchestrateFigure(
     trace.push(event)
     onEvent?.(event)
   }
+  // P1: domain resolution + final-size-aware typography scale. The contract's
+  // physical floor is solved FORWARD — canvas fonts scale up so the printed
+  // figure clears the floor — rather than gated after the fact.
+  const domain = resolveDomain(input.contract?.domain ?? input.domainHint)
+  let contractFontScale = 1
+  if (input.contract) {
+    const finalWidthMm =
+      input.contract.output.finalWidthMm ??
+      OUTPUT_CONTEXT_DEFAULT_WIDTH_MM[input.contract.output.context]
+    const floorPt =
+      input.contract.minTextPtAtFinalSize ??
+      OUTPUT_CONTEXT_MIN_TEXT_PT[input.contract.output.context]
+    const canvasMm = (input.canvasW * 25.4) / 96
+    const smallestDefault = Math.min(
+      ...Object.values(SEMANTIC_NODE_STYLES).map((style) => style.detailSizePt),
+    )
+    contractFontScale = Math.max(1, (floorPt * canvasMm) / finalWidthMm / smallestDefault)
+  }
   const specFor = (type: keyof typeof SEMANTIC_NODE_STYLES): NodeTextSpec => {
     const style = SEMANTIC_NODE_STYLES[type]
+    const round1 = (v: number) => Math.round(v * 10) / 10
     return {
-      titleSizePt: input.nodeSpec?.titleSizePt ?? style.titleSizePt,
-      detailSizePt: input.nodeSpec?.detailSizePt ?? style.detailSizePt,
+      titleSizePt: round1((input.nodeSpec?.titleSizePt ?? style.titleSizePt) * contractFontScale),
+      detailSizePt: round1(
+        (input.nodeSpec?.detailSizePt ?? style.detailSizePt) * contractFontScale,
+      ),
       maxTitleLines: style.maxTitleLines,
       maxDetailLines: style.maxDetailLines,
       padX: input.nodeSpec?.padX ?? style.padX,
@@ -220,14 +261,32 @@ export async function orchestrateFigure(
   // Semantic IDs are the internal identity everywhere. Visible titles remain
   // display text only, so routing and criticism cannot lose a node to title
   // translation or duplicate labels.
-  const edges: FigureEdgesInput[] = plan.edges.map((edge, index) => ({
-    id: edge.id ?? `edge:${edge.from}->${edge.to}:${edge.relation}:${index}`,
-    from: edge.from,
-    to: edge.to,
-    role: edge.role,
-    relation: edge.relation,
-    ...(edge.presentation ? { presentation: edge.presentation } : {}),
-  }))
+  const edges: FigureEdgesInput[] = plan.edges.map((edge, index) => {
+    const presentation =
+      edge.presentation ?? domainPresentationDefault(domain, edge.relation) ?? undefined
+    return {
+      id: edge.id ?? `edge:${edge.from}->${edge.to}:${edge.relation}:${index}`,
+      from: edge.from,
+      to: edge.to,
+      role: edge.role,
+      relation: edge.relation,
+      ...(presentation ? { presentation } : {}),
+    }
+  })
+  // P1: forbidden claims / visible-text violations are semantic hard failures.
+  const forbiddenClaims = [
+    ...(input.contract?.forbiddenClaims ?? []),
+    ...(input.contract?.visibleTextPolicy.forbidden ?? []),
+  ]
+  const forbiddenHits = forbiddenClaims.filter((claim) => {
+    const needle = claim.toLowerCase()
+    return plan.nodes.some(
+      (node) =>
+        node.visible.title.toLowerCase().includes(needle) ||
+        node.visible.detail?.toLowerCase().includes(needle) ||
+        node.semanticLabel.toLowerCase().includes(needle),
+    )
+  })
   const signals = {
     roles: new Set(plan.nodes.map((node) => node.role)),
     relations: new Set(plan.edges.map((edge) => edge.relation)),
@@ -333,6 +392,7 @@ export async function orchestrateFigure(
             ? {
                 best,
                 visualPlan,
+                domain,
                 unrenderedRelations,
                 routes,
                 critic,
@@ -394,6 +454,7 @@ export async function orchestrateFigure(
       groupIds,
       intent: { plan, spatial: best.plan },
       routed: routes,
+      passThreshold: qualityThresholdFor(input.contract),
     })
     // Scientific audit (17.3): evidence coverage, connector realization,
     // causal direction, dominance. Hard scientific failures escalate a PASS —
@@ -420,6 +481,45 @@ export async function orchestrateFigure(
         gateIssues: [...critic.gateIssues, ...scientificIssues.map((issue) => issue.message)],
       }
     }
+    // P1: forbidden claims / visible-text violations block delivery outright.
+    if (forbiddenHits.length > 0) {
+      const message = `forbidden claim(s) reached the canvas: ${forbiddenHits.join('; ')}`
+      if (critic.verdict === 'PASS' || critic.verdict === 'LOCAL_LAYOUT_FIX') {
+        critic = {
+          ...critic,
+          verdict: 'RECOMPOSE',
+          reason: message,
+          gateIssues: [...critic.gateIssues, message],
+        }
+      } else {
+        critic = { ...critic, gateIssues: [...critic.gateIssues, message] }
+      }
+    }
+    // P3: publication QA at final physical size (fonts scale forward, so this
+    // only fires when the plan itself forced text below the contract floor).
+    if (input.contract) {
+      const pubIssues = publicationAudit({
+        contract: input.contract,
+        canvasW: input.canvasW,
+        canvasH: input.canvasH,
+        minFontPt: Math.min(
+          ...plan.nodes.map(
+            (node) => SEMANTIC_NODE_STYLES[node.type].detailSizePt * contractFontScale,
+          ),
+        ),
+      })
+      const pubHard = pubIssues.filter((issue) => issue.severity === 'hard')
+      if (pubHard.length > 0) {
+        repairs.push('TYPOGRAPHY_FIX' as AppliedRepair)
+        const message = pubHard.map((issue) => issue.detail).join('; ')
+        critic = {
+          ...critic,
+          verdict: 'RECOMPOSE',
+          reason: message,
+          gateIssues: [...critic.gateIssues, message],
+        }
+      }
+    }
     emit('critic.completed', true, critic.verdict)
 
     if (critic.verdict === 'ROUTE_FIX' && !routeRetried) {
@@ -444,6 +544,7 @@ export async function orchestrateFigure(
         groupIds,
         intent: { plan, spatial: best.plan },
         routed: routes,
+        passThreshold: qualityThresholdFor(input.contract),
       })
       emit('route.repaired', true, critic.verdict)
       emit('critic.completed', true, `${critic.verdict} (after L2)`)
@@ -502,6 +603,7 @@ export async function orchestrateFigure(
         ? {
             best,
             visualPlan,
+            domain,
             unrenderedRelations,
             routes,
             measured,
@@ -521,7 +623,14 @@ export async function orchestrateFigure(
     measured,
     best,
     visualPlan,
+    domain,
     unrenderedRelations,
+    candidates: candidates.map((candidate) => ({
+      source: candidate.source,
+      priorId: candidate.priorId,
+      score: Math.round(candidate.score * 10) / 10,
+      crossings: candidate.crossings,
+    })),
     routes,
     critic,
     ...(repairs.length > 0 ? { repairs } : {}),

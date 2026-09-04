@@ -117,13 +117,7 @@ export interface CriticScores {
 export type CriticVerdictLevel = 'PASS' | 'ROUTE_FIX' | 'LOCAL_LAYOUT_FIX' | 'RECOMPOSE'
 
 export type CriticScope =
-  | 'semantic'
-  | 'composition'
-  | 'group'
-  | 'node'
-  | 'edge'
-  | 'geometry'
-  | 'route'
+  'semantic' | 'composition' | 'group' | 'node' | 'edge' | 'geometry' | 'route'
 export type CriticAction = 'accept' | 'geometry-fix' | 'composition-redesign' | 'semantic-replan'
 
 export interface CriticDecision {
@@ -171,6 +165,8 @@ export interface CriticInput {
   }
   /** final obstacle-routed edges: audits THESE instead of re-deriving */
   routed?: RoutedEdge[]
+  /** venue/contract-driven PASS threshold (default 7.5) */
+  passThreshold?: number
 }
 
 const CONNECTOR_PRESENTATIONS = new Set([
@@ -602,7 +598,7 @@ export function criticVerdict(input: CriticInput): CriticVerdict {
     reason = intersections.length
       ? `route intersects nodes for edges: ${routeEdgeIds.join(', ')}`
       : `${unroutableDeclared} declared connector(s) have no legal route`
-  } else if (overallScore >= 7.5) {
+  } else if (overallScore >= (input.passThreshold ?? 7.5)) {
     verdict = 'PASS'
   } else if (overallScore >= 5.5) {
     verdict = 'LOCAL_LAYOUT_FIX'

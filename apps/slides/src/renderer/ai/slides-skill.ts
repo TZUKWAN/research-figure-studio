@@ -2,6 +2,8 @@ import type { AgentSkill, ToolDisplay } from '@genoffice/agent-core'
 import {
   anchorPoint,
   auditHorizontalPipeline,
+  parseFigureContract,
+  DOMAIN_PROFILES,
   auditInputCoreOutput,
   endpointTable,
   getComponentSpec,
@@ -1130,6 +1132,54 @@ const TOOLS: AgentToolDef[] = [
           description: 'Optional researched material: key nodes, data, edge labels',
         },
         themeId: { type: 'string', description: 'Optional theme id (default academic-blue)' },
+        domain: {
+          type: 'string',
+          enum: [
+            'general',
+            'cs-ml',
+            'materials-chemistry',
+            'biomed',
+            'engineering',
+            'social-science',
+          ],
+          description:
+            'Scientific domain: selects the domain visual language (primitives, connector semantics)',
+        },
+        figureFamily: {
+          type: 'string',
+          enum: [
+            'framework',
+            'architecture',
+            'pipeline',
+            'mechanism',
+            'causal-model',
+            'hierarchy',
+            'network',
+            'timeline',
+            'matrix',
+            'comparison',
+            'freeform',
+          ],
+          description: 'Figure family when the user names one',
+        },
+        venue: {
+          type: 'string',
+          description:
+            'Target venue (e.g. "Nature", "CVPR", "thesis") — raises the quality threshold',
+        },
+        outputContext: {
+          type: 'string',
+          enum: [
+            'presentation',
+            'paper-single-column',
+            'paper-double-column',
+            'full-page-paper',
+            'thesis',
+            'poster',
+            'web',
+          ],
+          description: 'Final output context — drives publication-size font scaling',
+        },
         capability: {
           type: 'object',
           description: 'Optional calibration override used by deterministic tests',
@@ -3823,12 +3873,20 @@ async function executeTool(
           }
         },
       }
+      const contract = parseFigureContract({
+        centralClaim: thesis,
+        figureFamily: String(call.input.figureFamily ?? ''),
+        domain: String(call.input.domain ?? ''),
+        venue: String(call.input.venue ?? ''),
+        output: { context: String(call.input.outputContext ?? '') },
+      })
       const orchestration = await orchestrateFigure(
         {
           thesis,
           canvasW: slide.widthPx,
           canvasH: slide.heightPx,
           capability: call.input.capability as CapabilityInput | undefined,
+          ...(contract ? { contract } : {}),
         },
         llm,
       )
@@ -3883,7 +3941,11 @@ async function executeTool(
           throwIfAborted(signal)
           const node = nodeById.get(placement.id)
           if (!node) throw new Error('unmeasured node "' + placement.id + '"')
-          const kind = KIND_BY_TYPE[node.type] ?? 'process-node'
+          const domainProfile = orchestration.domain
+            ? DOMAIN_PROFILES[orchestration.domain]
+            : undefined
+          const kind =
+            domainProfile?.kindOverrides?.[node.type] ?? KIND_BY_TYPE[node.type] ?? 'process-node'
           const colors = resolveComponentColors(kind, theme.roles)
           const tokens = componentThemeTokens(kind)
           // Parent box shows ONLY the title. detail keywords have already been

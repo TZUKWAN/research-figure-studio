@@ -117,6 +117,119 @@ export const RESEARCH_COMPONENT_REGISTRY: ReadonlyMap<string, ComponentSpec> = n
         anchors: { top: true, bottom: true, left: true, right: true },
         textCapacity: 24,
       },
+      // ── Scientific Visual Primitives (P1) — shape carries meaning ──
+      {
+        // abstraction layer: wide flat rect, stackable
+        kind: 'model-layer',
+        preset: 'rect',
+        wFrac: 0.3,
+        hFrac: 0.07,
+        minHpx: 34,
+        radiusPx: 0,
+        titleFontPt: 12,
+        textCapacity: 36,
+      },
+      {
+        // tensor / embedding / feature vector
+        kind: 'tensor',
+        preset: 'parallelogram',
+        wFrac: 0.14,
+        hFrac: 0.09,
+        radiusPx: 0,
+        textCapacity: 24,
+      },
+      {
+        // dataset / database / store
+        kind: 'data-store',
+        preset: 'can',
+        wFrac: 0.12,
+        hFrac: 0.13,
+        radiusPx: 0,
+        textCapacity: 24,
+      },
+      {
+        // pipeline stage: directional band segment
+        kind: 'process-stage',
+        preset: 'chevron',
+        wFrac: 0.15,
+        hFrac: 0.1,
+        radiusPx: 0,
+        anchors: { top: false, bottom: false, left: true, right: true },
+        textCapacity: 28,
+      },
+      {
+        // synthesis / reaction step (pointed, terminal-friendly)
+        kind: 'reaction-stage',
+        preset: 'homePlate',
+        wFrac: 0.15,
+        hFrac: 0.1,
+        radiusPx: 0,
+        anchors: { top: false, bottom: false, left: true, right: true },
+        textCapacity: 28,
+      },
+      {
+        // material phase: flat stacked slab
+        kind: 'material-layer',
+        preset: 'rect',
+        wFrac: 0.28,
+        hFrac: 0.05,
+        minHpx: 26,
+        radiusPx: 0,
+        titleFontPt: 11,
+        bodyFontPt: 9,
+        textCapacity: 24,
+      },
+      {
+        // timeline event marker
+        kind: 'timeline-marker',
+        preset: 'ellipse',
+        wFrac: 0.08,
+        hFrac: 0.06,
+        minWpx: 56,
+        minHpx: 36,
+        radiusPx: 0,
+        titleFontPt: 11,
+        textCapacity: 20,
+      },
+      {
+        // condition / guard
+        kind: 'condition',
+        preset: 'diamond',
+        wFrac: 0.13,
+        hFrac: 0.11,
+        radiusPx: 0,
+        textCapacity: 20,
+      },
+      {
+        // quantitative metric callout
+        kind: 'metric',
+        preset: 'pentagon',
+        wFrac: 0.12,
+        hFrac: 0.09,
+        radiusPx: 0,
+        textCapacity: 20,
+      },
+      {
+        // experimental apparatus / device block
+        kind: 'device',
+        preset: 'flowChartPredefinedProcess',
+        wFrac: 0.16,
+        hFrac: 0.11,
+        radiusPx: 0,
+        textCapacity: 28,
+      },
+      {
+        // evidence chip: compact rounded token
+        kind: 'evidence-chip',
+        preset: 'roundRect',
+        wFrac: 0.1,
+        hFrac: 0.06,
+        minWpx: 64,
+        minHpx: 30,
+        titleFontPt: 10,
+        bodyFontPt: 9,
+        textCapacity: 18,
+      },
     ] as Array<Partial<ComponentSpec> & { kind: string }>
   ).map((s) => [s.kind, spec(s)]),
 )
