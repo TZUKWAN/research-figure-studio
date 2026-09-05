@@ -1131,6 +1131,104 @@ const TOOLS: AgentToolDef[] = [
           type: 'string',
           description: 'Optional researched material: key nodes, data, edge labels',
         },
+        contract: {
+          type: 'object',
+          description:
+            'Structured Figure Contract - pass whenever the user supplies material (paper/notes/data). Fields: centralClaim, figureFamily, domain, venue, audience, output{context,finalWidthMm,finalHeightMm,aspectRatio}, evidenceMustShow[{id,description,source}], forbiddenClaims[], visibleTextPolicy{allowed,required,forbidden,language}, provenance[{claim,source,locator}]. NEVER invent evidence or provenance - omit fields you cannot source.',
+          properties: {
+            centralClaim: { type: 'string' },
+            figureFamily: {
+              type: 'string',
+              enum: [
+                'framework',
+                'architecture',
+                'pipeline',
+                'mechanism',
+                'causal-model',
+                'hierarchy',
+                'network',
+                'timeline',
+                'matrix',
+                'comparison',
+                'freeform',
+              ],
+            },
+            domain: {
+              type: 'string',
+              enum: [
+                'general',
+                'cs-ml',
+                'materials-chemistry',
+                'biomed',
+                'engineering',
+                'social-science',
+              ],
+            },
+            venue: { type: 'string' },
+            audience: { type: 'string' },
+            output: {
+              type: 'object',
+              properties: {
+                context: {
+                  type: 'string',
+                  enum: [
+                    'presentation',
+                    'paper-single-column',
+                    'paper-double-column',
+                    'full-page-paper',
+                    'thesis',
+                    'poster',
+                    'web',
+                  ],
+                },
+                finalWidthMm: { type: 'number' },
+                finalHeightMm: { type: 'number' },
+                aspectRatio: { type: 'number' },
+              },
+            },
+            evidenceMustShow: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string' },
+                  description: { type: 'string' },
+                  source: {
+                    type: 'string',
+                    enum: ['user', 'document', 'search', 'dataset', 'sample', 'derived'],
+                  },
+                },
+                required: ['id'],
+              },
+            },
+            evidenceOptional: { type: 'array', items: { type: 'object' } },
+            forbiddenClaims: { type: 'array', items: { type: 'string' } },
+            visibleTextPolicy: {
+              type: 'object',
+              properties: {
+                allowed: { type: 'array', items: { type: 'string' } },
+                required: { type: 'array', items: { type: 'string' } },
+                forbidden: { type: 'array', items: { type: 'string' } },
+                language: { type: 'string', enum: ['zh', 'en', 'mixed'] },
+              },
+            },
+            provenance: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  claim: { type: 'string' },
+                  source: {
+                    type: 'string',
+                    enum: ['user', 'document', 'search', 'dataset', 'sample', 'derived'],
+                  },
+                  locator: { type: 'string' },
+                },
+                required: ['claim', 'source'],
+              },
+            },
+          },
+        },
         themeId: { type: 'string', description: 'Optional theme id (default academic-blue)' },
         domain: {
           type: 'string',
@@ -3903,12 +4001,27 @@ async function executeTool(
           }
         },
       }
+      // P0.5 contract bridge: the structured contract field is authoritative;
+      // legacy top-level fields (domain/figureFamily/venue/outputContext) are
+      // normalized into the same FigureContract for backward compatibility.
+      const contractInput =
+        typeof call.input.contract === 'object' && call.input.contract !== null
+          ? (call.input.contract as Record<string, unknown>)
+          : {}
       const contract = parseFigureContract({
-        centralClaim: thesis,
-        figureFamily: String(call.input.figureFamily ?? ''),
-        domain: String(call.input.domain ?? ''),
-        venue: String(call.input.venue ?? ''),
-        output: { context: String(call.input.outputContext ?? '') },
+        ...contractInput,
+        centralClaim: String(contractInput.centralClaim ?? '') || thesis,
+        figureFamily: String(contractInput.figureFamily ?? call.input.figureFamily ?? ''),
+        domain: String(contractInput.domain ?? call.input.domain ?? ''),
+        venue: String(contractInput.venue ?? call.input.venue ?? ''),
+        output: {
+          ...((contractInput.output ?? {}) as Record<string, unknown>),
+          context: String(
+            (contractInput.output as Record<string, unknown> | undefined)?.context ??
+              call.input.outputContext ??
+              '',
+          ),
+        },
       })
       const orchestration = await orchestrateFigure(
         {
@@ -3981,13 +4094,16 @@ async function executeTool(
           // Parent box shows ONLY the title. detail keywords have already been
           // promoted to independent visual units below; the page must not
           // regress into "big card with text" mode.
+          // P0.5 typography SSOT: draw exactly the sizes the orchestrator
+          // resolved (contract-scaled) — never raw style tables here.
+          const nodeTypography = orchestration.typography?.node[node.id]
           const paragraphs: EditParagraph[] = [
             {
               runs: [
                 {
                   text: node.visible.title,
                   bold: true,
-                  fontSize: SEMANTIC_NODE_STYLES[node.type].titleSizePt,
+                  fontSize: nodeTypography?.titlePt ?? SEMANTIC_NODE_STYLES[node.type].titleSizePt,
                   color: colors.text,
                 },
               ],
@@ -4051,7 +4167,12 @@ async function executeTool(
                     {
                       text: u.label,
                       bold: role === 'output' || role === 'substep',
-                      fontSize: role === 'annotation' ? 9.5 : 10.5,
+                      fontSize:
+                        role === 'annotation'
+                          ? (orchestration.typography?.micro.annotationPt ?? 9.5)
+                          : role === 'substep' || role === 'output'
+                            ? (orchestration.typography?.micro.primaryPt ?? 10.5)
+                            : (orchestration.typography?.micro.secondaryPt ?? 9.5),
                       color: unitColor.text,
                     },
                   ],
@@ -4060,7 +4181,13 @@ async function executeTool(
               ]
               if (u.detail) {
                 unitParagraphs.push({
-                  runs: [{ text: u.detail, fontSize: 9, color: unitColor.subtitle }],
+                  runs: [
+                    {
+                      text: u.detail,
+                      fontSize: orchestration.typography?.micro.secondaryPt ?? 9,
+                      color: unitColor.subtitle,
+                    },
+                  ],
                   align: 'center',
                 })
               }
@@ -4134,6 +4261,36 @@ async function executeTool(
           createdIds.push(cr.sourceId)
           latestSlide = cr.slide
           access.applySlide(idx, cr.slide)
+          // §24 inhibition semantics: a flat-ended inhibition is realised as a
+          // native short perpendicular bar at the TARGET end, bound to the
+          // connector via semanticEdgeId (editable, never rasterized).
+          if (route.presentation === 'inhibition') {
+            const horizontal = route.start.side === 'right' || route.start.side === 'left'
+            const barLen = 12
+            const bar = await window.slidesApi.addElement({
+              slideIndex: idx,
+              kind: 'line',
+              xPx: horizontal ? p2.x - barLen / 2 : p2.x,
+              yPx: horizontal ? p2.y : p2.y - barLen / 2,
+              wPx: horizontal ? barLen : 1,
+              hPx: horizontal ? 1 : barLen,
+              fitWidthPx: access.fitWidthPx,
+              stroke: { color: connectorColor(theme.roles), widthPt: 2 },
+              semanticMetadata: {
+                role: 'inhibition-bar',
+                themeFill: 'none',
+                themeStroke: 'connector',
+                themeText: 'none',
+                componentType: 'research-inhibition-bar',
+                semanticEdgeId: route.semanticEdgeId,
+              },
+            })
+            if (bar) {
+              createdIds.push(bar.sourceId)
+              latestSlide = bar.slide
+              access.applySlide(idx, bar.slide)
+            }
+          }
           const boundSlide = await window.slidesApi.editConnectorEndpoints({
             slideIndex: idx,
             sourceId: cr.sourceId,

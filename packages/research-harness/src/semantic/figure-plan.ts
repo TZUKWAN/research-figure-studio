@@ -35,6 +35,12 @@ export interface SemanticNode {
   importance: number
   role: SemanticRole
   groupId?: string
+  /** contract evidence ids this node carries (P0.5 contract bridge) */
+  evidenceRefs?: string[]
+  /** contract provenance ids backing quantitative claims on this node */
+  provenanceRefs?: string[]
+  /** what kind of claim the node makes; drives provenance gating */
+  claimType?: 'qualitative' | 'quantitative' | 'derived' | 'sample'
 }
 
 export interface SemanticGroup {
@@ -189,6 +195,18 @@ export function parseFigurePlanV2(raw: unknown): FigurePlanV2 | null {
       importance: Math.min(1, Math.max(0, importanceRaw)),
       role: role as SemanticRole,
       ...(text(node.groupId) ? { groupId: text(node.groupId) } : {}),
+      ...(strings(node.evidenceRefs).length > 0
+        ? { evidenceRefs: strings(node.evidenceRefs) }
+        : {}),
+      ...(strings(node.provenanceRefs).length > 0
+        ? { provenanceRefs: strings(node.provenanceRefs) }
+        : {}),
+      ...(['qualitative', 'quantitative', 'derived', 'sample'].includes(text(node.claimType))
+        ? {
+            claimType: text(node.claimType) as
+              'qualitative' | 'quantitative' | 'derived' | 'sample',
+          }
+        : {}),
     })
   }
 

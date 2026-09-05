@@ -483,9 +483,15 @@ describe('creation orchestrator', () => {
       (event) => events.push(event.stage),
     )
     expect(result.critic?.verdict).toBe('LOCAL_LAYOUT_FIX')
-    expect(result.ok).toBe(true)
+    // P0.5 delivery gate: budget exhaustion is NEVER acceptance. The ladder
+    // walked all candidates (invariant kept), but the figure must NOT ship
+    // with a non-PASS verdict — ok is now false with explicit gate reasons.
+    expect(result.ok).toBe(false)
     expect(result.repairs).toContain('L3 LOCAL_GEOMETRY_FIX')
+    expect(result.repairs).toContain('L3 LOCAL_GEOMETRY_FIX (budget exhausted)')
     expect(result.repairs).not.toContain('L5 RECOMPOSE')
+    expect(result.delivery?.reasons).toContain('REPAIR_BUDGET_EXHAUSTED')
+    expect(result.delivery?.reasons).toContain('GEOMETRY_HARD_FAIL')
     expect(events.filter((stage) => stage === 'layout.repaired')).toHaveLength(2)
   })
 
@@ -599,14 +605,21 @@ describe('creation orchestrator', () => {
     //       winning on the second compose, OR
     //   (b) the natural router + solver fixing the plan in one round, OR
     //   (c) the L3 LOCAL_LAYOUT_FIX picking the next prior candidate.
-    // All three are acceptable structural recoveries; the key invariant is
-    // that the final figure is NOT stuck on the original structural defect.
+    // All three are acceptable structural recoveries; the key invariants are:
+    // (1) the final figure is NOT stuck on the original structural defect, and
+    // (2) under the P0.5 delivery gate, ok === (verdict === 'PASS' &&
+    //     hardPass) — a budget-exhausted LOCAL verdict must not ship as true.
     expect(composeCalls).toBeGreaterThanOrEqual(1)
-    expect(result.ok).toBe(true)
+    expect(result.ok).toBe(result.critic?.verdict === 'PASS' && result.critic?.hardPass === true)
     expect(result.critic?.verdict).not.toBe('RECOMPOSE')
     if (result.critic?.verdict === 'RECOMPOSE') {
       // ladder failed: the prior must replace the model plan
       expect(result.best?.source).toBe('prior')
+    }
+    if (!result.ok) {
+      // non-PASS shipments are now impossible; the gate must say why
+      expect(result.delivery?.pass).toBe(false)
+      expect(result.delivery?.reasons.length).toBeGreaterThan(0)
     }
   })
 

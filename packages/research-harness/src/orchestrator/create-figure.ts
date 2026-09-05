@@ -34,12 +34,10 @@ import { classifyEdges, type EdgeTarget } from '../constraints/edge-aware-solver
 import { normalizeVisualPlan } from '../visual/visualPlan.js'
 import { compositionSignature } from '../composition/priors.js'
 import { auditScientific, type ScientificIssue } from '../critic/scientific-critic.js'
-import {
-  OUTPUT_CONTEXT_DEFAULT_WIDTH_MM,
-  OUTPUT_CONTEXT_MIN_TEXT_PT,
-  publicationAudit,
-  qualityThresholdFor,
-} from '../contract/figure-contract.js'
+import { publicationAudit, qualityThresholdFor } from '../contract/figure-contract.js'
+import { auditFigureContract, type RenderedText } from '../contract/contract-audit.js'
+import { evaluateDeliveryGate } from '../delivery/delivery-gate.js'
+import { resolveFigureTypography } from '../render/typography.js'
 import {
   domainPresentationDefault,
   resolveDomain,
@@ -134,6 +132,10 @@ export interface OrchestrationResult {
   unrenderedRelations?: RoutedEdge[]
   /** ranked candidate summary (P2 art direction): the set the winner was chosen from */
   candidates?: Array<{ source: string; priorId: string | null; score: number; crossings: number }>
+  /** P0.5 delivery gate verdict — ok === delivery.pass, always */
+  delivery?: import('../delivery/delivery-gate.js').DeliveryGateResult
+  /** resolved render typography (P0.5 SSOT): what the renderer must draw */
+  typography?: import('../render/typography.js').ResolvedFigureTypography
   routes?: RoutedEdge[]
   critic?: CriticVerdict
   repairs?: AppliedRepair[]
@@ -168,32 +170,17 @@ export async function orchestrateFigure(
     trace.push(event)
     onEvent?.(event)
   }
-  // P1: domain resolution + final-size-aware typography scale. The contract's
-  // physical floor is solved FORWARD — canvas fonts scale up so the printed
-  // figure clears the floor — rather than gated after the fact.
+  // P1/P0.5: domain resolution + Render Typography single source of truth.
+  // Every visible pt size is resolved ONCE here (contract-scaled); measurement,
+  // the renderer and the publication audit all consume the same object.
   const domain = resolveDomain(input.contract?.domain ?? input.domainHint)
-  let contractFontScale = 1
-  if (input.contract) {
-    const finalWidthMm =
-      input.contract.output.finalWidthMm ??
-      OUTPUT_CONTEXT_DEFAULT_WIDTH_MM[input.contract.output.context]
-    const floorPt =
-      input.contract.minTextPtAtFinalSize ??
-      OUTPUT_CONTEXT_MIN_TEXT_PT[input.contract.output.context]
-    const canvasMm = (input.canvasW * 25.4) / 96
-    const smallestDefault = Math.min(
-      ...Object.values(SEMANTIC_NODE_STYLES).map((style) => style.detailSizePt),
-    )
-    contractFontScale = Math.max(1, (floorPt * canvasMm) / finalWidthMm / smallestDefault)
-  }
+  /** P0.5: single source of truth for every visible pt; resolved after parse */
+  let typography: import('../render/typography.js').ResolvedFigureTypography | null = null
   const specFor = (type: keyof typeof SEMANTIC_NODE_STYLES): NodeTextSpec => {
     const style = SEMANTIC_NODE_STYLES[type]
-    const round1 = (v: number) => Math.round(v * 10) / 10
     return {
-      titleSizePt: round1((input.nodeSpec?.titleSizePt ?? style.titleSizePt) * contractFontScale),
-      detailSizePt: round1(
-        (input.nodeSpec?.detailSizePt ?? style.detailSizePt) * contractFontScale,
-      ),
+      titleSizePt: style.titleSizePt,
+      detailSizePt: style.detailSizePt,
       maxTitleLines: style.maxTitleLines,
       maxDetailLines: style.maxDetailLines,
       padX: input.nodeSpec?.padX ?? style.padX,
@@ -225,6 +212,15 @@ export async function orchestrateFigure(
     return { ok: false, trace, error: 'FigurePlan v2 failed schema validation' }
   }
 
+  // P0.5: resolve the contract-scaled typography NOW (after parse, before any
+  // measurement). The renderer and publication audit consume this same object.
+  typography = resolveFigureTypography({
+    plan,
+    contract: input.contract,
+    canvasW: input.canvasW,
+    nodeSpecOverrides: input.nodeSpec,
+  })
+
   // TEXT_OPTIMIZE: if the planner did not compress visible titles, derive a
   // restrained fallback (first clause, ≤14 chars) — soft rule, meaning kept.
   emit('text.optimized', true)
@@ -241,7 +237,11 @@ export async function orchestrateFigure(
   const measured = plan.nodes.map((node) => ({
     ...measure(
       { title: node.visible.title, detail: node.visible.detail },
-      specFor(node.type),
+      {
+        ...specFor(node.type),
+        titleSizePt: typography!.node[node.id]!.titlePt,
+        detailSizePt: typography!.node[node.id]!.detailPt,
+      },
       estimatorMeasurer(),
     ),
     title: node.id,
@@ -273,10 +273,55 @@ export async function orchestrateFigure(
       ...(presentation ? { presentation } : {}),
     }
   })
-  // P1: forbidden claims / visible-text violations are semantic hard failures.
+  // P0.5: full contract audit over the FINAL render intent (macro titles/details,
+  // micro-unit labels, edge labels). Runs each critic round; results feed the
+  // delivery gate. Plan-level claims stay as an early precheck signal.
+  const auditContract = (
+    placements: Array<{ id: string }>,
+  ): { violations: number; missingEvidence: number; messages: string[] } => {
+    if (!input.contract) return { violations: 0, missingEvidence: 0, messages: [] }
+    const rendered: RenderedText[] = []
+    for (const node of plan.nodes) {
+      rendered.push({ id: node.id, kind: 'title', text: node.visible.title })
+      if (node.visible.detail)
+        rendered.push({ id: node.id, kind: 'detail', text: node.visible.detail })
+    }
+    for (const module of visualPlan.modules) {
+      for (const unit of module.units) {
+        rendered.push({ id: unit.id, kind: 'micro', text: unit.label })
+        if (unit.detail) rendered.push({ id: unit.id, kind: 'micro', text: unit.detail })
+      }
+    }
+    for (const edge of plan.edges) {
+      if (edge.label)
+        rendered.push({
+          id: edge.id ?? `${edge.from}->${edge.to}`,
+          kind: 'label',
+          text: edge.label,
+        })
+    }
+    const evidenceRefs = new Map<string, string[]>()
+    for (const node of plan.nodes) {
+      const refs = [...(node.evidenceRefs ?? []), ...(node.provenanceRefs ?? [])]
+      if (refs.length > 0) evidenceRefs.set(node.id, refs)
+    }
+    const issues = auditFigureContract({
+      contract: input.contract,
+      placedNodeIds: placements.map((placement) => placement.id),
+      renderedTexts: rendered,
+      evidenceRefs,
+    })
+    const violations = issues.filter((issue) => issue.kind !== 'EVIDENCE_MISSING').length
+    const missingEvidence = issues.filter((issue) => issue.kind === 'EVIDENCE_MISSING').length
+    return {
+      violations,
+      missingEvidence,
+      messages: issues.map((issue) => `${issue.kind}: ${issue.message}`),
+    }
+  }
   const forbiddenClaims = [
     ...(input.contract?.forbiddenClaims ?? []),
-    ...(input.contract?.visibleTextPolicy.forbidden ?? []),
+    ...(input.contract?.visibleTextPolicy?.forbidden ?? []),
   ]
   const forbiddenHits = forbiddenClaims.filter((claim) => {
     const needle = claim.toLowerCase()
@@ -329,6 +374,11 @@ export async function orchestrateFigure(
   let routeRetried = false
   const repairs: AppliedRepair[] = []
   let routes: RoutedEdge[] = []
+  // last per-iteration audit counters feeding the delivery gate
+  let lastScientificHard = 0
+  let lastPublicationHard = 0
+  let lastContractViolations = 0
+  let lastMissingEvidence = 0
   let unrenderedRelations: RoutedEdge[] = []
   let visualPlan: ReturnType<typeof normalizeVisualPlan> = { modules: [] }
 
@@ -449,11 +499,18 @@ export async function orchestrateFigure(
     if (connectorInputs.length > densityCap) {
       const rank: Record<string, number> = { primary: 0, feedback: 1, secondary: 2 }
       const sorted = [...connectorInputs].sort(
-        (a, b) =>
-          (rank[a.priority] ?? 2) - (rank[b.priority] ?? 2) || a.key.localeCompare(b.key),
+        (a, b) => (rank[a.priority] ?? 2) - (rank[b.priority] ?? 2) || a.key.localeCompare(b.key),
       )
-      const kept = sorted.slice(0, densityCap)
-      const demoted = sorted.slice(densityCap)
+      // Directional relations (causal/inhibition/feedback/moderation primaries)
+      // are NEVER density-suppressed: without an explicit directional symbol the
+      // science is lost. Only secondary relations may be demoted to spatial
+      // presentation; if directional edges alone exceed the cap, we keep them
+      // all and let the delivery gate force a semantic replan instead.
+      const directional = sorted.filter((edge) => (rank[edge.priority] ?? 2) < 2)
+      const secondary = sorted.filter((edge) => (rank[edge.priority] ?? 2) >= 2)
+      const secondaryKeep = Math.max(0, densityCap - directional.length)
+      const kept = [...directional, ...secondary.slice(0, secondaryKeep)]
+      const demoted = secondary.slice(secondaryKeep)
       unrenderedRelations.push(
         ...demoted.map((edge) => ({
           ...edge,
@@ -506,18 +563,28 @@ export async function orchestrateFigure(
         gateIssues: [...critic.gateIssues, ...scientificIssues.map((issue) => issue.message)],
       }
     }
+    // P0.5: full Figure Contract audit over the final render intent.
+    const contractAuditResult = auditContract(best.solve.placements)
+    lastContractViolations = contractAuditResult.violations
+    lastMissingEvidence = contractAuditResult.missingEvidence
+    lastScientificHard = hardScientific.length
     // P1: forbidden claims / visible-text violations block delivery outright.
-    if (forbiddenHits.length > 0) {
-      const message = `forbidden claim(s) reached the canvas: ${forbiddenHits.join('; ')}`
+    const contractViolations = contractAuditResult.violations + forbiddenHits.length
+    if (contractViolations > 0 || contractAuditResult.missingEvidence > 0) {
+      const messages = [
+        ...forbiddenHits.map((claim) => `forbidden claim: ${claim}`),
+        ...contractAuditResult.messages,
+      ]
+      const message = messages.join('; ')
       if (critic.verdict === 'PASS' || critic.verdict === 'LOCAL_LAYOUT_FIX') {
         critic = {
           ...critic,
           verdict: 'RECOMPOSE',
           reason: message,
-          gateIssues: [...critic.gateIssues, message],
+          gateIssues: [...critic.gateIssues, ...messages],
         }
       } else {
-        critic = { ...critic, gateIssues: [...critic.gateIssues, message] }
+        critic = { ...critic, gateIssues: [...critic.gateIssues, ...messages] }
       }
     }
     // P3: publication QA at final physical size (fonts scale forward, so this
@@ -527,13 +594,10 @@ export async function orchestrateFigure(
         contract: input.contract,
         canvasW: input.canvasW,
         canvasH: input.canvasH,
-        minFontPt: Math.min(
-          ...plan.nodes.map(
-            (node) => SEMANTIC_NODE_STYLES[node.type].detailSizePt * contractFontScale,
-          ),
-        ),
+        minFontPt: typography!.minEffectiveTextPt,
       })
       const pubHard = pubIssues.filter((issue) => issue.severity === 'hard')
+      lastPublicationHard = pubHard.length
       if (pubHard.length > 0) {
         repairs.push('TYPOGRAPHY_FIX' as AppliedRepair)
         const message = pubHard.map((issue) => issue.detail).join('; ')
@@ -639,9 +703,46 @@ export async function orchestrateFigure(
     }
   }
 
+  // P0.5 Delivery Gate — the ONLY source of orchestration.ok. Repair budget
+  // exhaustion is never acceptance: a non-PASS verdict after the full ladder
+  // fails delivery with every diagnostic preserved.
+  const delivery = evaluateDeliveryGate({
+    critic,
+    scientificHardIssues: lastScientificHard,
+    publicationHardIssues: lastPublicationHard,
+    contentContractViolations: lastContractViolations + forbiddenHits.length,
+    requiredEvidenceMissing: lastMissingEvidence,
+    repairBudgetExhausted: true,
+  })
+  if (!delivery.pass) {
+    const error = `delivery gate failed: ${delivery.detail} — ${critic.reason ?? critic.gateIssues.join('; ') ?? 'quality below threshold'}`
+    emit('figure.failed', false, error)
+    return {
+      ok: false,
+      trace,
+      plan,
+      autonomy,
+      measured,
+      best,
+      visualPlan,
+      domain,
+      unrenderedRelations,
+      candidates: candidates.map((candidate) => ({
+        source: candidate.source,
+        priorId: candidate.priorId,
+        score: Math.round(candidate.score * 10) / 10,
+        crossings: candidate.crossings,
+      })),
+      routes,
+      critic,
+      ...(repairs.length > 0 ? { repairs } : {}),
+      error,
+      delivery,
+    }
+  }
   emit('figure.completed', true, critic.verdict)
   return {
-    ok: critic.verdict !== 'RECOMPOSE',
+    ok: delivery.pass,
     trace,
     plan,
     autonomy,
@@ -659,5 +760,7 @@ export async function orchestrateFigure(
     routes,
     critic,
     ...(repairs.length > 0 ? { repairs } : {}),
+    delivery,
+    typography,
   }
 }
