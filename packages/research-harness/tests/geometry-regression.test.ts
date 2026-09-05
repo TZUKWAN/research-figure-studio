@@ -313,20 +313,6 @@ const CASES: CaseSpec[] = [
   },
 ]
 
-const SPEC = {
-  titleSizePt: 13,
-  detailSizePt: 10.5,
-  maxTitleLines: 2,
-  maxDetailLines: 2,
-  padX: 10,
-  padY: 8,
-  titleGapY: 4,
-  lineHeight: 1.25,
-  minWidth: 96,
-  maxWidth: 300,
-  minHeight: 52,
-  maxHeight: 170,
-}
 
 describe('geometry & semantic regression suite (52 cases, full orchestrator)', () => {
   it('covers the required 50+-case pack', () => {

@@ -80,7 +80,12 @@ describe('P1 figure contract', () => {
   })
 
   it('venue-driven thresholds escalate for journals', () => {
-    expect(qualityThresholdFor({ venue: 'Nature Microsystems', output: { context: 'presentation' } as never })).toBe(8.5)
+    expect(
+      qualityThresholdFor({
+        venue: 'Nature Microsystems',
+        output: { context: 'presentation' } as never,
+      }),
+    ).toBe(8.5)
     expect(qualityThresholdFor(undefined)).toBe(7.5)
     expect(OUTPUT_CONTEXT_MIN_TEXT_PT['paper-double-column']).toBe(5.5)
   })
@@ -123,9 +128,30 @@ describe('P1 contract-driven orchestration', () => {
     thesis: '多源输入经核心机制产生服务决策',
     figureType: 'input-core-output',
     nodes: [
-      { id: 'in1', type: 'data-source', semanticLabel: '多源访谈数据', visible: { title: '访谈数据' }, importance: 0.4, role: 'input' },
-      { id: 'core', type: 'mechanism', semanticLabel: '核心机制', visible: { title: '核心机制' }, importance: 0.9, role: 'core' },
-      { id: 'out', type: 'outcome', semanticLabel: '服务决策', visible: { title: '服务决策' }, importance: 0.7, role: 'output' },
+      {
+        id: 'in1',
+        type: 'data-source',
+        semanticLabel: '多源访谈数据',
+        visible: { title: '访谈数据' },
+        importance: 0.4,
+        role: 'input',
+      },
+      {
+        id: 'core',
+        type: 'mechanism',
+        semanticLabel: '核心机制',
+        visible: { title: '核心机制' },
+        importance: 0.9,
+        role: 'core',
+      },
+      {
+        id: 'out',
+        type: 'outcome',
+        semanticLabel: '服务决策',
+        visible: { title: '服务决策' },
+        importance: 0.7,
+        role: 'output',
+      },
     ],
     edges: [{ from: 'in1', to: 'core', role: 'main', relation: 'causal' }],
     groups: [],

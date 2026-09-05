@@ -1,0 +1,212 @@
+{
+  "linear-lr": {
+    "verdict": "PASS",
+    "crossings": 0,
+    "nodeIntersections": 0,
+    "centroids": {
+      "a": [0.1, 0.143],
+      "b": [0.101, 0.74],
+      "c": [0.48, 0.44],
+      "d": [0.86, 0.44]
+    },
+    "routes": {
+      "edge:a->b:data-flow:0": [
+        [0.1, 0.179],
+        [0.101, 0.704]
+      ],
+      "edge:b->c:data-flow:1": [
+        [0.141, 0.74],
+        [0.439, 0.44]
+      ],
+      "edge:c->d:transformation:2": [
+        [0.52, 0.44],
+        [0.823, 0.44]
+      ]
+    }
+  },
+  "radial-core": {
+    "verdict": "PASS",
+    "crossings": 0,
+    "nodeIntersections": 0,
+    "centroids": {
+      "core": [0.14, 0.45],
+      "s1": [0.78, 0.14],
+      "s2": [0.78, 0.347],
+      "s3": [0.78, 0.553],
+      "s4": [0.78, 0.76]
+    },
+    "routes": {
+      "edge:core->s1:association:0": [
+        [0.191, 0.45],
+        [0.745, 0.14]
+      ],
+      "edge:core->s2:association:1": [
+        [0.191, 0.45],
+        [0.745, 0.347]
+      ],
+      "edge:core->s3:association:2": [
+        [0.191, 0.45],
+        [0.745, 0.553]
+      ],
+      "edge:core->s4:causal:3": [
+        [0.191, 0.45],
+        [0.742, 0.76]
+      ]
+    }
+  },
+  "feedback-loop": {
+    "verdict": "PASS",
+    "crossings": 0,
+    "nodeIntersections": 0,
+    "centroids": {
+      "in": [0.11, 0.45],
+      "proc": [0.44, 0.45],
+      "out": [0.76, 0.45]
+    },
+    "routes": {
+      "edge:in->proc:causal:0": [
+        [0.145, 0.45],
+        [0.389, 0.45]
+      ],
+      "edge:proc->out:causal:1": [
+        [0.491, 0.45],
+        [0.723, 0.45]
+      ],
+      "edge:out->proc:inhibition:2": [
+        [0.76, 0.485],
+        [0.44, 0.494]
+      ]
+    }
+  },
+  "hierarchy-tree": {
+    "verdict": "PASS",
+    "crossings": 0,
+    "nodeIntersections": 0,
+    "centroids": {
+      "root": [0.6, 0.214],
+      "k1": [0.3, 0.481],
+      "k2": [0.9, 0.481],
+      "l1": [0.1, 0.747],
+      "l2": [0.5, 0.747]
+    },
+    "routes": {}
+  },
+  "social-moderation": {
+    "verdict": "PASS",
+    "crossings": 0,
+    "nodeIntersections": 0,
+    "centroids": {
+      "x": [0.11, 0.74],
+      "y": [0.76, 0.45],
+      "m": [0.11, 0.16]
+    },
+    "routes": {
+      "edge:x->y:causal:0": [
+        [0.145, 0.74],
+        [0.723, 0.45]
+      ],
+      "edge:m->y:moderation:1": [
+        [0.11, 0.192],
+        [0.76, 0.415]
+      ]
+    }
+  },
+  "materials-synthesis": {
+    "verdict": "PASS",
+    "crossings": 0,
+    "nodeIntersections": 0,
+    "centroids": {
+      "p0": [0.14, 0.45],
+      "p1": [0.78, 0.149],
+      "p2": [0.78, 0.45],
+      "p3": [0.78, 0.76]
+    },
+    "routes": {
+      "edge:p0->p1:transformation:0": [
+        [0.177, 0.45],
+        [0.739, 0.149]
+      ],
+      "edge:p1->p2:transformation:1": [
+        [0.78, 0.19],
+        [0.78, 0.408]
+      ],
+      "edge:p2->p3:transformation:2": [
+        [0.78, 0.492],
+        [0.78, 0.725]
+      ],
+      "edge:p2->p1:inhibition:3": [
+        [0.739, 0.45],
+        [0.82, 0.149]
+      ]
+    }
+  },
+  "cs-ml-pipeline": {
+    "verdict": "PASS",
+    "crossings": 0,
+    "nodeIntersections": 0,
+    "centroids": {
+      "data": [0.1, 0.143],
+      "enc": [0.107, 0.74],
+      "dec": [0.48, 0.44],
+      "loss": [0.86, 0.14],
+      "pred": [0.86, 0.74]
+    },
+    "routes": {
+      "edge:data->enc:data-flow:0": [
+        [0.1, 0.179],
+        [0.107, 0.699]
+      ],
+      "edge:enc->dec:data-flow:1": [
+        [0.154, 0.74],
+        [0.433, 0.44]
+      ],
+      "edge:dec->loss:data-flow:2": [
+        [0.527, 0.44],
+        [0.825, 0.14]
+      ],
+      "edge:dec->pred:data-flow:3": [
+        [0.527, 0.44],
+        [0.823, 0.74]
+      ]
+    }
+  },
+  "cjk-dense": {
+    "verdict": "PASS",
+    "crossings": 0,
+    "nodeIntersections": 0,
+    "centroids": {
+      "src": [0.128, 0.3],
+      "att": [0.284, 0.301],
+      "cog": [0.437, 0.301],
+      "emo": [0.579, 0.301],
+      "mem": [0.715, 0.301],
+      "att2": [0.86, 0.3]
+    },
+    "routes": {
+      "edge:src->att:process:0": [
+        [0.196, 0.3],
+        [0.215, 0.301]
+      ],
+      "edge:att->cog:process:1": [
+        [0.354, 0.301],
+        [0.373, 0.301]
+      ],
+      "edge:cog->emo:process:2": [
+        [0.501, 0.301],
+        [0.52, 0.301]
+      ],
+      "edge:emo->mem:process:3": [
+        [0.638, 0.301],
+        [0.656, 0.301]
+      ],
+      "edge:mem->att2:process:4": [
+        [0.773, 0.301],
+        [0.792, 0.3]
+      ],
+      "edge:att2->att:feedback:5": [
+        [0.86, 0.342],
+        [0.284, 0.346]
+      ]
+    }
+  }
+}
