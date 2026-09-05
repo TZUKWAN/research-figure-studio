@@ -7,10 +7,13 @@ name: CI
 
 on:
   push:
-    branches: [main, 'dev_*', 'release_*']
+    branches: [main, 'dev_*', 'release_*', 'refactor_*', 'refactor/**', 'audit/**']
   pull_request:
     branches: [main]
   workflow_dispatch:
+  schedule:
+    # nightly research model smoke (03:07 UTC); the smoke job no-ops elsewhere
+    - cron: '7 3 * * *'
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -86,6 +89,70 @@ jobs:
 
       - name: Test
         run: npm test
+
+  # QA-P1-15: fast DETERMINISTIC research-figure gate. Runs on every push/PR
+  # (including refactor/** and audit/**), needs no model and no API key: the
+  # geometry & semantic regression suite, the rendered-baseline fingerprints,
+  # property/fuzz + metamorphic invariants, the roundtrip contract and the
+  # publication-QA gates all live in the research-harness + pptx-engine suites.
+  research-qa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Research harness (critics, geometry, baseline, property/fuzz, metamorphic, perf)
+        run: npm run test -w @genoffice/research-harness
+
+      - name: PPTX engine (semantic metadata roundtrip)
+        run: npm run test -w @genoffice/pptx-engine -- semantic-metadata
+
+      - name: Research harness typecheck
+        run: npm run typecheck -w @genoffice/research-harness
+
+  # Optional MODEL smoke (structured planner + Vision Critic against a real
+  # model). Never runs on push/PR — an external API key must never gate normal
+  # CI. Requires repository secrets; skips cleanly when they are absent.
+  research-model-smoke:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Model smoke (skipped without secrets)
+        env:
+          METIS_SMOKE_BASE_URL: ${{ secrets.METIS_SMOKE_BASE_URL }}
+          METIS_SMOKE_API_KEY: ${{ secrets.METIS_SMOKE_API_KEY }}
+          METIS_SMOKE_MODEL: ${{ secrets.METIS_SMOKE_MODEL }}
+        run: |
+          if [ -z "$METIS_SMOKE_BASE_URL" ] || [ -z "$METIS_SMOKE_API_KEY" ]; then
+            echo "METIS_SMOKE_* secrets not configured — model smoke skipped (not a failure)"
+            exit 0
+          fi
+          node scripts/research-model-smoke.mjs
 
   e2e:
     # 22.04, not -latest: 24.04's AppArmor hardening blocks Electron renderer
