@@ -41,7 +41,9 @@ describe('persistence integrity (DESKTOP-P0-05..09)', () => {
     const file = join(dir, 'big.jsonl')
     const lines: string[] = []
     for (let i = 1; i <= 10_050; i++) {
-      lines.push(JSON.stringify({ seq: i, ts: '2026-01-01T00:00:00.000Z', role: 'user', text: `m${i}` }))
+      lines.push(
+        JSON.stringify({ seq: i, ts: '2026-01-01T00:00:00.000Z', role: 'user', text: `m${i}` }),
+      )
     }
     writeFileSync(file, lines.join('\n') + '\n', 'utf8')
     // A fresh store instance must seed its seq cache from a FULL scan, not the
@@ -60,7 +62,9 @@ describe('persistence integrity (DESKTOP-P0-05..09)', () => {
     const write = (name: string, from: number, to: number) => {
       const lines: string[] = []
       for (let i = from; i <= to; i++) {
-        lines.push(JSON.stringify({ seq: i, ts: '2026-01-01T00:00:00.000Z', role: 'user', text: `t${i}` }))
+        lines.push(
+          JSON.stringify({ seq: i, ts: '2026-01-01T00:00:00.000Z', role: 'user', text: `t${i}` }),
+        )
       }
       writeFileSync(join(base, `${name}.jsonl`), lines.join('\n') + '\n', 'utf8')
     }
@@ -84,8 +88,18 @@ describe('persistence integrity (DESKTOP-P0-05..09)', () => {
     store.ensureDefaultProject()
     const base = join(tmpDir, 'projects', 'default', 'chats')
     mkdirSync(base, { recursive: true })
-    const good1 = JSON.stringify({ seq: 1, ts: '2026-01-01T00:00:00.000Z', role: 'user', text: 'g1' })
-    const good2 = JSON.stringify({ seq: 2, ts: '2026-01-01T00:00:01.000Z', role: 'assistant', text: 'g2' })
+    const good1 = JSON.stringify({
+      seq: 1,
+      ts: '2026-01-01T00:00:00.000Z',
+      role: 'user',
+      text: 'g1',
+    })
+    const good2 = JSON.stringify({
+      seq: 2,
+      ts: '2026-01-01T00:00:01.000Z',
+      role: 'assistant',
+      text: 'g2',
+    })
     writeFileSync(join(base, 'broken.jsonl'), `${good1}\n{not json\n${good2}\n`, 'utf8')
 
     const msgs = store.loadChat('default', 'broken', 100)
@@ -220,8 +234,6 @@ describe('persistence integrity (DESKTOP-P0-05..09)', () => {
     const msgs = store.loadChat(target.id, chatId, 10)
     expect(msgs.map((m) => m.text)).toEqual(['history follows the file'])
     expect(existsSync(join(tmpDir, 'projects', 'default', 'chats', `${chatId}.jsonl`))).toBe(false)
-    expect(
-      existsSync(join(tmpDir, 'projects', target.id, 'chats', `${chatId}.jsonl`)),
-    ).toBe(true)
+    expect(existsSync(join(tmpDir, 'projects', target.id, 'chats', `${chatId}.jsonl`))).toBe(true)
   })
 })

@@ -2629,6 +2629,13 @@ async function executeTool(
       const idx = Number(call.input.slideIndex)
       const slide = slides[idx]
       if (!slide) return fail(t('aiFailScript'), `slideIndex out of range (0-${slides.length - 1})`)
+      // P0.5 acceptance closure: execute_slide_script can CREATE elements, so a
+      // research-mode agent on an empty canvas must not use it to hand-assemble
+      // a figure and bypass the create_research_figure hard gates. Presentation
+      // mode keeps its historical script-on-blank allowance (power-user layouts).
+      const scratchBlock =
+        state?.mode === 'research' ? blockScratchBuild(call.name, slides, state) : null
+      if (scratchBlock) return scratchBlock
       const code = String(call.input.code ?? '').trim()
       if (!code) return fail(t('aiFailScript'), 'code must not be empty')
       const infos = collectNodeInfos(slide.nodes)

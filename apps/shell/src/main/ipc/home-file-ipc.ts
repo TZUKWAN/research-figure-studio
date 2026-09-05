@@ -25,10 +25,7 @@ import { HOME_CHANNELS } from '../../shared/home-api'
 import { OPEN_DIALOG_EXTENSIONS, PPTX_RE } from '../file-routing'
 import type { HomeStringKey } from '../home-strings'
 import { sanitizeFileName } from '../path-guard'
-import {
-  pageRecentPaths,
-  normalizeRecentQuery,
-} from '../recent-files'
+import { pageRecentPaths, normalizeRecentQuery } from '../recent-files'
 import {
   pageStarredSlides,
   readPathList,
@@ -49,10 +46,7 @@ type RecentQuery = Parameters<typeof normalizeRecentQuery>[0]
 
 export interface HomeFileIpcDeps {
   senderTrust: SenderTrustOptions
-  tm(
-    key: HomeStringKey,
-    params?: Parameters<typeof import('../home-strings').homeI18n>[2],
-  ): string
+  tm(key: HomeStringKey, params?: Parameters<typeof import('../home-strings').homeI18n>[2]): string
   getShellWindow(): BrowserWindow | null
   getTabManager(): TabManager | null
   openDocumentPath(filePath: string): boolean

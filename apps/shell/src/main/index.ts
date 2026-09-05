@@ -1,11 +1,5 @@
 import { execSync } from 'node:child_process'
-import {
-  cpSync,
-  existsSync,
-  readFileSync,
-  readdirSync,
-  writeFileSync,
-} from 'node:fs'
+import { cpSync, existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
 import {
   BrowserWindow,
@@ -25,7 +19,6 @@ import menuPptxIcon2x from './assets/menu-pptx@2x.png?asset'
 import menuHomeIcon1x from './assets/menu-home.png?asset'
 import menuHomeIcon2x from './assets/menu-home@2x.png?asset'
 import { isLang, normalizeLang, setUiLang, type Lang } from '@genoffice/i18n'
-
 
 import {
   DEFAULT_SAVE_DIR_KEY,
@@ -186,7 +179,6 @@ let tabManager: TabManager | null = null
  * Consumed by each app's saveHook once the file first hits disk (P1 item 3).
  */
 const pendingNewFileProject = new Map<string, string>()
-
 
 let shellProjectStore: ProjectStore | null = null
 function getShellProjectStore(): ProjectStore {

@@ -163,7 +163,13 @@ function sanitizedProviderEntry(value: unknown): Record<string, unknown> | null 
 
 function isLoopbackHost(host: string): boolean {
   const h = host.toLowerCase()
-  return h === 'localhost' || h === '127.0.0.1' || h === '[::1]' || h === '::1' || h.endsWith('.localhost')
+  return (
+    h === 'localhost' ||
+    h === '127.0.0.1' ||
+    h === '[::1]' ||
+    h === '::1' ||
+    h.endsWith('.localhost')
+  )
 }
 
 /** Returns a sanitized AiSettings-compatible object, or null when the payload is not acceptable. */
@@ -171,7 +177,11 @@ function validateAiSettings(raw: unknown): AiSettings | null {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null
   const input = raw as Record<string, unknown>
   if (typeof input.provider !== 'string' || input.provider.length > 64) return null
-  if (typeof input.providers !== 'object' || input.providers === null || Array.isArray(input.providers)) {
+  if (
+    typeof input.providers !== 'object' ||
+    input.providers === null ||
+    Array.isArray(input.providers)
+  ) {
     return null
   }
   const providers: Record<string, unknown> = {}

@@ -214,7 +214,12 @@ export class ProjectStore {
   >()
 
   /** Copies a damaged JSONL aside once per session so evidence survives rewrites. */
-  private noteCorruption(projectId: string, chatId: string, filePath: string, corrupted: number): void {
+  private noteCorruption(
+    projectId: string,
+    chatId: string,
+    filePath: string,
+    corrupted: number,
+  ): void {
     if (corrupted <= 0) return
     const key = this.seqKey(projectId, chatId)
     if (this.recoveryStats.has(key)) {
@@ -230,7 +235,10 @@ export class ProjectStore {
       console.warn('[project-store] corrupt chat backup failed:', err)
       backupPath = undefined
     }
-    this.recoveryStats.set(key, { corruptedLines: corrupted, ...(backupPath ? { backupPath } : {}) })
+    this.recoveryStats.set(key, {
+      corruptedLines: corrupted,
+      ...(backupPath ? { backupPath } : {}),
+    })
   }
 
   /**
@@ -238,7 +246,10 @@ export class ProjectStore {
    * last load and where the pre-repair backup lives. The UI can surface
    * "recovered N messages, M lines were corrupted" from this.
    */
-  chatRecoveryStats(projectId: string, chatId: string): { corruptedLines: number; backupPath?: string } {
+  chatRecoveryStats(
+    projectId: string,
+    chatId: string,
+  ): { corruptedLines: number; backupPath?: string } {
     const key = this.seqKey(projectId, chatId)
     const cached = this.recoveryStats.get(key)
     if (cached) return { ...cached }
@@ -607,7 +618,9 @@ export class ProjectStore {
           const target = this.scanChatFile(newPath)
           const source = this.scanChatFile(oldPath)
           let seq = target.maxSeq
-          const lines = source.records.map((m) => JSON.stringify({ ...m, seq: ++seq }) + '\n').join('')
+          const lines = source.records
+            .map((m) => JSON.stringify({ ...m, seq: ++seq }) + '\n')
+            .join('')
           if (lines) appendFileSync(newPath, lines, 'utf8')
           unlinkSync(oldPath)
           mergedMaxSeq = seq
@@ -688,7 +701,10 @@ export class ProjectStore {
       if (existsSync(this.projectJsonPath(info.id))) {
         liveProjects.push(info)
         liveIds.add(info.id)
-      } else if (!existsSync(this.projectDir(info.id)) || readdirSync(this.projectDir(info.id)).length === 0) {
+      } else if (
+        !existsSync(this.projectDir(info.id)) ||
+        readdirSync(this.projectDir(info.id)).length === 0
+      ) {
         // directory missing or empty: nothing to recover, the entry is stale
         repairs.push(`removed stale index entry: ${info.id}`)
         indexDirty = true
@@ -822,7 +838,8 @@ export class ProjectStore {
    * project.json and index.json commit as one transaction.
    */
   renameProject(id: string, name: string): void {
-    if (id === 'default') throw new ProjectStoreError('invalid', 'The default project cannot be renamed')
+    if (id === 'default')
+      throw new ProjectStoreError('invalid', 'The default project cannot be renamed')
     const trimmed = name.trim()
     if (!trimmed) throw new ProjectStoreError('invalid', 'Project name cannot be empty')
     const proj = this.readProject(id)
@@ -853,7 +870,8 @@ export class ProjectStore {
    * The default project cannot be deleted.
    */
   deleteProject(id: string): void {
-    if (id === 'default') throw new ProjectStoreError('invalid', 'The default project cannot be deleted')
+    if (id === 'default')
+      throw new ProjectStoreError('invalid', 'The default project cannot be deleted')
     const proj = this.readProject(id)
     if (!proj) throw new ProjectStoreError('not-found', `Project does not exist: ${id}`)
     this.ensureDefaultProject()
@@ -916,7 +934,8 @@ export class ProjectStore {
 
     // The target project must exist
     const targetProj = this.readProject(targetProjectId)
-    if (!targetProj) throw new ProjectStoreError('not-found', `Target project does not exist: ${targetProjectId}`)
+    if (!targetProj)
+      throw new ProjectStoreError('not-found', `Target project does not exist: ${targetProjectId}`)
 
     // 1. Metadata transaction
     index.fileMap[filePath] = targetProjectId

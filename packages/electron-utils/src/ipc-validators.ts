@@ -90,7 +90,10 @@ export function assertStringArray(
     throw new TypeError(`Invalid ${label}: more than ${options.maxItems} items`)
   }
   return value.map((item, i) => {
-    if (typeof item !== 'string' || (options.maxLength !== undefined && item.length > options.maxLength)) {
+    if (
+      typeof item !== 'string' ||
+      (options.maxLength !== undefined && item.length > options.maxLength)
+    ) {
       throw new TypeError(`Invalid ${label}[${i}]: expected bounded string`)
     }
     return item
@@ -106,7 +109,13 @@ export type UrlPolicy = 'https-only' | 'https-or-local-http'
 
 function isLoopbackHost(host: string): boolean {
   const h = host.toLowerCase()
-  return h === 'localhost' || h === '127.0.0.1' || h === '[::1]' || h === '::1' || h.endsWith('.localhost')
+  return (
+    h === 'localhost' ||
+    h === '127.0.0.1' ||
+    h === '[::1]' ||
+    h === '::1' ||
+    h.endsWith('.localhost')
+  )
 }
 
 export function assertHttpUrl(value: unknown, label: string, policy: UrlPolicy): string {
@@ -146,7 +155,8 @@ export type FilePathCheckResult =
   | { ok: true; resolved: string }
   | {
       ok: false
-      reason: 'bad-type' | 'empty' | 'not-absolute' | 'too-long' | 'bad-ext' | 'missing' | 'not-file'
+      reason:
+        'bad-type' | 'empty' | 'not-absolute' | 'too-long' | 'bad-ext' | 'missing' | 'not-file'
     }
 
 /**
@@ -162,7 +172,10 @@ export type FilePathCheckResult =
  *   folder named `deck.pptx` must never be renamed, duplicated, or trashed.
  * - Path length is capped (Windows MAX_PATH interactions).
  */
-export function checkFilePath(value: unknown, options: FilePathCheckOptions = {}): FilePathCheckResult {
+export function checkFilePath(
+  value: unknown,
+  options: FilePathCheckOptions = {},
+): FilePathCheckResult {
   if (typeof value !== 'string') return { ok: false, reason: 'bad-type' }
   const trimmed = value.trim()
   if (trimmed.length === 0) return { ok: false, reason: 'empty' }
@@ -237,7 +250,10 @@ export function isTrustedRendererUrl(rawUrl: string, options: SenderTrustOptions
 }
 
 /** True when the event's sender is a live renderer frame hosting app content. */
-export function isTrustedIpcSender(event: TrustedSenderEvent, options: SenderTrustOptions): boolean {
+export function isTrustedIpcSender(
+  event: TrustedSenderEvent,
+  options: SenderTrustOptions,
+): boolean {
   const sender = event?.sender
   if (!sender || typeof sender.isDestroyed !== 'function' || sender.isDestroyed()) return false
   if (typeof sender.isCrashed === 'function' && sender.isCrashed()) return false

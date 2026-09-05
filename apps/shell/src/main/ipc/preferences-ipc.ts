@@ -30,7 +30,11 @@ export interface PreferencesIpcDeps {
 
 export function registerPreferencesIpc(deps: PreferencesIpcDeps): void {
   const assertSender = (event: unknown, label: string): void => {
-    assertTrustedIpcSender(event as Parameters<typeof assertTrustedIpcSender>[0], deps.senderTrust, label)
+    assertTrustedIpcSender(
+      event as Parameters<typeof assertTrustedIpcSender>[0],
+      deps.senderTrust,
+      label,
+    )
   }
 
   ipcMain.handle(HOME_CHANNELS.getLanguage, (): Lang => deps.currentLanguage())

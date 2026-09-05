@@ -23,10 +23,7 @@ import type { HomeStringKey } from '../home-strings'
 
 export interface ProjectIpcDeps {
   senderTrust: SenderTrustOptions
-  tm(
-    key: HomeStringKey,
-    params?: Parameters<typeof import('../home-strings').homeI18n>[2],
-  ): string
+  tm(key: HomeStringKey, params?: Parameters<typeof import('../home-strings').homeI18n>[2]): string
   getShellWindow(): BrowserWindow | null
   getProjectStore(): ProjectStore
 }
@@ -62,10 +59,12 @@ export function registerProjectIpc(deps: ProjectIpcDeps): void {
   ipcMain.handle(PROJECT_CHANNELS.rename, (event, rawArgs: unknown) => {
     assertSender(event, 'project:rename')
     const args = assertPlainObject(rawArgs, 'project:rename args')
-    deps.getProjectStore().renameProject(
-      assertStorageId(args.id, 'project id'),
-      assertBoundedString(args.name, 'project name', PROJECT_NAME_MAX),
-    )
+    deps
+      .getProjectStore()
+      .renameProject(
+        assertStorageId(args.id, 'project id'),
+        assertBoundedString(args.name, 'project name', PROJECT_NAME_MAX),
+      )
   })
 
   ipcMain.handle(PROJECT_CHANNELS.delete, (event, rawArgs: unknown) => {
@@ -117,6 +116,8 @@ export function registerProjectIpc(deps: ProjectIpcDeps): void {
       args.limit === undefined
         ? undefined
         : assertSafeInt(args.limit, 'timeline limit', { min: 1, max: TIMELINE_LIMIT_MAX })
-    return deps.getProjectStore().getProjectTimeline(assertStorageId(args.projectId, 'project id'), limit)
+    return deps
+      .getProjectStore()
+      .getProjectTimeline(assertStorageId(args.projectId, 'project id'), limit)
   })
 }

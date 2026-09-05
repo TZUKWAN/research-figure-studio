@@ -58,7 +58,10 @@ describe('assertEnum', () => {
 
 describe('assertStringArray', () => {
   it('enforces item count and length caps', () => {
-    expect(assertStringArray(['a', 'b'], 'paths', { maxItems: 3, maxLength: 8 })).toEqual(['a', 'b'])
+    expect(assertStringArray(['a', 'b'], 'paths', { maxItems: 3, maxLength: 8 })).toEqual([
+      'a',
+      'b',
+    ])
     expect(() => assertStringArray('x', 'paths')).toThrow()
     expect(() => assertStringArray(['a', 'b', 'c', 'd'], 'paths', { maxItems: 3 })).toThrow()
     expect(() => assertStringArray(['ok', 'way-too-long'], 'paths', { maxLength: 4 })).toThrow()
@@ -78,9 +81,9 @@ describe('assertHttpUrl', () => {
   })
 
   it('https-or-local-http allows loopback http but not public http (SSRF policy)', () => {
-    expect(
-      assertHttpUrl('http://127.0.0.1:11434/v1', 'baseUrl', 'https-or-local-http'),
-    ).toBe('http://127.0.0.1:11434/v1')
+    expect(assertHttpUrl('http://127.0.0.1:11434/v1', 'baseUrl', 'https-or-local-http')).toBe(
+      'http://127.0.0.1:11434/v1',
+    )
     expect(assertHttpUrl('http://localhost:8080', 'baseUrl', 'https-or-local-http')).toBe(
       'http://localhost:8080',
     )
@@ -91,7 +94,9 @@ describe('assertHttpUrl', () => {
     expect(() => assertHttpUrl('file:///etc/passwd', 'baseUrl', 'https-or-local-http')).toThrow()
     expect(() => assertHttpUrl('ftp://example.com', 'baseUrl', 'https-or-local-http')).toThrow()
     expect(() => assertHttpUrl('not a url', 'baseUrl', 'https-or-local-http')).toThrow()
-    expect(() => assertHttpUrl(`https://e.com/${'x'.repeat(3000)}`, 'baseUrl', 'https-only')).toThrow()
+    expect(() =>
+      assertHttpUrl(`https://e.com/${'x'.repeat(3000)}`, 'baseUrl', 'https-only'),
+    ).toThrow()
   })
 })
 
