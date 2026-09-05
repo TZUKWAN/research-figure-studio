@@ -25,6 +25,10 @@ export default defineConfig({
         here,
         '../../packages/pptx-engine/src/custgeom.ts',
       ),
+      '@genoffice/pptx-engine/research-metadata': resolve(
+        here,
+        '../../packages/pptx-engine/src/research-metadata.ts',
+      ),
       '@genoffice/pptx-engine': resolve(here, '../../packages/pptx-engine/src/index.ts'),
       '@genoffice/pptx-render/preset-geometry': resolve(
         here,

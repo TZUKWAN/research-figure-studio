@@ -14,6 +14,10 @@ const workspaceAlias = {
     '../../packages/pptx-engine/src/table-grid.ts',
   ),
   '@genoffice/pptx-engine/identity': resolve(here, '../../packages/pptx-engine/src/identity.ts'),
+  '@genoffice/pptx-engine/research-metadata': resolve(
+    here,
+    '../../packages/pptx-engine/src/research-metadata.ts',
+  ),
   '@genoffice/pptx-engine/custgeom': resolve(here, '../../packages/pptx-engine/src/custgeom.ts'),
   '@genoffice/pptx-engine/background-promote': resolve(
     here,

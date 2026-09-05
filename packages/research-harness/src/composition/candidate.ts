@@ -7,7 +7,7 @@
  * with semantic fit — never geometry alone.
  */
 import type { MeasuredNode } from '../measurement/measure.js'
-import { solveGeometry, type SolveResult } from '../constraints/solver.js'
+import { solveGeometry, type SolveResult, type UnitFitConstraint } from '../constraints/solver.js'
 import { routeEdges, edgeCrossingCount, connectorNodeIntersections } from '../routing/router.js'
 import type { Rect } from '../routing/geometry.js'
 import {
@@ -43,6 +43,7 @@ interface ScoreInputs {
   edges: FigureEdgesInput[]
   canvasW: number
   canvasH: number
+  unitFit?: Map<string, UnitFitConstraint>
 }
 
 function evaluateCandidate(
@@ -57,6 +58,7 @@ function evaluateCandidate(
     measured: inputs.measured,
     canvasW: inputs.canvasW,
     canvasH: inputs.canvasH,
+    ...(inputs.unitFit ? { unitFitConstraints: inputs.unitFit } : {}),
   })
   const rects = new Map<string, Rect>(
     solve.placements.map((placement) => [placement.id, placement]),
@@ -702,6 +704,7 @@ export function candidateFromPrior(
   canvasH: number,
   meta?: Map<string, NodeMeta>,
   fitPenalty = 0,
+  unitFit?: Map<string, UnitFitConstraint>,
 ): CompositionCandidate {
   const ids = measured.map((node) => node.title)
   const idSet = new Set(ids)
@@ -759,7 +762,7 @@ export function candidateFromPrior(
     plan,
     'prior',
     prior.id,
-    { measured, edges, canvasW, canvasH },
+    { measured, edges, canvasW, canvasH, ...(unitFit ? { unitFit } : {}) },
     fitPenalty,
   )
 }
@@ -784,6 +787,7 @@ export function generateCandidates(
   canvasH: number,
   modelPlan?: SpatialPlan | null,
   meta?: Map<string, NodeMeta>,
+  unitFit?: Map<string, UnitFitConstraint>,
 ): CompositionCandidate[] {
   const signature =
     signals.signature ??
@@ -815,11 +819,17 @@ export function generateCandidates(
   }
   const maxFit = ranked[0]?.fit ?? 0
   const candidates = selected.map(({ prior, fit }) =>
-    candidateFromPrior(prior, measured, edges, canvasW, canvasH, meta, (maxFit - fit) * 3),
+    candidateFromPrior(prior, measured, edges, canvasW, canvasH, meta, (maxFit - fit) * 3, unitFit),
   )
   if (autonomy !== 'A0' && modelPlan) {
     candidates.unshift(
-      evaluateCandidate(modelPlan, 'model', null, { measured, edges, canvasW, canvasH }, 0),
+      evaluateCandidate(
+        modelPlan,
+        'model',
+        null,
+        { measured, edges, canvasW, canvasH, ...(unitFit ? { unitFit } : {}) },
+        0,
+      ),
     )
   }
   return candidates.sort(

@@ -25,6 +25,18 @@ export interface SolveInput {
   minGapPx?: number
   /** per-node collision class; overlay/background pairs are not pushed apart */
   collisionClasses?: Map<string, import('../components/semantic-styles.js').CollisionClass>
+  /**
+   * Composite-module fit constraints (visual units): for a node that the
+   * composer decomposed into micro units, the solver must reserve enough box
+   * for the units at the width it finally picks. Renderer consumes solver
+   * geometry verbatim — it never grows a box after the solve.
+   */
+  unitFitConstraints?: Map<string, UnitFitConstraint>
+}
+
+export interface UnitFitConstraint {
+  minHeightForWidth: (w: number) => number
+  minWidth: number
 }
 
 export interface SolveResult {
@@ -58,14 +70,23 @@ export function solveGeometry(input: SolveInput): SolveResult {
     const hint: NormalizedBox = placement.boxHint
     const hintW = hint.w * input.canvasW
     const hintH = hint.h * input.canvasH
+    const fit = input.unitFitConstraints?.get(placement.id)
     const w = Math.min(
-      Math.max(node.bounds.minWidth, Math.min(hintW, node.bounds.preferredWidth)),
+      Math.max(
+        fit ? Math.max(node.bounds.minWidth, fit.minWidth) : node.bounds.minWidth,
+        Math.min(hintW, node.bounds.preferredWidth),
+      ),
       node.bounds.maxWidth,
     )
-    const h = Math.min(
+    // Composite fit wins over the type's soft maxHeight: an under-height
+    // module would force the renderer to either overflow its units or mutate
+    // solver geometry — both are contract violations.
+    const naturalH = Math.min(
       Math.max(node.bounds.minHeight, Math.min(hintH, node.bounds.preferredHeight)),
       node.bounds.maxHeight,
     )
+    const fitH = fit ? fit.minHeightForWidth(w) : 0
+    const h = Math.max(naturalH, fitH)
     const cx = hint.x * input.canvasW + hintW / 2
     const cy = hint.y * input.canvasH + hintH / 2
     rects.set(placement.id, {

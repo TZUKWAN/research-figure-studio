@@ -49,6 +49,7 @@ import type {
 import type { AddSmartArtOp, AgentToolCall, AgentToolDef, EditParagraph } from '../../shared/ipc'
 import { opVocabulary } from '../../shared/op-docs'
 import { auditSlideLayout, formatAudit } from './layout-audit'
+import { executeCreateResearchFigure } from '../research/create-research-figure-tool'
 import { runLayoutScript, type LayoutScriptElement, type SlideStylePatch } from './layout-script'
 import { t } from '../i18n/locale'
 
@@ -1830,7 +1831,74 @@ export function formatSlideDump(slide: RenderSlide): string {
   // Report the real px→EMU factor: render px carry the viewport scale, so ×9525 only
   // holds for decks whose baseline width is exactly the fit width (standard 16:9 at 1280).
   const pxToEmu = +(9525 / slide.scale).toFixed(2)
-  return `Canvas ${slide.widthPx}×${slide.heightPx}px (1 px = ${pxToEmu} EMU)\n${parts.join('\n---\n') || '(no elements on this page)'}${colorNote}`
+  return `Canvas ${slide.widthPx}×${slide.heightPx}px (1 px = ${pxToEmu} EMU)\n${parts.join('\n---\n') || '(no elements on this page)'}${colorNote}${formatResearchContext(slide)}`
+}
+
+/**
+ * RENDER-P0-11: AI re-editing of an existing research figure reads the
+ * recovered semantic graph (slide payload + per-shape refs) instead of
+ * guessing from visuals. Kept compact — refs and statuses, never the full
+ * internal contract JSON.
+ */
+function formatResearchContext(slide: RenderSlide): string {
+  const sections: string[] = []
+  const payload = slide.researchMetadata
+  if (payload) {
+    sections.push(
+      `figure ${payload.figureRunId} | family ${payload.figureFamily} | domain ${payload.domain} | thesis: ${payload.thesis}`,
+    )
+    if (payload.nodes.length > 0) {
+      sections.push(
+        'nodes: ' +
+          payload.nodes
+            .map(
+              (n) =>
+                `${n.id}(${n.type}/${n.primitiveKind}${n.detailDisposition === 'promoted-to-units' ? ', units' : n.detailDisposition === 'render-in-parent' ? ', detail-in-parent' : ''}${n.groupElementId ? `, group ${n.groupElementId}` : ''})`,
+            )
+            .join(', '),
+      )
+    }
+    if (payload.relations.length > 0) {
+      sections.push(
+        'relations: ' +
+          payload.relations
+            .map((r) => {
+              const status =
+                r.status === 'rendered'
+                  ? `connector ${r.connectorId ?? '(by semanticEdgeId)'}`
+                  : r.status === 'spatial'
+                    ? `spatial (${r.reason ?? 'non-connector presentation'})`
+                    : `suppressed (${r.reason ?? 'no line'})`
+              return `${r.id ?? `${r.from}->${r.to}`}: ${r.from}→${r.to} ${r.presentation} [${status}]`
+            })
+            .join('; '),
+      )
+    }
+  }
+  const shaped = slide.nodes.filter(
+    (n) =>
+      (n.type === 'shape' || n.type === 'text') &&
+      (n as { semanticMetadata?: Record<string, unknown> }).semanticMetadata,
+  )
+  if (shaped.length > 0) {
+    sections.push(
+      'research elements: ' +
+        shaped
+          .map((n) => {
+            const meta = (n as { semanticMetadata?: Record<string, string> }).semanticMetadata!
+            const bits = [
+              meta.semanticNodeId ? `node=${meta.semanticNodeId}` : '',
+              meta.semanticEdgeId ? `edge=${meta.semanticEdgeId}` : '',
+              meta.parentModuleId ? `parent=${meta.parentModuleId}` : '',
+              meta.visualUnitId ? `unit=${meta.visualUnitId}` : '',
+            ].filter(Boolean)
+            return `${n.sourceId}[${meta.componentType}${bits.length ? ` ${bits.join(' ')}` : ''}]`
+          })
+          .join(', '),
+    )
+  }
+  if (sections.length === 0) return ''
+  return `\n\n<research-figure-context>\n${sections.join('\n')}\n</research-figure-context>`
 }
 
 /** Optional hosted tools that can be disabled by the runtime configuration. */
@@ -3838,375 +3906,9 @@ async function executeTool(
     }
 
     case 'create_research_figure': {
-      // Graceful degradation: agents (especially weak models) frequently pass a
-      // stale slideIndex after deleting/creating canvases. Fall back to the
-      // current slide instead of failing the whole creation.
-      let idx = Number(call.input.slideIndex)
-      if (!slides[idx]) idx = access.getCurrent()
-      const slide = slides[idx]
-      if (!slide)
-        return fail(t('aiFailNewElement'), `slideIndex out of range (0-${slides.length - 1})`)
-      if (mode !== 'research') {
-        return fail(
-          t('aiFailNewElement'),
-          'create_research_figure runs in Research Figure Mode only',
-        )
-      }
-      if (!access.runLlm) return fail(t('aiFailNewElement'), 'LLM transport unavailable')
-      const thesis = String(call.input.thesis ?? '').trim()
-      if (!thesis) return fail(t('aiFailNewElement'), 'thesis is required')
-      const notes = String(call.input.notes ?? '').trim()
-      const parseJson = (text: string): unknown => {
-        const fenced = /```(?:json)?\\s*([\\s\\S]*?)```/.exec(text)
-        const raw = (fenced ? fenced[1]! : text).trim()
-        const start = raw.indexOf('{')
-        const end = raw.lastIndexOf('}')
-        return JSON.parse(start >= 0 && end > start ? raw.slice(start, end + 1) : raw)
-      }
-      const plannerUser = [
-        'Canvas: ' + slide.widthPx + 'x' + slide.heightPx + 'px (px, origin top-left)',
-        'Request: ' + thesis,
-        notes ? 'Material notes:\\n' + notes : '',
-      ]
-        .filter(Boolean)
-        .join('\\n')
-      const llm = {
-        semanticPlan: async (_thesis: string, feedback?: string) => {
-          const r = await access.runLlm!(
-            effectivePrompt('research.semantic-planner', RESEARCH_SEMANTIC_PLANNER_PROMPT),
-            feedback
-              ? plannerUser +
-                  '\\n\\nPrevious attempt rejected by schema validation: ' +
-                  feedback +
-                  '\\nFix the issues and output the JSON object again.'
-              : plannerUser,
-          )
-          if (!r.ok) throw new Error(r.error ?? 'planner call failed')
-          return parseJson(r.text ?? '')
-        },
-        compose: async (ctx: {
-          plan: unknown
-          measured: Array<{ id: string; w: number; h: number }>
-          canvas: { w: number; h: number }
-          autonomy: string
-          critique?: string[]
-        }) => {
-          const r = await access.runLlm!(
-            effectivePrompt('research.composition-designer', RESEARCH_COMPOSITION_DESIGNER_PROMPT),
-            JSON.stringify(ctx),
-          )
-          if (!r.ok) return null
-          try {
-            return parseJson(r.text ?? '')
-          } catch {
-            return null
-          }
-        },
-      }
-      const contract = parseFigureContract({
-        centralClaim: thesis,
-        figureFamily: String(call.input.figureFamily ?? ''),
-        domain: String(call.input.domain ?? ''),
-        venue: String(call.input.venue ?? ''),
-        output: { context: String(call.input.outputContext ?? '') },
-      })
-      const orchestration = await orchestrateFigure(
-        {
-          thesis,
-          canvasW: slide.widthPx,
-          canvasH: slide.heightPx,
-          capability: call.input.capability as CapabilityInput | undefined,
-          ...(contract ? { contract } : {}),
-        },
-        llm,
-      )
-      if (
-        !orchestration.ok ||
-        !orchestration.plan ||
-        !orchestration.best ||
-        !orchestration.routes ||
-        !orchestration.critic ||
-        orchestration.critic.verdict === 'RECOMPOSE'
-      ) {
-        const reason =
-          orchestration.error ??
-          'composition ' +
-            (orchestration.critic?.verdict ?? 'failed') +
-            ': ' +
-            (orchestration.critic?.gateIssues.join('; ') || 'critic below threshold')
-        return fail(t('aiFailNewElement'), reason)
-      }
-      const plan = orchestration.plan
-      const solve = orchestration.best.solve
-      // VisualPlan is strictly model-authored; no keyword fallback is invented
-      // after the composer chose not to decompose a module.
-      const visualPlan = orchestration.visualPlan ?? { modules: [] }
-      const theme =
-        getThemeById(String(call.input.themeId ?? 'academic-blue')) ??
-        getThemeById('academic-blue')!
-      const KIND_BY_TYPE: Record<string, string> = {
-        'data-source': 'data-source',
-        variable: 'input-node',
-        mechanism: 'mechanism-module',
-        process: 'process-node',
-        model: 'model-module',
-        method: 'process-node',
-        actor: 'process-node',
-        evidence: 'evidence-node',
-        outcome: 'output-node',
-        hypothesis: 'evidence-node',
-        annotation: 'annotation',
-        context: 'process-node',
-      }
-      const nodeById = new Map(plan.nodes.map((node) => [node.id, node]))
-      const rectById = new Map<string, RouteRect>(
-        solve.placements.map((placement) => [placement.id, placement]),
-      )
-      const actionId = beginAction('Create research figure (orchestrated)')
-      const createdIds: string[] = []
-      try {
-        let latestSlide = slide
-        const elementIdByNodeId = new Map<string, string>()
-        for (const placement of solve.placements) {
-          throwIfAborted(signal)
-          const node = nodeById.get(placement.id)
-          if (!node) throw new Error('unmeasured node "' + placement.id + '"')
-          const domainProfile = orchestration.domain
-            ? DOMAIN_PROFILES[orchestration.domain]
-            : undefined
-          const kind =
-            domainProfile?.kindOverrides?.[node.type] ?? KIND_BY_TYPE[node.type] ?? 'process-node'
-          const colors = resolveComponentColors(kind, theme.roles)
-          const tokens = componentThemeTokens(kind)
-          // Parent box shows ONLY the title. detail keywords have already been
-          // promoted to independent visual units below; the page must not
-          // regress into "big card with text" mode.
-          const paragraphs: EditParagraph[] = [
-            {
-              runs: [
-                {
-                  text: node.visible.title,
-                  bold: true,
-                  fontSize: SEMANTIC_NODE_STYLES[node.type].titleSizePt,
-                  color: colors.text,
-                },
-              ],
-            },
-          ]
-          const parentModule = visualPlan.modules.find((m) => m.moduleId === placement.id)
-          const parentHeight = parentModule
-            ? Math.max(
-                placement.h,
-                Math.min(slide.heightPx - 40, 34 + parentModule.units.length * 36),
-              )
-            : placement.h
-          const r = await window.slidesApi.addElement({
-            slideIndex: idx,
-            kind: getComponentSpec(kind).preset,
-            xPx: placement.x,
-            yPx: placement.y,
-            wPx: placement.w,
-            hPx: parentHeight,
-            fitWidthPx: access.fitWidthPx,
-            paragraphs,
-            fillColor: colors.fill,
-            stroke: { color: colors.stroke, widthPt: 1.25 },
-            semanticMetadata: {
-              role: kind,
-              themeFill: tokens.fill,
-              themeStroke: tokens.stroke,
-              themeText: tokens.text,
-              componentType: 'research-module',
-            },
-          })
-          if (!r) throw new Error('Failed to place node "' + placement.id + '"')
-          createdIds.push(r.sourceId)
-          elementIdByNodeId.set(placement.id, r.sourceId)
-          throwIfAborted(signal)
-          latestSlide = r.slide
-          access.applySlide(idx, r.slide)
-
-          // Micro layout: turn this module's visualUnits into independent PPT
-          // shapes inside the parent box.
-          const module = parentModule
-          if (module) {
-            const microMap = new Map([
-              [placement.id, { x: placement.x, y: placement.y, w: placement.w, h: parentHeight }],
-            ])
-            const micro = layoutMicro([module], microMap)
-            for (const u of micro.units) {
-              throwIfAborted(signal)
-              const role = u.role
-              const shapeKind = (() => {
-                const u2 = module.units.find((x) => x.id === u.id)
-                return u2?.shape ?? ROLE_SHAPE[role]
-              })()
-              const unitColor = resolveComponentColors(
-                KIND_BY_TYPE[node.type] ?? 'process-node',
-                theme.roles,
-              )
-              const unitParagraphs: EditParagraph[] = [
-                {
-                  runs: [
-                    {
-                      text: u.label,
-                      bold: role === 'output' || role === 'substep',
-                      fontSize: role === 'annotation' ? 9.5 : 10.5,
-                      color: unitColor.text,
-                    },
-                  ],
-                  align: 'center',
-                },
-              ]
-              if (u.detail) {
-                unitParagraphs.push({
-                  runs: [{ text: u.detail, fontSize: 9, color: unitColor.subtitle }],
-                  align: 'center',
-                })
-              }
-              const ur = await window.slidesApi.addElement({
-                slideIndex: idx,
-                kind: shapePreset(shapeKind),
-                xPx: u.x,
-                yPx: u.y,
-                wPx: u.w,
-                hPx: Math.max(u.h, 42),
-                fitWidthPx: access.fitWidthPx,
-                paragraphs: unitParagraphs,
-                fillColor: unitColor.fill,
-                stroke: { color: unitColor.stroke, widthPt: 0.75 },
-                semanticMetadata: {
-                  role: 'visual-unit',
-                  themeFill: unitColor.fill,
-                  themeStroke: unitColor.stroke,
-                  themeText: unitColor.text,
-                  componentType: 'research-micro',
-                  ...(u.semanticNodeId ? { semanticNodeId: u.semanticNodeId } : {}),
-                  ...(u.semanticEdgeId ? { semanticEdgeId: u.semanticEdgeId } : {}),
-                },
-              })
-              if (ur) createdIds.push(ur.sourceId)
-              throwIfAborted(signal)
-              if (ur) {
-                latestSlide = ur.slide
-                access.applySlide(idx, ur.slide)
-              }
-            }
-          }
-        }
-        let boundCount = 0
-        for (const route of orchestration.routes) {
-          throwIfAborted(signal)
-          if (route.status !== 'routed' || !route.start || !route.end || !route.kind) continue
-          const fromId = elementIdByNodeId.get(route.fromId)
-          const toId = elementIdByNodeId.get(route.toId)
-          const fromRect = rectById.get(route.fromId)
-          const toRect = rectById.get(route.toId)
-          if (!fromId || !toId || !fromRect || !toRect) continue
-          const p1 = anchorPoint(fromRect, route.start.side)
-          const p2 = anchorPoint(toRect, route.end.side)
-          const cr = await window.slidesApi.addElement({
-            slideIndex: idx,
-            kind: route.kind === 'elbow' ? 'bentConnector3' : 'line',
-            xPx: Math.min(p1.x, p2.x),
-            yPx: Math.min(p1.y, p2.y),
-            wPx: Math.max(Math.abs(p2.x - p1.x), 1),
-            hPx: Math.max(Math.abs(p2.y - p1.y), 1),
-            fitWidthPx: access.fitWidthPx,
-            stroke: {
-              color: connectorColor(theme.roles),
-              widthPt: route.presentation === 'inhibition' ? 2 : 1.5,
-              ...(route.presentation === 'dashed-arrow' || route.presentation === 'inhibition'
-                ? { dash: route.presentation === 'inhibition' ? 'dash' : 'sysDash' }
-                : {}),
-            },
-            semanticMetadata: {
-              role: route.role + '-connector',
-              themeFill: 'none',
-              themeStroke: 'connector',
-              themeText: 'none',
-              componentType: 'research-connector',
-              ...(route.semanticEdgeId ? { semanticEdgeId: route.semanticEdgeId } : {}),
-              ...(route.presentation ? { relationPresentation: route.presentation } : {}),
-            },
-          })
-          if (!cr) throw new Error('Failed to place ' + route.role + ' connector ' + route.key)
-          createdIds.push(cr.sourceId)
-          latestSlide = cr.slide
-          access.applySlide(idx, cr.slide)
-          const boundSlide = await window.slidesApi.editConnectorEndpoints({
-            slideIndex: idx,
-            sourceId: cr.sourceId,
-            x1Px: p1.x,
-            y1Px: p1.y,
-            x2Px: p2.x,
-            y2Px: p2.y,
-            fitWidthPx: access.fitWidthPx,
-            ...(route.role === 'feedback'
-              ? { routeYPx: route.routeY ?? slide.heightPx - Math.round(slide.heightPx * 0.04) }
-              : route.routeY !== undefined
-                ? { routeYPx: route.routeY }
-                : {}),
-            start: { targetId: fromId, idx: route.start.idx },
-            end: { targetId: toId, idx: route.end.idx },
-          })
-          if (!boundSlide) throw new Error('Failed to bind connector ' + route.key)
-          latestSlide = boundSlide
-          access.applySlide(idx, boundSlide)
-          boundCount++
-        }
-        const renderIssues = auditSlideLayout(latestSlide)
-        if (renderIssues.length > 0) {
-          throw new Error('Post-write layout audit failed: ' + renderIssues.join('; '))
-        }
-        completeAction(
-          actionId,
-          'orchestrated figure: ' +
-            solve.placements.length +
-            ' nodes, ' +
-            boundCount +
-            '/' +
-            orchestration.routes.length +
-            ' connectors bound',
-        )
-        return {
-          output:
-            'Created an orchestrated research figure on page ' +
-            (idx + 1) +
-            ': ' +
-            solve.placements.length +
-            ' nodes, ' +
-            boundCount +
-            ' native-bound connectors. Composition: ' +
-            orchestration.best.source +
-            (orchestration.best.priorId ? '/' + orchestration.best.priorId : '') +
-            ' at autonomy ' +
-            orchestration.autonomy +
-            '. Critic: ' +
-            orchestration.critic.verdict +
-            ' (overall ' +
-            orchestration.critic.scores.overall +
-            '/10, crossings ' +
-            orchestration.best.crossings +
-            ', intent drift ' +
-            Math.round(orchestration.best.solve.intentDriftPx) +
-            'px). Element ids: ' +
-            [...elementIdByNodeId.values()].join(', ') +
-            '.',
-          mutated: true,
-          summary: t('aiSumNewShape', { n: idx + 1 }),
-        }
-      } catch (err) {
-        const reason = err instanceof Error ? err.message : String(err)
-        const rollbackErrors = await revertCreatedElements(access, idx, createdIds)
-        revertAction(actionId)
-        return fail(
-          t('aiFailNewElement'),
-          rollbackErrors.length > 0
-            ? reason + ' (rollback incomplete for ' + rollbackErrors.length + ' elements)'
-            : reason,
-        )
-      }
+      // RENDER-P1-10: the tool body lives in renderer/research/ — the skill
+      // keeps only registration + delegation to reduce god-file merge surface.
+      return await executeCreateResearchFigure({ access, mode, call, signal })
     }
     case 'create_input_core_output': {
       const idx = Number(call.input.slideIndex)

@@ -169,8 +169,18 @@ export {
   ensureCreationId,
   groupChildDurableId,
   matchesElementRef,
+  parseSemanticMetadata,
+  RESEARCH_METADATA_VERSION,
+  serializeSemanticMetadata,
   slideDurableId,
 } from './identity'
+export {
+  getSlideResearchMetadata,
+  setSlideResearchMetadata,
+  type ResearchFigureSlidePayload,
+  type ResearchNodeRecord,
+  type ResearchRelationRecord,
+} from './research-metadata'
 export { promoteSlideBackground, isBackgroundLikeElement } from './background-promote'
 export {
   applyThemeToArchive,
@@ -2085,7 +2095,10 @@ export function materializeSlide(opened: OpenedPptx, slideIndex: number): Slide 
 // ── Connector move-following ────────────────────────────────────────────
 
 /** Connection point index → shape edge midpoint (rectangle approximation: 0 top 1 left 2 bottom 3 right, else center). */
-function connectionPoint(t: Transform, idx: number): { x: number; y: number } {
+function connectionPoint(
+  t: { offset: Transform['offset'] },
+  idx: number,
+): { x: number; y: number } {
   const o = t.offset
   switch (idx) {
     case 0:
@@ -2101,26 +2114,155 @@ function connectionPoint(t: Transform, idx: number): { x: number; y: number } {
   }
 }
 
+/** A group child's <p:cNvPr id> — its spid lives inside the group's bytes. */
+function groupChildSpid(grp: SlideElement, child: SlideElement): number | null {
+  const nvId = (child as { nvId?: number | string }).nvId
+  if (nvId == null || !grp.anchor?.originalXml) return null
+  const m = new RegExp(`<p:cNvPr\\b[^>]*\\bid="${nvId}"[^>]*>`).exec(grp.anchor.originalXml)
+  if (!m) return null
+  const id = /\bid="(\d+)"/.exec(m[0])
+  return id ? Number(id[1]) : null
+}
+
+/**
+ * Absolute slide-space box of an element. Top-level elements are already
+ * absolute; group children map through the group's child coordinate system
+ * (slide = (child - chOff) × ext/chExt + off), matching ungroup's conversion.
+ */
+function absoluteOffset(
+  el: SlideElement,
+  ancestors: Array<{ grp: import('./types').GroupElement }> = [],
+): Transform['offset'] {
+  const o = el.transform.offset
+  if (ancestors.length === 0) return o
+  let box = { ...o }
+  for (let i = ancestors.length - 1; i >= 0; i--) {
+    const gOff = ancestors[i]!.grp.transform.offset
+    const chOff = ancestors[i]!.grp.childOffset ?? {
+      x: gOff.x,
+      y: gOff.y,
+      cx: gOff.cx,
+      cy: gOff.cy,
+    }
+    const sx = chOff.cx > 0 ? gOff.cx / chOff.cx : 1
+    const sy = chOff.cy > 0 ? gOff.cy / chOff.cy : 1
+    box = {
+      x: Math.round((box.x - chOff.x) * sx + gOff.x),
+      y: Math.round((box.y - chOff.y) * sy + gOff.y),
+      cx: Math.round(box.cx * sx),
+      cy: Math.round(box.cy * sy),
+    }
+  }
+  return box
+}
+
 /**
  * Re-lay connectors after connected shapes move: the geometry box = the bounding
  * box of the two endpoints, direction expressed via flip (exact for straight
  * connectors; elbow connectors approximated by the same bounding box). An
  * unattached end keeps its current endpoint. Returns the number of connectors
  * updated (>0 means each is flagged dirtyTransform).
+ *
+ * Group-aware (RENDER-P0-07): moving a group implicitly moves every descendant
+ * child, so connectors attached to grouped shapes re-lay against the child's
+ * mapped absolute box.
  */
 export function updateConnectorsForMoved(slide: Slide, movedIds: string[]): number {
   const movedSpids = new Set<number>()
-  for (const id of movedIds) {
-    const el = slide.elements.find((e) => e.id === id)
-    const spid = el ? elementSpid(el) : null
+  const consider = (
+    el: SlideElement,
+    ancestors: Array<{ grp: import('./types').GroupElement }>,
+  ) => {
+    const spid =
+      ancestors.length === 0
+        ? elementSpid(el)
+        : groupChildSpid(ancestors[ancestors.length - 1]!.grp, el)
     if (spid != null) movedSpids.add(spid)
   }
-  if (!movedSpids.size) return 0
-  const bySpid = new Map<number, SlideElement>()
-  for (const e of slide.elements) {
-    const spid = elementSpid(e)
-    if (spid != null) bySpid.set(spid, e)
+  const walkGroup = (
+    grp: import('./types').GroupElement,
+    ancestors: Array<{ grp: import('./types').GroupElement }>,
+  ) => {
+    for (const child of grp.children) {
+      consider(child, ancestors)
+      if (child.type === 'group')
+        walkGroup(child as import('./types').GroupElement, [
+          ...ancestors,
+          { grp: child as import('./types').GroupElement },
+        ])
+    }
   }
+  for (const id of movedIds) {
+    const el = slide.elements.find((e) => e.id === id)
+    if (!el) continue
+    if (el.type === 'group')
+      walkGroup(el as import('./types').GroupElement, [
+        { grp: el as import('./types').GroupElement },
+      ])
+    else consider(el, [])
+  }
+  if (!movedSpids.size) return 0
+  return relayoutConnectedConnectors(slide, movedSpids)
+}
+
+/**
+ * Re-lay connectors attached to one group child that moved inside its group
+ * (in-group editing). Only connectors bound to THAT child update — siblings
+ * stay put.
+ */
+export function updateConnectorsForGroupChildMoved(
+  slide: Slide,
+  groupId: string,
+  childId: string,
+): number {
+  const grp = slide.elements.find((e) => e.id === groupId)
+  if (!grp || grp.type !== 'group') return 0
+  const group = grp as import('./types').GroupElement
+  const child = findGroupChildElement(group, childId)
+  if (!child) return 0
+  const spid = groupChildSpid(group, child)
+  if (spid == null) return 0
+  return relayoutConnectedConnectors(slide, new Set([spid]))
+}
+
+function findGroupChildElement(
+  grp: import('./types').GroupElement,
+  childId: string,
+): SlideElement | null {
+  for (const child of grp.children) {
+    if (child.id === childId) return child
+    if (child.type === 'group') {
+      const nested = findGroupChildElement(child as import('./types').GroupElement, childId)
+      if (nested) return nested
+    }
+  }
+  return null
+}
+
+/** Shared re-lay pass: update connectors whose st/end spid is in `movedSpids`. */
+function relayoutConnectedConnectors(slide: Slide, movedSpids: Set<number>): number {
+  // Absolute slide-space box for every addressable endpoint (top-level and
+  // grouped), so a connector between two grouped shapes resolves both ends.
+  const absBySpid = new Map<number, { offset: Transform['offset'] }>()
+  const indexElement = (
+    el: SlideElement,
+    ancestors: Array<{ grp: import('./types').GroupElement }>,
+  ) => {
+    const spid =
+      ancestors.length === 0
+        ? elementSpid(el)
+        : groupChildSpid(ancestors[ancestors.length - 1]!.grp, el)
+    if (spid != null) absBySpid.set(spid, { offset: absoluteOffset(el, ancestors) })
+  }
+  const walk = (el: SlideElement, ancestors: Array<{ grp: import('./types').GroupElement }>) => {
+    indexElement(el, ancestors)
+    if (el.type === 'group') {
+      const group = el as import('./types').GroupElement
+      for (const child of group.children) walk(child, [...ancestors, { grp: group }])
+    }
+  }
+  for (const el of slide.elements) walk(el, [])
+
   let n = 0
   for (const el of slide.elements) {
     const cxn = el.connection
@@ -2131,10 +2273,10 @@ export function updateConnectorsForMoved(slide: Slide, movedIds: string[]): numb
     const o = t.offset
     const curStart = { x: t.flipH ? o.x + o.cx : o.x, y: t.flipV ? o.y + o.cy : o.y }
     const curEnd = { x: t.flipH ? o.x : o.x + o.cx, y: t.flipV ? o.y : o.y + o.cy }
-    const stTarget = cxn.start ? bySpid.get(cxn.start.id) : undefined
-    const endTarget = cxn.end ? bySpid.get(cxn.end.id) : undefined
-    const p1 = stTarget ? connectionPoint(stTarget.transform, cxn.start!.idx) : curStart
-    const p2 = endTarget ? connectionPoint(endTarget.transform, cxn.end!.idx) : curEnd
+    const stTarget = cxn.start ? absBySpid.get(cxn.start.id) : undefined
+    const endTarget = cxn.end ? absBySpid.get(cxn.end.id) : undefined
+    const p1 = stTarget ? connectionPoint(stTarget, cxn.start!.idx) : curStart
+    const p2 = endTarget ? connectionPoint(endTarget, cxn.end!.idx) : curEnd
     t.offset = {
       x: Math.round(Math.min(p1.x, p2.x)),
       y: Math.round(Math.min(p1.y, p2.y)),
@@ -2221,21 +2363,32 @@ function patchConnectorRouteY(xml: string, routeYEmu: number | null): string | n
   const geom = /<a:prstGeom\b([^>]*)>([\s\S]*?)<\/a:prstGeom>/.exec(xml)
   if (!geom) return null
   const routeTag = /<a:gd\b[^>]*\bname="rfsRouteY"[^>]*\/\s*>/g
-  const nextTag = routeYEmu === null ? '' : `<a:gd name="rfsRouteY" fmla="val ${Math.round(routeYEmu)}"/>`
+  const nextTag =
+    routeYEmu === null ? '' : `<a:gd name="rfsRouteY" fmla="val ${Math.round(routeYEmu)}"/>`
   let body = geom[2]!.replace(routeTag, '')
   const av = /<a:avLst\b([^>]*)>([\s\S]*?)<\/a:avLst>/.exec(body)
   if (av) {
     const inner = av[2]!.trim()
-    body = body.slice(0, av.index) + `<a:avLst${av[1]}>${inner}${nextTag}</a:avLst>` + body.slice(av.index + av[0].length)
+    body =
+      body.slice(0, av.index) +
+      `<a:avLst${av[1]}>${inner}${nextTag}</a:avLst>` +
+      body.slice(av.index + av[0].length)
   } else {
     const self = /<a:avLst\b([^>]*)\/\s*>/.exec(body)
     if (self) {
-      body = body.slice(0, self.index) + `<a:avLst${self[1]}>${nextTag}</a:avLst>` + body.slice(self.index + self[0].length)
+      body =
+        body.slice(0, self.index) +
+        `<a:avLst${self[1]}>${nextTag}</a:avLst>` +
+        body.slice(self.index + self[0].length)
     } else if (nextTag) {
       body = `<a:avLst>${nextTag}</a:avLst>` + body
     }
   }
-  return xml.slice(0, geom.index) + `<a:prstGeom${geom[1]}>${body}</a:prstGeom>` + xml.slice(geom.index + geom[0].length)
+  return (
+    xml.slice(0, geom.index) +
+    `<a:prstGeom${geom[1]}>${body}</a:prstGeom>` +
+    xml.slice(geom.index + geom[0].length)
+  )
 }
 
 // title/ctrTitle share one slot; content placeholders (body/obj/subTitle/untyped) match by idx
@@ -3733,6 +3886,7 @@ export function pasteElements(
     : null
 
   let nextId = nextCNvPrId(slide)
+  let copySeq = 0
   const xmls = items.map((item) => {
     let xml = item.xml
     for (const rel of item.rels) {
@@ -3765,6 +3919,27 @@ export function pasteElements(
       (_a, pre: string, post: string) =>
         `${pre}{${globalThis.crypto.randomUUID().toUpperCase()}}${post}`,
     )
+    // RENDER-P1-05: a pasted research element is a DETACHED clone — its
+    // semanticNodeId must never collide with the original's on the same slide.
+    // Keep role/componentType styling, derive the new id, keep the provenance.
+    xml = xml.replace(/descr="(rfs:v1[^"]*)"/g, (_m, payload: string) => {
+      const fields = payload.split('|')
+      const values = new Map<string, string>()
+      for (const field of fields.slice(1)) {
+        const at = field.indexOf('=')
+        if (at > 0) values.set(field.slice(0, at), field.slice(at + 1))
+      }
+      const original = values.get('semanticNodeId')
+      if (!original) return `descr="${payload}"`
+      values.set('derivedFrom', original)
+      values.set(
+        'semanticNodeId',
+        encodeURIComponent(`${decodeURIComponent(original)}@copy${copySeq++}`),
+      )
+      values.delete('semanticEdgeId')
+      const rebuilt = ['rfs:v1', ...[...values].map(([k, v]) => `${k}=${v}`)].join('|')
+      return `descr="${rebuilt}"`
+    })
     // Offset only the outermost xfrm's off (group child coordinate systems stay put)
     xml = xml.replace(/<a:off\b[^>]*\/>/, (tag) =>
       tag

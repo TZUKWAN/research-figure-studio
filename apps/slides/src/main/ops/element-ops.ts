@@ -26,6 +26,7 @@ import {
   setShapeAdjustValues,
   setGroupChildShapeAdjustValues,
   ungroupElement,
+  updateConnectorsForGroupChildMoved,
   updateConnectorsForMoved,
   type EmuRect,
   type ReorderDirection,
@@ -113,6 +114,9 @@ register({
           `op "setTransform": the child slice for "${id}" could not be located inside group "${groupId}".`,
         )
       }
+      // In-group editing still moves the child in slide space — connectors
+      // bound to it (composite-module micro/parent bindings) must follow.
+      updateConnectorsForGroupChildMoved(slide, groupId, id)
       return { op, after: { ...box, rotDeg } }
     }
     const box = emuRect(op)
@@ -184,10 +188,15 @@ register({
       const spid = target ? elementSpid(target) : null
       return spid != null ? { id: spid, idx: v.idx } : null
     }
-    setElementConnection(slide, el.id, {
-      start: toRef(op.start as { targetId: string; idx: number } | null | undefined),
-      end: toRef(op.end as { targetId: string; idx: number } | null | undefined),
-    }, op.routeY as number | null | undefined)
+    setElementConnection(
+      slide,
+      el.id,
+      {
+        start: toRef(op.start as { targetId: string; idx: number } | null | undefined),
+        end: toRef(op.end as { targetId: string; idx: number } | null | undefined),
+      },
+      op.routeY as number | null | undefined,
+    )
     return { op, before, after: { p1, p2 } }
   },
 })

@@ -32,6 +32,7 @@ import { criticVerdict } from '../critic/metric-critic.js'
 import { routeEdgesWithObstacles, type RoutedEdge } from '../routing/router.js'
 import { classifyEdges, type EdgeTarget } from '../constraints/edge-aware-solver.js'
 import { normalizeVisualPlan } from '../visual/visualPlan.js'
+import { minimumHeightForUnits, minimumWidthForUnits } from '../visual/microLayout.js'
 import { compositionSignature } from '../composition/priors.js'
 import { auditScientific, type ScientificIssue } from '../critic/scientific-critic.js'
 import {
@@ -130,6 +131,8 @@ export interface OrchestrationResult {
   visualPlan?: import('../visual/visualPlan.js').VisualPlan
   /** resolved scientific domain (P1): drives renderer primitives + connector language */
   domain?: import('../contract/domain-profile.js').ScientificDomain
+  /** forward typography scale applied for the publication contract (1 = none) */
+  contractFontScale?: number
   /** relations deliberately expressed through position/grouping rather than a connector */
   unrenderedRelations?: RoutedEdge[]
   /** ranked candidate summary (P2 art direction): the set the winner was chosen from */
@@ -155,6 +158,28 @@ function median(values: number[]): number {
   if (values.length === 0) return 0
   const sorted = [...values].sort((a, b) => a - b)
   return sorted[Math.floor(sorted.length / 2)]!
+}
+
+/**
+ * RENDER-P0-01: per-module hard fit constraints derived from the model's
+ * visual decomposition. The solver reserves the composite size; the renderer
+ * must never re-derive or inflate geometry after the solve.
+ */
+function unitFitConstraints(
+  visualPlan: import('../visual/visualPlan.js').VisualPlan,
+  measured: MeasuredNode[],
+): Map<string, { minHeightForWidth: (w: number) => number; minWidth: number }> | undefined {
+  if (visualPlan.modules.length === 0) return undefined
+  const widthById = new Map(measured.map((node) => [node.title, node.bounds.minWidth]))
+  const fit = new Map<string, { minHeightForWidth: (w: number) => number; minWidth: number }>()
+  for (const module of visualPlan.modules) {
+    const innerWidth = Math.max(60, (widthById.get(module.moduleId) ?? 96) - 8)
+    fit.set(module.moduleId, {
+      minHeightForWidth: (w: number) => minimumHeightForUnits(module, Math.max(60, w - 8)),
+      minWidth: minimumWidthForUnits(module) || innerWidth,
+    })
+  }
+  return fit.size > 0 ? fit : undefined
 }
 
 export async function orchestrateFigure(
@@ -378,6 +403,9 @@ export async function orchestrateFigure(
         input.canvasH,
         modelPlan,
         meta,
+        // RENDER-P0-01: composite modules reserve their real unit-fit size at
+        // solve time, so the renderer can consume placements verbatim.
+        unitFitConstraints(visualPlan, measured),
       )
       if (candidates.length === 0) {
         emit('figure.failed', false, 'no composition candidates generated')
@@ -449,8 +477,7 @@ export async function orchestrateFigure(
     if (connectorInputs.length > densityCap) {
       const rank: Record<string, number> = { primary: 0, feedback: 1, secondary: 2 }
       const sorted = [...connectorInputs].sort(
-        (a, b) =>
-          (rank[a.priority] ?? 2) - (rank[b.priority] ?? 2) || a.key.localeCompare(b.key),
+        (a, b) => (rank[a.priority] ?? 2) - (rank[b.priority] ?? 2) || a.key.localeCompare(b.key),
       )
       const kept = sorted.slice(0, densityCap)
       const demoted = sorted.slice(densityCap)
@@ -649,6 +676,7 @@ export async function orchestrateFigure(
     best,
     visualPlan,
     domain,
+    contractFontScale,
     unrenderedRelations,
     candidates: candidates.map((candidate) => ({
       source: candidate.source,

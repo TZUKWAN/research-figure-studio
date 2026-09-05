@@ -96,6 +96,23 @@ export function opNames(): string[] {
   return [...REGISTRY.keys()]
 }
 
+// ── in-transaction forward references ───────────────────────────────────
+// A composite creation (research figure) needs later ops to address elements
+// an earlier op in the SAME transaction minted. An op field carrying the
+// exact string "$txn:<opIndex>" refers to the first element that op created;
+// the executor substitutes real ids just before each apply. Plan-phase
+// validation sees a synthetic pass-through so the whole batch still plans.
+
+const TXN_REF_RE = /^\$txn:(\d+)$/
+
+export function isTxnRef(value: unknown): value is string {
+  return typeof value === 'string' && TXN_REF_RE.test(value)
+}
+
+export function txnRefTarget(ref: string): number {
+  return Number(TXN_REF_RE.exec(ref)![1])
+}
+
 // ── target resolution (guided) ──────────────────────────────────────────
 
 function resolvePart(ctx: OpContext, op: Op, part: string): Slide {
@@ -173,6 +190,11 @@ export function resolveElement(
   const id = op.target?.el
   if (typeof id !== 'string' || !id) {
     throw new GuidedError(`op "${op.op}" needs target.el (an element id on ${where}).`)
+  }
+  if (isTxnRef(id)) {
+    // Forward reference: the element materializes when the executor substitutes
+    // the creating op's id at apply time. Plan-phase sees a synthetic element.
+    return { index, slide, el: { id, type: 'shape' } as SlideElement }
   }
   const el = slide.elements.find((x) => matchesElementRef(x, id))
   if (!el) {
