@@ -1,15 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import {
-  CRITIC_WEIGHTS,
-  criticVerdict,
-  type CriticScores,
-} from '../src/critic/metric-critic.js'
+import { CRITIC_WEIGHTS, criticVerdict, type CriticScores } from '../src/critic/metric-critic.js'
 import { auditScientific } from '../src/critic/scientific-critic.js'
-import {
-  compositionSignature,
-  priorById,
-  priorFitScore,
-} from '../src/composition/priors.js'
+import { compositionSignature, priorById, priorFitScore } from '../src/composition/priors.js'
 import { candidateFromPrior, type FigureEdgesInput } from '../src/composition/candidate.js'
 import { estimatorMeasurer, measureNode, type MeasuredNode } from '../src/measurement/measure.js'
 
@@ -217,9 +209,9 @@ describe('P0 scientific critic', () => {
         },
       ],
     })
-    expect(issues.some((issue) => issue.repairClass === 'ROUTE_FIX' && issue.severity === 'hard')).toBe(
-      true,
-    )
+    expect(
+      issues.some((issue) => issue.repairClass === 'ROUTE_FIX' && issue.severity === 'hard'),
+    ).toBe(true)
   })
 
   it('directional relations reading backwards raise a composition redesign', () => {
@@ -230,9 +222,7 @@ describe('P0 scientific critic', () => {
         { id: 'b', x: 100, y: 300, w: 160, h: 60 },
       ],
     })
-    expect(
-      issues.some((issue) => issue.repairClass === 'COMPOSITION_REDESIGN'),
-    ).toBe(true)
+    expect(issues.some((issue) => issue.repairClass === 'COMPOSITION_REDESIGN')).toBe(true)
   })
 })
 
@@ -247,11 +237,9 @@ describe('P0 composition diversity', () => {
     { from: 'hub', to: 's5', role: 'main', relation: 'process' },
     { from: 's5', to: 'out', role: 'main', relation: 'process' },
   ]
-  const meta = new Map(
-    ids.map((id) => [id, { importance: id === 'hub' ? 0.95 : 0.45 }]),
-  )
+  const meta = new Map(ids.map((id) => [id, { importance: id === 'hub' ? 0.95 : 0.45 }]))
 
-  function fingerprint(candidate: ReturnType<typeof candidateFromPrior>): number[] {
+  function fingerprint(candidate: NonNullable<ReturnType<typeof candidateFromPrior>>): number[] {
     // 4x4 quadrant occupancy + normalized radial distance histogram (8 bins)
     const quad = [0, 0, 0, 0]
     const radial = [0, 0, 0, 0, 0, 0, 0, 0]
@@ -269,8 +257,10 @@ describe('P0 composition diversity', () => {
     const linearPrior = priorById('linear-process')!
     const radial = candidateFromPrior(radialPrior, measured, edges, 1280, 720, meta)
     const linear = candidateFromPrior(linearPrior, measured, edges, 1280, 720, meta)
-    const fpRadial = fingerprint(radial)
-    const fpLinear = fingerprint(linear)
+    expect(radial).not.toBeNull()
+    expect(linear).not.toBeNull()
+    const fpRadial = fingerprint(radial!)
+    const fpLinear = fingerprint(linear!)
     const l1 = fpRadial.reduce((sum, v, i) => sum + Math.abs(v - fpLinear[i]!), 0)
     expect(l1).toBeGreaterThanOrEqual(4)
   })

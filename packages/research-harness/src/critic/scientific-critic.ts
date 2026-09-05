@@ -64,16 +64,27 @@ export function auditScientific(input: {
     })
   }
 
-  // 2) declared connector relations must be realized as routed connectors
-  const routeByEndpoints = new Map<string, RoutedEdge>()
+  // 2) declared connector relations must be realized as routed connectors.
+  // COMP-P1-11: match by stable edge id first; the endpoint pair map keeps
+  // ARRAYS so parallel relations between the same nodes stay distinct.
+  const routeByEndpoints = new Map<string, RoutedEdge[]>()
   for (const route of input.routes ?? []) {
-    routeByEndpoints.set(`${route.fromId}\u0000${route.toId}`, route)
+    const pair = `${route.fromId}\u0000${route.toId}`
+    routeByEndpoints.set(pair, [...(routeByEndpoints.get(pair) ?? []), route])
+  }
+  const routeById = new Map<string, RoutedEdge>()
+  for (const route of input.routes ?? []) {
+    if (route.semanticEdgeId) routeById.set(route.semanticEdgeId, route)
   }
   const unrealized: string[] = []
   for (const edge of input.plan.edges) {
     const presentation = edge.presentation ?? 'arrow'
     if (!CONNECTOR_PRESENTATIONS.has(presentation)) continue
-    const route = routeByEndpoints.get(`${edge.from}\u0000${edge.to}`)
+    const route =
+      (edge.id ? routeById.get(edge.id) : undefined) ??
+      (routeByEndpoints.get(`${edge.from}\u0000${edge.to}`) ?? []).find(
+        (candidate) => candidate.status === 'routed',
+      )
     if (!route || route.status !== 'routed') {
       unrealized.push(edge.id ?? `${edge.from}->${edge.to}`)
     }

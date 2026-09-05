@@ -430,7 +430,13 @@ describe('creation orchestrator', () => {
     // → 3 routes. Other plans may legitimately have fewer.
     expect(result.routes!.length).toBeLessThanOrEqual(3)
     expect(result.critic?.verdict).not.toBe('RECOMPOSE')
-    expect(events[0]).toBe('semantic.plan')
+    // trace events are REAL happenings: the semantic plan stage is recorded
+    // as started BEFORE the model call and completed only after validation
+    expect(events[0]).toBe('semantic.plan.started')
+    expect(events).toContain('semantic.plan.completed')
+    expect(events.indexOf('semantic.plan.completed')).toBeGreaterThan(
+      events.indexOf('semantic.plan.started'),
+    )
     expect(events).toContain('measurement.completed')
     expect(events).toContain('capability.selected')
     expect(events).toContain('layout.solved')
@@ -616,6 +622,7 @@ describe('creation orchestrator', () => {
       { semanticPlan: async () => ({ nodes: [] }) },
     )
     expect(result.ok).toBe(false)
-    expect(result.error).toContain('schema')
+    // ORCH-P0-02: the failure names the KIND (schema vs parse error)
+    expect(result.error).toContain('FIGURE_PLAN_SCHEMA_ERROR')
   })
 })

@@ -23,6 +23,10 @@ export interface CompositionPrior {
     | 'parallel'
     | 'layered'
     | 'radial'
+    | 'network'
+    | 'timeline'
+    | 'matrix'
+    | 'comparison'
     | 'feedback'
     | 'causal'
     | 'mediation'
@@ -164,6 +168,58 @@ export const COMPOSITION_PRIORS: CompositionPrior[] = [
     allowedRange: { root: [0.42, 0.58], leaves: [0.82, 0.95] },
     readingFlow: 'TB',
   },
+  {
+    id: 'temporal-timeline',
+    grammar: 'timeline',
+    semanticFit: ['timeline', 'phase sequence', 'milestones'],
+    principles: [
+      'time advances along the declared timeOrder, never alphabetically',
+      'phases keep their own band',
+      'milestones get emphasis',
+    ],
+    defaultBias: { first: 0.08, last: 0.92, bandCenter: 0.42 },
+    allowedRange: { first: [0.04, 0.14], last: [0.86, 0.96], bandCenter: [0.3, 0.55] },
+    readingFlow: 'LR',
+  },
+  {
+    id: 'matrix-grid',
+    grammar: 'matrix',
+    semanticFit: ['matrix', 'row-column grid', 'cross-tabulation'],
+    principles: [
+      'rows and columns come from declared group axes',
+      'cells align to both axes',
+      'headers keep their row/column',
+    ],
+    defaultBias: { top: 0.1, left: 0.12 },
+    allowedRange: { top: [0.05, 0.2], left: [0.05, 0.2] },
+    readingFlow: 'TB',
+  },
+  {
+    id: 'comparison-mirror',
+    grammar: 'comparison',
+    semanticFit: ['A vs B', 'contrast', 'same-scale comparison'],
+    principles: [
+      'two mirrored regions with aligned anchors',
+      'shared dimensions occupy the same rows',
+      'difference emphasis sits on the seam',
+    ],
+    defaultBias: { leftCenter: 0.28, rightCenter: 0.72 },
+    allowedRange: { leftCenter: [0.2, 0.38], rightCenter: [0.62, 0.8] },
+    readingFlow: 'LR',
+  },
+  {
+    id: 'network-graph',
+    grammar: 'network',
+    semanticFit: ['network', 'hub-spoke', 'association graph'],
+    principles: [
+      'degree-ordered deterministic ring (no force simulation)',
+      'hubs gravitate to the center',
+      'bipartite graphs use two stable columns',
+    ],
+    defaultBias: { center: 0.5 },
+    allowedRange: { center: [0.4, 0.6] },
+    readingFlow: 'radial',
+  },
 ]
 
 export function priorById(id: string): CompositionPrior | null {
@@ -193,26 +249,58 @@ export interface CompositionSignature {
   hasModeration: boolean
   /** importance max-min spread (0 when unknown) */
   importanceSpread: number
+  // ── extended signals (audit COMP-P1-01) ──
+  /** non-feedback cycles present (count of back edges found by DFS) */
+  hasCycle: boolean
+  /** nodes with no non-feedback edges at all */
+  isolatedCount: number
+  sourceCount: number
+  sinkCount: number
+  /** nodes with out-degree ≥ 2 (branch points) */
+  branchCount: number
+  /** nodes with in-degree ≥ 2 (join points) */
+  joinCount: number
+  /** endpoint pairs carrying more than one relation (multi-edge safe identity) */
+  multiEdgePairCount: number
+  /** max total degree ÷ mean total degree (hub dominance, ≥1) */
+  centralitySkew: number
+  /** layerCount ÷ nodeCount: how much of the figure one chain spans */
+  chainCoverage: number
+  /** explicit temporal order declared (timeline family signal) */
+  hasTimeOrder: boolean
+  /** explicit matrix row/column axes declared (matrix family signal) */
+  hasMatrixAxes: boolean
 }
 
-export function compositionSignature(input: {
+export interface CompositionSignatureInput {
   nodeCount: number
   edgeCount: number
   relations: Set<string>
   roles: Set<string>
   edges?: Array<{ from: string; to: string; role: string }>
   importances?: number[]
-}): CompositionSignature {
+  hasTimeOrder?: boolean
+  hasMatrixAxes?: boolean
+}
+
+export function compositionSignature(input: CompositionSignatureInput): CompositionSignature {
   const nodeCount = Math.max(1, input.nodeCount)
   const edges = input.edges ?? []
   const inDeg = new Map<string, number>()
   const outDeg = new Map<string, number>()
+  const totalDeg = new Map<string, number>()
   const ids = new Set<string>()
+  const pairCounts = new Map<string, number>()
   for (const edge of edges) {
     ids.add(edge.from)
     ids.add(edge.to)
     outDeg.set(edge.from, (outDeg.get(edge.from) ?? 0) + 1)
     inDeg.set(edge.to, (inDeg.get(edge.to) ?? 0) + 1)
+    const pair = `${edge.from}\u0000${edge.to}`
+    pairCounts.set(pair, (pairCounts.get(pair) ?? 0) + 1)
+  }
+  for (const id of ids) {
+    totalDeg.set(id, (inDeg.get(id) ?? 0) + (outDeg.get(id) ?? 0))
   }
   const maxFanIn = Math.max(0, ...inDeg.values())
   const maxFanOut = Math.max(0, ...outDeg.values())
@@ -229,8 +317,10 @@ export function compositionSignature(input: {
   }
   const queue = [...layerOf.keys()].filter((id) => (inCount.get(id) ?? 0) === 0)
   let maxLayer = 0
+  let processed = 0
   while (queue.length > 0) {
     const id = queue.shift()!
+    processed++
     for (const next of adj.get(id) ?? []) {
       layerOf.set(next, Math.max(layerOf.get(next) ?? 0, (layerOf.get(id) ?? 0) + 1))
       maxLayer = Math.max(maxLayer, layerOf.get(next) ?? 0)
@@ -258,6 +348,10 @@ export function compositionSignature(input: {
   const importances = input.importances ?? []
   const importanceSpread =
     importances.length >= 2 ? Math.max(...importances) - Math.min(...importances) : 0
+  const degrees = [...totalDeg.values()]
+  const meanDegree = degrees.length > 0 ? degrees.reduce((s, v) => s + v, 0) / degrees.length : 0
+  const maxDegree = Math.max(0, ...degrees)
+  const multiEdgePairCount = [...pairCounts.values()].filter((count) => count > 1).length
   return {
     nodeCount,
     edgeCount: input.edgeCount,
@@ -272,6 +366,17 @@ export function compositionSignature(input: {
     hasMediation: input.relations.has('mediation'),
     hasModeration: input.relations.has('moderation'),
     importanceSpread,
+    hasCycle: processed < layerOf.size,
+    isolatedCount: Math.max(0, nodeCount - ids.size),
+    sourceCount: [...ids].filter((id) => (inDeg.get(id) ?? 0) === 0).length,
+    sinkCount: [...ids].filter((id) => (outDeg.get(id) ?? 0) === 0).length,
+    branchCount: [...outDeg.values()].filter((degree) => degree >= 2).length,
+    joinCount: [...inDeg.values()].filter((degree) => degree >= 2).length,
+    multiEdgePairCount,
+    centralitySkew: meanDegree > 0 ? maxDegree / meanDegree : 1,
+    chainCoverage: (maxLayer + 1) / nodeCount,
+    hasTimeOrder: input.hasTimeOrder === true,
+    hasMatrixAxes: input.hasMatrixAxes === true,
   }
 }
 
@@ -297,6 +402,7 @@ export function priorFitScore(
     case 'radial':
       // one hub with many satellites: strong fan asymmetry on a single node
       if (Math.max(signature.maxFanIn, signature.maxFanOut) >= 3) score += 3
+      if (signature.centralitySkew >= 1.8) score += 1
       if (signature.nodeCount >= 5 && signature.maxFanIn >= 2 && signature.maxFanOut >= 2)
         score += 1
       break
@@ -314,11 +420,31 @@ export function priorFitScore(
       break
     case 'parallel':
       if (signature.componentCount >= 2) score += 3
+      if (signature.branchCount >= 1 && signature.joinCount >= 1) score += 2
       if (rel.has('association') || rel.has('bidirectional')) score += 1
       break
     case 'layered':
       if (signature.nodeCount >= 6 && signature.layerCount >= 2) score += 2
       if (rel.has('hierarchy')) score += 1
+      break
+    case 'network':
+      // hubs + association structure, not a chain: high centrality skew with
+      // meaningful degree on both sides reads as a network, not a pipeline
+      if (signature.centralitySkew >= 1.6) score += 3
+      if (rel.has('association') || rel.has('bidirectional') || rel.has('mapping')) score += 2
+      if (signature.componentCount >= 2) score += 1
+      break
+    case 'timeline':
+      // time semantics MUST be declared; layer count alone is not time
+      if (signature.hasTimeOrder) score += 4
+      if (rel.has('process') || rel.has('causal')) score += 1
+      break
+    case 'matrix':
+      if (signature.hasMatrixAxes) score += 4
+      break
+    case 'comparison':
+      if (role.has('context') || signature.nodeCount >= 4) score += 1
+      if (signature.componentCount >= 2) score += 2
       break
     case 'feedback':
       if (signature.hasFeedback) score += 4

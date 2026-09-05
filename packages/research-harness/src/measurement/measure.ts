@@ -40,6 +40,9 @@ export interface VisibleText {
 }
 
 export interface MeasuredNode {
+  /** semantic node id — the ONLY internal identity (COMP-P1-12) */
+  id: string
+  /** visible title text; display-only, never used as a graph key */
   title: string
   bounds: SizeBounds
   /** how many lines the title/detail need at preferredWidth */
@@ -105,7 +108,7 @@ function wrapLines(text: string, widthPx: number, sizePt: number, measure: TextM
 
 /** Natural size for one node: preferred fits wrapped text, min/max clamp. */
 export function measureNode(
-  node: VisibleText,
+  node: VisibleText & { id?: string },
   spec: NodeTextSpec,
   measure: TextMeasurer = estimatorMeasurer(),
 ): MeasuredNode {
@@ -135,6 +138,7 @@ export function measureNode(
     ? measure(node.title, spec.titleSizePt) + spec.padX * 2
     : spec.minWidth
   return {
+    id: node.id ?? node.title,
     title: node.title,
     titleLines,
     detailLines,

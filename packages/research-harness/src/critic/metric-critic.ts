@@ -330,12 +330,16 @@ export function criticVerdict(input: CriticInput): CriticVerdict {
   const safe = (v: number) => (Number.isFinite(v) ? v : 5)
 
   // ── route bookkeeping (real, from the final routed set when provided) ──
+  // COMP-P1-11: identity is the stable edge id; the endpoint pair is only a
+  // fallback INDEX that keeps ALL routes on the pair (A→B causal and A→B
+  // data-flow must not overwrite each other).
   const routeByKey = new Map<string, RoutedEdge>()
-  const routeByEndpoints = new Map<string, RoutedEdge>()
+  const routeByEndpoints = new Map<string, RoutedEdge[]>()
   if (input.routed) {
     for (const route of input.routed) {
       routeByKey.set(route.key, route)
-      routeByEndpoints.set(`${route.fromId}\u0000${route.toId}`, route)
+      const pair = `${route.fromId}\u0000${route.toId}`
+      routeByEndpoints.set(pair, [...(routeByEndpoints.get(pair) ?? []), route])
     }
   }
   const declaredConnectors = input.edges.filter(
@@ -346,12 +350,16 @@ export function criticVerdict(input: CriticInput): CriticVerdict {
     : 0
   const realizedConnectors = input.routed
     ? declaredConnectors.filter((edge) => {
-        // production routes are keyed by semantic edge id; the inline fallback
-        // router uses e${index}. Match by endpoints, which both share.
-        const route =
-          routeByEndpoints.get(`${edge.from}\u0000${edge.to}`) ??
-          routeByKey.get(`e${input.edges.indexOf(edge)}`)
-        return route ? route.status === 'routed' : false
+        // exact identity first: production routes carry the semantic edge id
+        const byId = edge.id ? routeByKey.get(edge.id) : undefined
+        if (byId) return byId.status === 'routed'
+        const routesOnPair = routeByEndpoints.get(`${edge.from}\u0000${edge.to}`) ?? []
+        if (routesOnPair.length > 0) {
+          return routesOnPair.some((route) => route.status === 'routed')
+        }
+        // inline fallback router keys routes by e${index}
+        const byIndex = routeByKey.get(`e${input.edges.indexOf(edge)}`)
+        return byIndex ? byIndex.status === 'routed' : false
       })
     : declaredConnectors
   const relationCoverage =
