@@ -49,7 +49,6 @@ import type {
 import type { AddSmartArtOp, AgentToolCall, AgentToolDef, EditParagraph } from '../../shared/ipc'
 import { opVocabulary } from '../../shared/op-docs'
 import { auditSlideLayout, formatAudit } from './layout-audit'
-import { executeCreateResearchFigure } from '../research/create-research-figure-tool'
 import { runLayoutScript, type LayoutScriptElement, type SlideStylePatch } from './layout-script'
 import { t } from '../i18n/locale'
 
