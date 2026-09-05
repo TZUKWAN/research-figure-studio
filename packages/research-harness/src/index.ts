@@ -22,6 +22,9 @@ export * from './critic/scientific-critic.js'
 export * from './critic/intent.js'
 export * from './critic/info-density.js'
 export * from './orchestrator/create-figure.js'
+export * from './orchestrator/candidate-review.js'
+export * from './delivery/delivery-gate.js'
+export * from './delivery/repair-taxonomy.js'
 export * from './events.js'
 
 /** FigurePlan: the planner's temporary contract (PPT state stays source of truth). */
