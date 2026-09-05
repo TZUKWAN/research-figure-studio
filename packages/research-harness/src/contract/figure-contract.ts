@@ -271,7 +271,9 @@ export function publicationAudit(input: {
   const minPt =
     input.contract.minTextPtAtFinalSize ?? OUTPUT_CONTEXT_MIN_TEXT_PT[input.contract.output.context]
   const effective = effectiveFontPt(input.minFontPt, input.canvasW, finalWidthMm)
-  if (effective < minPt) {
+  // 1e-3pt absolute tolerance: float noise from the forward scale must not
+  // re-introduce a false floor violation at exactly-floor configurations.
+  if (effective < minPt - 1e-3) {
     issues.push({
       gate: 'final-size-text-minimum',
       severity: 'hard',

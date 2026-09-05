@@ -141,10 +141,15 @@ async function createResearchFigure(
       semanticMetadata: connectorMetadata(route.role),
     })
     expect(
-      setElementConnection(slide, connector.id, {
-        start: { id: elementSpid(nodeElements[route.fromIndex]!)!, idx: p1.idx },
-        end: { id: elementSpid(nodeElements[route.toIndex]!)!, idx: p2.idx },
-      }, route.laneY != null ? toEmu(route.laneY) : undefined),
+      setElementConnection(
+        slide,
+        connector.id,
+        {
+          start: { id: elementSpid(nodeElements[route.fromIndex]!)!, idx: p1.idx },
+          end: { id: elementSpid(nodeElements[route.toIndex]!)!, idx: p2.idx },
+        },
+        route.laneY != null ? toEmu(route.laneY) : undefined,
+      ),
     ).toBe(true)
   }
 

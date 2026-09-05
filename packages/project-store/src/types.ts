@@ -39,6 +39,8 @@ export interface ChatAttachment {
  */
 export interface ChatMessage {
   seq: number
+  /** Stable per-message identity (UUID v4). seq is only a display-ordering hint. */
+  id?: string
   ts: string
   role: 'user' | 'assistant'
   text: string
@@ -120,4 +122,20 @@ export interface TimelineEntry {
   preview: string
   /** Message seq within the chat */
   seq: number
+}
+
+/**
+ * Typed outcome of a best-effort write (chat appends). User-visible mutations
+ * go further: they roll back and throw ProjectStoreError instead of ever
+ * reporting success on failure.
+ */
+export type ProjectStoreResult = { ok: true } | { ok: false; error: string }
+
+/**
+ * Recovery evidence for a chat whose JSONL contained unreadable lines:
+ * how many lines were skipped and where the pre-repair backup was saved.
+ */
+export interface ChatRecoveryStats {
+  corruptedLines: number
+  backupPath?: string
 }

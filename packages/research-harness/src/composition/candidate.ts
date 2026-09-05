@@ -799,7 +799,9 @@ export function generateCandidates(
     prior,
     fit: priorFitScore(prior, { ...signals, signature }),
   })).sort((a, b) => b.fit - a.fit || a.prior.id.localeCompare(b.prior.id))
-  const wanted = autonomy === 'A0' ? 3 : 1
+  // GOAL §十四: four structurally different candidates for A0 (C1 conservative /
+  // C2 focal / C3 editorial / C4 domain). Minimal statements still reduce.
+  const wanted = autonomy === 'A0' ? 4 : 1
   const selected: Array<{ prior: CompositionPrior; fit: number }> = []
   const usedGrammars = new Set<string>()
   for (const item of ranked) {
@@ -814,7 +816,7 @@ export function generateCandidates(
     selected.push(item)
   }
   const maxFit = ranked[0]?.fit ?? 0
-  const candidates = selected.map(({ prior, fit }) =>
+  let candidates = selected.map(({ prior, fit }) =>
     candidateFromPrior(prior, measured, edges, canvasW, canvasH, meta, (maxFit - fit) * 3),
   )
   if (autonomy !== 'A0' && modelPlan) {
@@ -822,7 +824,59 @@ export function generateCandidates(
       evaluateCandidate(modelPlan, 'model', null, { measured, edges, canvasW, canvasH }, 0),
     )
   }
+  // GOAL §十五: near-identical compositions are deduped — only the best of a
+  // too-similar pair survives, so what remains is genuine visual competition.
+  candidates = dedupeByFingerprint(candidates)
   return candidates.sort(
     (a, b) => a.score - b.score || a.priorId?.localeCompare(b.priorId ?? '') || 0,
   )
+}
+
+/**
+ * 16-bin composition fingerprint: 4×4 quadrant occupancy + normalized
+ * distance-from-canvas-center histogram. Two candidates within L1 distance
+ * 2 of each other are the same composition wearing different fonts.
+ */
+export function compositionFingerprint(
+  candidate: Pick<CompositionCandidate, 'plan'>,
+  canvasW: number,
+  canvasH: number,
+): number[] {
+  const quad = [0, 0, 0, 0]
+  const radial = [0, 0, 0, 0, 0, 0, 0, 0]
+  for (const placement of candidate.plan.placements) {
+    const cx = (placement.boxHint.x + placement.boxHint.w / 2) * canvasW
+    const cy = (placement.boxHint.y + placement.boxHint.h / 2) * canvasH
+    const nx = (placement.boxHint.x + placement.boxHint.w / 2)
+    const ny = (placement.boxHint.y + placement.boxHint.h / 2)
+    quad[(nx < 0.5 ? 0 : 1) + (ny < 0.5 ? 0 : 2)]!++
+    radial[Math.min(7, Math.floor(Math.hypot(nx - 0.5, ny - 0.45) * 10))]!++
+    void cx
+    void cy
+  }
+  return [...quad, ...radial]
+}
+
+function fingerprintDistance(a: number[], b: number[]): number {
+  return a.reduce((sum, v, i) => sum + Math.abs(v - (b[i] ?? 0)), 0)
+}
+
+function dedupeByFingerprint(candidates: CompositionCandidate[]): CompositionCandidate[] {
+  const kept: CompositionCandidate[] = []
+  const fingerprints = candidates.map((candidate) => compositionFingerprint(candidate, 1280, 720))
+  for (let i = 0; i < candidates.length; i++) {
+    let duplicate = false
+    for (let j = 0; j < kept.length; j++) {
+      const keptIndex = candidates.indexOf(kept[j]!)
+      if (
+        keptIndex >= 0 &&
+        fingerprintDistance(fingerprints[i]!, fingerprints[keptIndex]!) === 0
+      ) {
+        duplicate = true
+        break
+      }
+    }
+    if (!duplicate) kept.push(candidates[i]!)
+  }
+  return kept
 }

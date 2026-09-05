@@ -4,7 +4,7 @@
  * to avoid renderer CORS), search tools, and the slides-only ai:* channels
  * (image generation, media analysis, style templates).
  */
-import { app, ipcMain, nativeImage, net, shell } from 'electron'
+import { app, ipcMain, nativeImage, net } from 'electron'
 import {
   appendFileSync,
   existsSync,
@@ -36,7 +36,6 @@ import { fetchRemoteImage } from '@genoffice/electron-utils'
 import {
   webSearch,
   imageSearch,
-  ensureGenofficeLogin,
   gskApiKey,
   gskGenerateImage,
   gskAnalyzeMedia,
@@ -111,6 +110,96 @@ function appendRunFailure(entry: AiRunFailure): void {
   }
 }
 
+// ── ai:set-settings runtime validation (audit DESKTOP-P0-02) ─────────────
+// The renderer's payload crosses the preload boundary untrusted: a corrupted
+// or hostile settings object used to be written verbatim and replayed into
+// every later provider request. Validators below keep the known shape,
+// hard-cap every string, and enforce http(s) base URLs (plain http only for
+// loopback hosts — local LLM servers — matching the BYOK URL policy).
+
+const SETTINGS_STRING_MAX = 8_192
+const SETTINGS_TOKEN_MAX = 10_000_000
+
+function sanitizedProviderEntry(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+  const raw = value as Record<string, unknown>
+  const out: Record<string, unknown> = {}
+  for (const key of ['apiKey', 'model']) {
+    if (raw[key] !== undefined) {
+      if (typeof raw[key] !== 'string' || raw[key].length > SETTINGS_STRING_MAX) return null
+      out[key] = raw[key]
+    }
+  }
+  if (raw.baseUrl !== undefined && raw.baseUrl !== '') {
+    if (typeof raw.baseUrl !== 'string' || raw.baseUrl.length > 2048) return null
+    try {
+      const url = new URL(raw.baseUrl)
+      if (url.protocol !== 'https:' && url.protocol !== 'http:') return null
+      if (url.protocol === 'http:' && !isLoopbackHost(url.hostname)) return null
+    } catch {
+      return null
+    }
+    out.baseUrl = raw.baseUrl
+  }
+  if (raw.vision !== undefined) {
+    if (typeof raw.vision !== 'boolean') return null
+    out.vision = raw.vision
+  }
+  for (const key of ['maxContextTokens', 'maxOutputTokens']) {
+    if (raw[key] !== undefined) {
+      if (
+        typeof raw[key] !== 'number' ||
+        !Number.isSafeInteger(raw[key]) ||
+        raw[key] < 0 ||
+        raw[key] > SETTINGS_TOKEN_MAX
+      ) {
+        return null
+      }
+      out[key] = raw[key]
+    }
+  }
+  return out
+}
+
+function isLoopbackHost(host: string): boolean {
+  const h = host.toLowerCase()
+  return (
+    h === 'localhost' ||
+    h === '127.0.0.1' ||
+    h === '[::1]' ||
+    h === '::1' ||
+    h.endsWith('.localhost')
+  )
+}
+
+/** Returns a sanitized AiSettings-compatible object, or null when the payload is not acceptable. */
+function validateAiSettings(raw: unknown): AiSettings | null {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null
+  const input = raw as Record<string, unknown>
+  if (typeof input.provider !== 'string' || input.provider.length > 64) return null
+  if (
+    typeof input.providers !== 'object' ||
+    input.providers === null ||
+    Array.isArray(input.providers)
+  ) {
+    return null
+  }
+  const providers: Record<string, unknown> = {}
+  for (const [id, entry] of Object.entries(input.providers as Record<string, unknown>)) {
+    if (id.length > 64) return null
+    if (entry === undefined) continue
+    const clean = sanitizedProviderEntry(entry)
+    if (clean === null) return null
+    providers[id] = clean
+  }
+  const out: Record<string, unknown> = { provider: input.provider, providers }
+  if (input.gskToolsEnabled !== undefined) {
+    if (typeof input.gskToolsEnabled !== 'boolean') return null
+    out.gskToolsEnabled = input.gskToolsEnabled
+  }
+  return out as unknown as AiSettings
+}
+
 export function registerAiIpc(): void {
   // Node fetch (undici) direct connections get reset under VPN/tun setups; retry over Chromium's stack
   setRescueFetch((url, init) => net.fetch(url, init))
@@ -120,8 +209,14 @@ export function registerAiIpc(): void {
     return resolveAiSettings(stored, defaultAiSettings())
   })
 
-  ipcMain.handle('ai:set-settings', (_event, settings: AiSettings) => {
-    writeJson(AI_SETTINGS_PATH(), settings)
+  ipcMain.handle('ai:set-settings', (_event, settings: unknown) => {
+    // Runtime validation before persistence: the renderer side of the preload
+    // boundary is untrusted data (audit DESKTOP-P0-02). Invalid payloads are
+    // dropped, keeping the last known-good settings file.
+    const clean = validateAiSettings(settings)
+    if (!clean) return false
+    writeJson(AI_SETTINGS_PATH(), clean)
+    return true
   })
 
   // ── Standards (Settings): user-editable AI drawing prompts ──
@@ -180,6 +275,20 @@ export function registerAiIpc(): void {
         .trim()
         .replace(/\/+$/, '')
       if (!base) return { ok: false, error: 'missing base URL' }
+      // BYOK URL policy (audit DESKTOP-P1-07): http(s) only; plain http is
+      // reserved for loopback endpoints (local LLM servers). file:, ftp: and
+      // data: probes never reach net.fetch.
+      try {
+        const parsed = new URL(base)
+        if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+          return { ok: false, error: 'only http(s) base URLs are supported' }
+        }
+        if (parsed.protocol === 'http:' && !isLoopbackHost(parsed.hostname)) {
+          return { ok: false, error: 'plain http is only supported for local endpoints' }
+        }
+      } catch {
+        return { ok: false, error: 'invalid base URL' }
+      }
       try {
         const res = await net.fetch(`${base}/models`, {
           headers: {
@@ -197,7 +306,8 @@ export function registerAiIpc(): void {
           }>
         }
         const models = (body.data ?? [])
-          .filter((m) => typeof m.id === 'string' && m.id)
+          .filter((m) => typeof m.id === 'string' && m.id && m.id.length <= 256)
+          .slice(0, 500)
           .map((m) => ({
             id: m.id as string,
             contextLength: m.context_length ?? m.top_provider?.context_length,

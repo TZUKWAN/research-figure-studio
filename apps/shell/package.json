@@ -3,7 +3,7 @@
   "productName": "Metis Diagram",
   "version": "0.8.0",
   "license": "Apache-2.0",
-  "homepage": "https://github.com/genspark-ai/genoffice",
+  "homepage": "https://github.com/TZUKWAN/research-figure-studio",
   "private": true,
   "description": "Metis Diagram desktop shell hosting the canvas editor behind a home/launcher window",
   "main": "out/main/index.js",

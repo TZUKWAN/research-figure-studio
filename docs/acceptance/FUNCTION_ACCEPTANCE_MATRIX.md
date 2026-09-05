@@ -33,14 +33,28 @@ Counters at start of acceptance phase: Total = N (below), Tested = 0.
 | UI-024 | Ribbon    | Disabled-state correctness              | ribbon buttons                   | observe                | 撤销/对齐/格式刷 disabled until applicable            | —                       | PASS                                                                    | frames s-32/s-34                                                                | —                  |
 | UI-025 | Stability | Continuous use, no crash                | whole session (~1h)              | mixed ops              | no white-screen/crash/hang                            | —                       | PASS                                                                    | app alive across 5 launches + all flows                                         | —                  |
 
+### P0.5 + P2 补充行（第二轮验证，2026-09-06）
+
+| ID | Module | Feature | Entry Point | User Action | Expected Result | Test Data | Status | Evidence | Issue ID |
+|----|--------|---------|-------------|-------------|-----------------|-----------|--------|----------|----------|
+| P5-001 | Delivery Gate | Budget exhaustion ≠ acceptance | tiny canvas + 4-candidate ladder | orchestrateFigure real flow | ok=false + REPAIR_BUDGET_EXHAUSTED | 200×120 canvas | PASS | p05-runtime-closure | — |
+| P5-002 | Delivery Gate | Forbidden claim blocks | contract.forbiddenClaims | orchestrateFigure | ok=false RECOMPOSE | "日志数据" forbidden | PASS | p05-runtime-closure | — |
+| P5-003 | Delivery Gate | Missing contract evidence blocks | contract.evidenceMustShow | orchestrateFigure | ok=false SEMANTIC_HARD | ev-timeline | PASS | p05-runtime-closure | — |
+| P5-004 | Typography SSOT | 85mm forward scaling incl. micro | contract output.context | resolveFigureTypography + real PPTX XML | all sizes ≥ floor at final width | 85mm artifact | PASS | yangtze-85mm.pptx XML: 25.57–34.09pt | ISS-04 修复后 |
+| P5-005 | Hierarchy math | Anti-correlated punished | abs(spearman) removed | criticVerdict | r=-1 → ≤0.5; flat → 8 | cases A–E | PASS | p05-runtime-closure | — |
+| UI-020b | Export | PNG 导出（Windows 路径） | 文件 → 导出为图片 | 同 UI-020 | PNG 落盘 | — | **PASS**（ISS-04 修复后） | yangtze-figure-01.png 2560×1440 | ISS-04 FIXED |
+| P2-001 | Multi-candidate | 4 structurally different A0 candidates | generateCandidates | — | ≥3 distinct grammars | hub graph | PASS | p2-candidate-review | — |
+| P2-002 | Candidate review | hard screen + vision blend + top-2 | reviewCandidates | injected stubs | veto/block/blend/top2 | stub reviews | PASS | p2-candidate-review | — |
+| UI-P2 | Real UI | create_research_figure steering | Copilot → quantitative thesis | type + send | orchestrated pipeline used; audit pass; gate PASS | "准确率提升12%…" thesis | PASS | "orchestrated figure: 5 nodes, 4/4 connectors bound" + frame-a7a62756 | — |
+
 Workflows: A (create→edit→save→reopen→export) **PASS via deterministic artifact + UI**; B complexity PASS (UI-009/010); C figure families: mechanism PASS (UI-009), statement/ minimal PASS (unit + integration tests), others covered by golden 52; D domains: schema-level PASS (p1-contracts) — visual-domain PASS pending E2E; E editing PASS (UI-011..016); F AI-modify BLOCKED (ISS-05); G save/reopen PASS (UI-017/018); H export: PDF PASS, PNG FAIL (ISS-04), PPTX PASS; I abnormal inputs: covered by unit/integration suites (golden 52, scientific-critic, contract repair) PASS; J continuous PASS (UI-025).
 
 ## Counters
 
 ```text
-Total Features: 25
-Executed:       25
-Passed:         24
+Total Features: 34
+Executed:       34
+Passed:         33
 Failed:         0
 Blocked:        1   (UI-022 AI-modify via weak local model)
 Skipped:        0

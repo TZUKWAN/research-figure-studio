@@ -27,6 +27,9 @@ export * from './critic/family-quality.js'
 export * from './critic/route-naturalness.js'
 export * from './critic/family-validators.js'
 export * from './orchestrator/create-figure.js'
+export * from './orchestrator/candidate-review.js'
+export * from './delivery/delivery-gate.js'
+export * from './delivery/repair-taxonomy.js'
 export * from './events.js'
 
 /** FigurePlan: the planner's temporary contract (PPT state stays source of truth). */

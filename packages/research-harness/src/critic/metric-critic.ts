@@ -336,17 +336,26 @@ export function criticVerdict(input: CriticInput): CriticVerdict {
     importance: input.importance.get(p.id) ?? 0.5,
   }))
 
-  // visualHierarchy is P0.5-owned (Spearman); kept untouched here.
-  const visualHierarchy = clamp10(
-    10 *
-      Math.abs(
-        spearman(
-          withArea.map((v) => v.importance),
-          withArea.map((v) => v.area),
-        ),
-      ),
-  )
-
+  // Visual hierarchy follows scientific importance — a NEGATIVE correlation
+  // (important nodes drawn smaller) must be punished, never abs()-rewarded.
+  // Low importance spread means the figure legitimately has no strong
+  // hierarchy: neutral 8, not a 0 for lacking area differences.
+  const hierarchyImportanceValues = withArea.map((v) => v.importance)
+  const hierarchyImportanceSpread =
+    hierarchyImportanceValues.length >= 2
+      ? Math.max(...hierarchyImportanceValues) - Math.min(...hierarchyImportanceValues)
+      : 0
+  const visualHierarchy =
+    hierarchyImportanceSpread < 0.15
+      ? 8
+      : clamp10(
+          5 *
+            (spearman(
+              withArea.map((v) => v.importance),
+              withArea.map((v) => v.area),
+            ) +
+              1),
+        )
   let groupingClarity = 8
   if (input.groupIds && input.groupIds.size > 0) {
     const byGroup = new Map<string, string[]>()
@@ -863,13 +872,24 @@ function clamp10(v: number): number {
   return Math.max(0, Math.min(10, Math.round(v * 10) / 10))
 }
 
-function spearman(xs: number[], ys: number[]): number {
-  const rank = (values: number[]): number[] => {
-    const sorted = [...values].sort((a, b) => a - b)
-    return values.map((v) => sorted.indexOf(v))
+/** Average-rank assignment so ties split rank mass evenly (GOAL §五). */
+function rankWithTies(values: number[]): number[] {
+  const sorted = [...values].sort((a, b) => a - b)
+  const rankOf = new Map<number, number>()
+  let i = 0
+  while (i < sorted.length) {
+    let j = i
+    while (j + 1 < sorted.length && sorted[j + 1] === sorted[i]) j++
+    const averageRank = (i + j) / 2 + 1
+    rankOf.set(sorted[i]!, averageRank)
+    i = j + 1
   }
-  const rx = rank(xs)
-  const ry = rank(ys)
+  return values.map((v) => rankOf.get(v)!)
+}
+
+function spearman(xs: number[], ys: number[]): number {
+  const rx = rankWithTies(xs)
+  const ry = rankWithTies(ys)
   const n = xs.length
   if (n < 2) return 0
   const mean = (arr: number[]) => arr.reduce((s, v) => s + v, 0) / n
