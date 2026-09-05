@@ -10,7 +10,8 @@
     "./custgeom": "./src/custgeom.ts",
     "./table-grid": "./src/table-grid.ts",
     "./identity": "./src/identity.ts",
-    "./background-promote": "./src/background-promote.ts"
+    "./background-promote": "./src/background-promote.ts",
+    "./research-metadata": "./src/research-metadata.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

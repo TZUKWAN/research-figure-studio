@@ -67,21 +67,40 @@ const defaultMeasure: Measure = {
 
 const minimumVisualUnitHeight = 42
 
-/** Minimum parent module height required to fit the model-authored sub-units. */
+/**
+ * Minimum parent module height required to fit the model-authored sub-units
+ * when the module box is `innerWidth` px wide. This is the MEASUREMENT-side
+ * authority: the solver must reserve at least this height for a module with
+ * visual units, so the renderer can consume solver geometry verbatim instead
+ * of inflating boxes after the fact.
+ */
 export function minimumHeightForUnits(
   module: Pick<MajorModuleVisual, 'units' | 'microLayout'>,
   innerWidth: number,
   measure: Measure = defaultMeasure,
 ): number {
-  const nominal = measure.headerHeight + 2 + Math.max(0, innerHeightForUnits(module, measure))
+  const nominal =
+    measure.headerHeight + 2 + Math.max(0, innerHeightForUnits(module, measure, innerWidth))
   return nominal
+}
+
+/** Smallest box width that keeps the module's units one-per-row at worst. */
+export function minimumWidthForUnits(
+  module: Pick<MajorModuleVisual, 'units' | 'microLayout'>,
+  measure: Measure = defaultMeasure,
+): number {
+  if (module.units.length === 0) return 0
+  const widest = Math.max(...module.units.map((u) => measure.unitWidth(u.label) + measure.padX * 2))
+  const gap = module.microLayout === 'flow' ? 8 : 4
+  return Math.ceil(Math.min(widest + gap * (module.units.length - 1) + 8, widest * 2))
 }
 
 function innerHeightForUnits(
   module: Pick<MajorModuleVisual, 'units' | 'microLayout'>,
   measure: Measure,
+  innerWidth = 800,
 ): number {
-  const inner: Box = { x: 0, y: measure.headerHeight + 2, w: 800, h: 10_000 }
+  const inner: Box = { x: 0, y: measure.headerHeight + 2, w: innerWidth, h: 10_000 }
   const rects = arrange(module.units, module.microLayout, inner, measure)
   return rects.reduce((acc, rect) => Math.max(acc, rect.y + rect.h), 0)
 }

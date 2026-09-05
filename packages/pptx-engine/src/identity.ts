@@ -24,14 +24,48 @@ const OPTIONAL_SEMANTIC_FIELDS = [
   'semanticEdgeId',
   'relationPresentation',
 ] as const
+/** Extended refs (schema v2). All optional; old parsers ignore them safely. */
+const EXTENDED_SEMANTIC_FIELDS = [
+  'researchMetadataVersion',
+  'parentModuleId',
+  'groupId',
+  'figureRunId',
+  'figureFamily',
+  'domain',
+  'primitiveKind',
+  'relationType',
+  'visualUnitId',
+  'evidenceRefs',
+  'provenanceRefs',
+  'derivedFrom',
+] as const
+
+/** Current per-shape semantic metadata schema version. */
+export const RESEARCH_METADATA_VERSION = 2
+
+type AllSemanticFields =
+  | (typeof SEMANTIC_FIELDS)[number]
+  | (typeof OPTIONAL_SEMANTIC_FIELDS)[number]
+  | (typeof EXTENDED_SEMANTIC_FIELDS)[number]
 
 /** Encode the route-B payload as a compact, PowerPoint-safe cNvPr string. */
 export function serializeSemanticMetadata(metadata: SemanticMetadata): string {
+  const extended: Record<string, unknown> = {
+    ...(metadata.researchMetadataVersion === undefined
+      ? { researchMetadataVersion: RESEARCH_METADATA_VERSION }
+      : {}),
+    ...metadata,
+  }
   return [
     SEMANTIC_PREFIX,
     ...SEMANTIC_FIELDS.map((field) => `${field}=${encodeURIComponent(metadata[field])}`),
     ...OPTIONAL_SEMANTIC_FIELDS.flatMap((field) =>
       metadata[field] === undefined ? [] : [`${field}=${encodeURIComponent(metadata[field]!)}`],
+    ),
+    ...EXTENDED_SEMANTIC_FIELDS.flatMap((field) =>
+      extended[field] === undefined
+        ? []
+        : [`${field}=${encodeURIComponent(String(extended[field]))}`],
     ),
   ].join('|')
 }
@@ -40,35 +74,51 @@ export function serializeSemanticMetadata(metadata: SemanticMetadata): string {
 export function parseSemanticMetadata(value: unknown): SemanticMetadata | null {
   if (typeof value !== 'string') return null
   const parts = value.split('|')
-  if (parts.shift() !== SEMANTIC_PREFIX) return null
-  const values: Partial<
-    Record<(typeof SEMANTIC_FIELDS)[number] | (typeof OPTIONAL_SEMANTIC_FIELDS)[number], string>
-  > = {}
-  const allowed = new Set<string>([...SEMANTIC_FIELDS, ...OPTIONAL_SEMANTIC_FIELDS])
+  const prefix = parts.shift()
+  // Accept the current prefix and future `rfs:vN` ones: unknown versions parse
+  // their readable fields and are never silently dropped (graceful downgrade).
+  if (!prefix || !prefix.startsWith('rfs:v')) return null
+  const values: Partial<Record<AllSemanticFields, string>> = {}
+  const allowed = new Set<string>([
+    ...SEMANTIC_FIELDS,
+    ...OPTIONAL_SEMANTIC_FIELDS,
+    ...EXTENDED_SEMANTIC_FIELDS,
+  ])
   for (const part of parts) {
     const at = part.indexOf('=')
     if (at <= 0) continue
     const key = part.slice(0, at)
     if (!allowed.has(key)) continue
     try {
-      values[key as keyof typeof values] = decodeURIComponent(part.slice(at + 1))
+      values[key as AllSemanticFields] = decodeURIComponent(part.slice(at + 1))
     } catch {
       return null
     }
   }
   if (SEMANTIC_FIELDS.some((field) => !values[field])) return null
-  return {
+  const parsed: SemanticMetadata = {
     role: values.role!,
     themeFill: values.themeFill!,
     themeStroke: values.themeStroke!,
     themeText: values.themeText!,
     componentType: values.componentType!,
-    ...(values.semanticNodeId !== undefined ? { semanticNodeId: values.semanticNodeId } : {}),
-    ...(values.semanticEdgeId !== undefined ? { semanticEdgeId: values.semanticEdgeId } : {}),
-    ...(values.relationPresentation !== undefined
-      ? { relationPresentation: values.relationPresentation }
-      : {}),
   }
+  if (values.semanticNodeId !== undefined) parsed.semanticNodeId = values.semanticNodeId
+  if (values.semanticEdgeId !== undefined) parsed.semanticEdgeId = values.semanticEdgeId
+  if (values.relationPresentation !== undefined) {
+    parsed.relationPresentation = values.relationPresentation
+  }
+  for (const field of EXTENDED_SEMANTIC_FIELDS) {
+    const raw = values[field]
+    if (raw === undefined) continue
+    if (field === 'researchMetadataVersion') {
+      const n = Number(raw)
+      if (Number.isFinite(n)) parsed.researchMetadataVersion = n
+      continue
+    }
+    ;(parsed as unknown as Record<string, unknown>)[field] = raw
+  }
+  return parsed
 }
 
 /** Prefer descr, then title, so foreign decks can be read without rewriting them. */

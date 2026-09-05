@@ -24,10 +24,12 @@ import {
 import { opUsage } from '../../shared/op-docs'
 import {
   GuidedError,
+  isTxnRef,
   lookup,
   resolveElement,
   resolveSlide,
   slideDurableId,
+  txnRefTarget,
   type Op,
   type OpRecord,
   type OpContext,
@@ -107,6 +109,40 @@ function restoreSnapshot(opened: OpenedPptx, snap: Snapshot): void {
 function planLine(i: number, op: Op): string {
   const t = op.target ? ` s${op.target.slide}${op.target.el ? `/${op.target.el}` : ''}` : ''
   return `[${i}] ${op.op}${t}`
+}
+
+/**
+ * Substitute "$txn:<n>" forward references with the real id of the first
+ * element op <n> created. Runs immediately before each apply, so a composite
+ * creation (create elements → bind connectors → group) plans and executes as
+ * ONE atomic transaction without knowing ids in advance.
+ */
+function substituteTxnRefs(value: unknown, records: OpRecord[], opIndex: number): unknown {
+  if (typeof value === 'string') {
+    if (!isTxnRef(value)) return value
+    const n = txnRefTarget(value)
+    if (n >= opIndex) {
+      throw new GuidedError(
+        `${value} must reference an EARLIER op in this transaction (op index < ${opIndex}).`,
+      )
+    }
+    const created = records[n]?.created?.[0]
+    if (!created) {
+      throw new GuidedError(`${value} is unresolved: op [${n}] created no element (or it failed).`)
+    }
+    return created
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => substituteTxnRefs(item, records, opIndex))
+  }
+  if (typeof value === 'object' && value !== null) {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(value)) {
+      out[k] = substituteTxnRefs(v, records, opIndex)
+    }
+    return out as unknown
+  }
+  return value
 }
 
 function message(e: unknown): string {
@@ -205,8 +241,10 @@ export function runTxn(opened: OpenedPptx, req: TxnRequest): TxnResult {
   if (isolation === 'atomic') {
     const snap = takeSnapshot(opened)
     const records: OpRecord[] = []
-    for (const [i, op] of req.ops.entries()) {
+    for (const [i, rawOp] of req.ops.entries()) {
+      let op: Op
       try {
+        op = substituteTxnRefs(rawOp, records, i) as Op
         records.push(applyStamped(op, ctx))
         hardenTargetIdentity(op, ctx)
       } catch (e) {
@@ -216,9 +254,9 @@ export function runTxn(opened: OpenedPptx, req: TxnRequest): TxnResult {
           failures: [
             {
               index: i,
-              op,
+              op: rawOp,
               error: withUsage(
-                op,
+                rawOp,
                 `${message(e)} Nothing was applied (atomic) — fix this op and resend the whole transaction.`,
               ),
             },
@@ -233,13 +271,14 @@ export function runTxn(opened: OpenedPptx, req: TxnRequest): TxnResult {
   const records: OpRecord[] = []
   const failures: OpFailure[] = [...planFailures]
   const failedIdx = new Set(planFailures.map((f) => f.index))
-  for (const [i, op] of req.ops.entries()) {
+  for (const [i, rawOp] of req.ops.entries()) {
     if (failedIdx.has(i)) continue
     try {
+      const op = substituteTxnRefs(rawOp, records, i) as Op
       records.push(applyStamped(op, ctx))
       hardenTargetIdentity(op, ctx)
     } catch (e) {
-      failures.push({ index: i, op, error: withUsage(op, message(e)) })
+      failures.push({ index: i, op: rawOp, error: withUsage(rawOp, message(e)) })
     }
   }
   if (records.length > 0) flushTouchedParts(opened, ctx)

@@ -327,6 +327,8 @@ describe('cross-family ops on a real deck', () => {
       themeStroke: 'primary.700',
       themeText: 'text.primary',
       componentType: 'research-module',
+      // the engine stamps the schema version at creation (RENDER-P0-09)
+      researchMetadataVersion: 2,
     }
     const added = runTxn(opened, {
       ops: [

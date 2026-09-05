@@ -352,6 +352,32 @@ export interface SemanticMetadata {
   semanticNodeId?: string
   semanticEdgeId?: string
   relationPresentation?: string
+  /**
+   * Extended research refs (schema v2 — researchMetadataVersion). Optional and
+   * backward-compatible: decks written by older builds simply omit them.
+   */
+  researchMetadataVersion?: number
+  /** owning composite module (micro unit → its parent module's semantic id) */
+  parentModuleId?: string
+  /** native group this element belongs to (composite-module grouping) */
+  groupId?: string
+  /** creation run that produced the figure (ties shapes + slide payload together) */
+  figureRunId?: string
+  /** scientific figure family (mechanism / comparison / …) */
+  figureFamily?: string
+  /** resolved scientific domain (cs-ml / biomed / …) */
+  domain?: string
+  /** registry primitive kind the element was rendered as */
+  primitiveKind?: string
+  /** semantic relation type of a connector (causal / moderation / …) */
+  relationType?: string
+  /** visual unit id inside the parent module's decomposition */
+  visualUnitId?: string
+  /** ';'-joined evidence/provenance refs from the FigureContract */
+  evidenceRefs?: string
+  provenanceRefs?: string
+  /** original semantic id this element was cloned from (copy/paste detach) */
+  derivedFrom?: string
 }
 
 interface ElementBase {

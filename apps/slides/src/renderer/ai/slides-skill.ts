@@ -49,6 +49,7 @@ import type {
 import type { AddSmartArtOp, AgentToolCall, AgentToolDef, EditParagraph } from '../../shared/ipc'
 import { opVocabulary } from '../../shared/op-docs'
 import { auditSlideLayout, formatAudit } from './layout-audit'
+import { executeCreateResearchFigure } from '../research/create-research-figure-tool'
 import { runLayoutScript, type LayoutScriptElement, type SlideStylePatch } from './layout-script'
 import { t } from '../i18n/locale'
 
@@ -1930,7 +1931,74 @@ export function formatSlideDump(slide: RenderSlide): string {
   // Report the real px→EMU factor: render px carry the viewport scale, so ×9525 only
   // holds for decks whose baseline width is exactly the fit width (standard 16:9 at 1280).
   const pxToEmu = +(9525 / slide.scale).toFixed(2)
-  return `Canvas ${slide.widthPx}×${slide.heightPx}px (1 px = ${pxToEmu} EMU)\n${parts.join('\n---\n') || '(no elements on this page)'}${colorNote}`
+  return `Canvas ${slide.widthPx}×${slide.heightPx}px (1 px = ${pxToEmu} EMU)\n${parts.join('\n---\n') || '(no elements on this page)'}${colorNote}${formatResearchContext(slide)}`
+}
+
+/**
+ * RENDER-P0-11: AI re-editing of an existing research figure reads the
+ * recovered semantic graph (slide payload + per-shape refs) instead of
+ * guessing from visuals. Kept compact — refs and statuses, never the full
+ * internal contract JSON.
+ */
+function formatResearchContext(slide: RenderSlide): string {
+  const sections: string[] = []
+  const payload = slide.researchMetadata
+  if (payload) {
+    sections.push(
+      `figure ${payload.figureRunId} | family ${payload.figureFamily} | domain ${payload.domain} | thesis: ${payload.thesis}`,
+    )
+    if (payload.nodes.length > 0) {
+      sections.push(
+        'nodes: ' +
+          payload.nodes
+            .map(
+              (n) =>
+                `${n.id}(${n.type}/${n.primitiveKind}${n.detailDisposition === 'promoted-to-units' ? ', units' : n.detailDisposition === 'render-in-parent' ? ', detail-in-parent' : ''}${n.groupElementId ? `, group ${n.groupElementId}` : ''})`,
+            )
+            .join(', '),
+      )
+    }
+    if (payload.relations.length > 0) {
+      sections.push(
+        'relations: ' +
+          payload.relations
+            .map((r) => {
+              const status =
+                r.status === 'rendered'
+                  ? `connector ${r.connectorId ?? '(by semanticEdgeId)'}`
+                  : r.status === 'spatial'
+                    ? `spatial (${r.reason ?? 'non-connector presentation'})`
+                    : `suppressed (${r.reason ?? 'no line'})`
+              return `${r.id ?? `${r.from}->${r.to}`}: ${r.from}→${r.to} ${r.presentation} [${status}]`
+            })
+            .join('; '),
+      )
+    }
+  }
+  const shaped = slide.nodes.filter(
+    (n) =>
+      (n.type === 'shape' || n.type === 'text') &&
+      (n as { semanticMetadata?: Record<string, unknown> }).semanticMetadata,
+  )
+  if (shaped.length > 0) {
+    sections.push(
+      'research elements: ' +
+        shaped
+          .map((n) => {
+            const meta = (n as { semanticMetadata?: Record<string, string> }).semanticMetadata!
+            const bits = [
+              meta.semanticNodeId ? `node=${meta.semanticNodeId}` : '',
+              meta.semanticEdgeId ? `edge=${meta.semanticEdgeId}` : '',
+              meta.parentModuleId ? `parent=${meta.parentModuleId}` : '',
+              meta.visualUnitId ? `unit=${meta.visualUnitId}` : '',
+            ].filter(Boolean)
+            return `${n.sourceId}[${meta.componentType}${bits.length ? ` ${bits.join(' ')}` : ''}]`
+          })
+          .join(', '),
+    )
+  }
+  if (sections.length === 0) return ''
+  return `\n\n<research-figure-context>\n${sections.join('\n')}\n</research-figure-context>`
 }
 
 /** Optional hosted tools that can be disabled by the runtime configuration. */

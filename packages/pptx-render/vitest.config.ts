@@ -11,6 +11,10 @@ export default defineConfig({
       // Subpath before the bare name: string aliases are prefix replacements
       '@genoffice/pptx-engine/table-grid': resolve(here, '../pptx-engine/src/table-grid.ts'),
       '@genoffice/pptx-engine/identity': resolve(here, '../pptx-engine/src/identity.ts'),
+      '@genoffice/pptx-engine/research-metadata': resolve(
+        here,
+        '../pptx-engine/src/research-metadata.ts',
+      ),
       '@genoffice/pptx-engine/background-promote': resolve(
         here,
         '../pptx-engine/src/background-promote.ts',

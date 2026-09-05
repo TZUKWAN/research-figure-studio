@@ -90,6 +90,9 @@ register({
       ...(typeof op.fill === 'string' ? { fillColor: op.fill } : {}),
       ...(op.stroke ? { stroke: op.stroke as NewElementOptions['stroke'] } : {}),
       ...(op.bodyPr ? { bodyPr: op.bodyPr as NewElementOptions['bodyPr'] } : {}),
+      ...(op.adjust && typeof op.adjust === 'object'
+        ? { adjust: op.adjust as Record<string, number> }
+        : {}),
       ...(semanticMetadata ? { semanticMetadata } : {}),
     })
     return { op, created: [el.id] }

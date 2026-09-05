@@ -19,7 +19,7 @@ import type {
 } from './types'
 import { generateParagraphXml, generateXfrmXml } from './generate'
 import { creationIdXml, escapeXmlAttr } from './xml-utils'
-import { serializeSemanticMetadata } from './identity'
+import { RESEARCH_METADATA_VERSION, serializeSemanticMetadata } from './identity'
 import { relsPathFor } from './zip'
 import type { OpenedPptx } from './index'
 import { cleanupDeletedElementResources } from './resource-cleanup'
@@ -56,6 +56,8 @@ export interface NewElementOptions {
   stroke?: { color: string; widthEmu: number }
   /** body geometry overrides; absent = `wrap="square" rtlCol="0"` as before */
   bodyPr?: NewElementBodyPr
+  /** Preset-geometry adjust values (e.g. roundRect corner radius), raw avLst gd pairs */
+  adjust?: Record<string, number>
   /** Research Figure Studio semantic payload (route B: cNvPr descr/title). */
   semanticMetadata?: SemanticMetadata
 }
@@ -163,9 +165,14 @@ export function buildSpXml(slide: Slide, opts: NewElementOptions): string {
   const o = opts.offset
   const xfrm = `<a:xfrm><a:off x="${o.x}" y="${o.y}"/><a:ext cx="${o.cx}" cy="${o.cy}"/></a:xfrm>`
   // Parser convention: has txBody and no prstGeom → 'text'; textbox omits prstGeom
+  const avLst = opts.adjust
+    ? Object.entries(opts.adjust)
+        .map(([gd, v]) => `<a:gd name="${escapeXmlAttr(gd)}" fmla="val ${Math.round(v)}"/>`)
+        .join('')
+    : ''
   const geom = isTextbox
     ? ''
-    : `<a:prstGeom prst="${escapeXmlAttr(opts.kind)}"><a:avLst/></a:prstGeom>`
+    : `<a:prstGeom prst="${escapeXmlAttr(opts.kind)}"><a:avLst>${avLst}</a:avLst></a:prstGeom>`
   const fill = opts.fillColor ? `<a:solidFill>${srgbClrXml(opts.fillColor)}</a:solidFill>` : ''
   const ln = opts.stroke
     ? `<a:ln w="${Math.round(opts.stroke.widthEmu)}"><a:solidFill><a:srgbClr val="${opts.stroke.color.replace(/^#/, '').slice(0, 6).toUpperCase()}"/></a:solidFill></a:ln>`
@@ -183,6 +190,9 @@ export function buildSpXml(slide: Slide, opts: NewElementOptions): string {
 
 /** Synthesize a new element and hang it on the slide; returns the model element (immediately usable by the render layer). */
 export function addElement(slide: Slide, opts: NewElementOptions): TextElement {
+  if (opts.semanticMetadata && opts.semanticMetadata.researchMetadataVersion === undefined) {
+    opts.semanticMetadata.researchMetadataVersion = RESEARCH_METADATA_VERSION
+  }
   const lineDef = LINE_KINDS[opts.kind]
   if (lineDef) {
     const stroke = opts.stroke ?? DEFAULT_LINE_STROKE
@@ -216,6 +226,7 @@ export function addElement(slide: Slide, opts: NewElementOptions): TextElement {
     anchor: { spIndex: slide.elements.length, originalXml: xml, range: [0, 0] },
     transform: { offset: { ...opts.offset }, rot: 0, flipH: false, flipV: false },
     ...(opts.kind !== 'textbox' ? { presetGeometry: opts.kind } : {}),
+    ...(opts.adjust && Object.keys(opts.adjust).length > 0 ? { adjust: { ...opts.adjust } } : {}),
     ...(opts.fillColor ? { fill: { type: 'solid' as const, color: opts.fillColor } } : {}),
     ...(opts.stroke
       ? {

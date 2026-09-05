@@ -521,6 +521,8 @@ export interface RenderSlide {
   nodes: RenderNode[]
   /** Hidden slide (<p:sld show="0">): thumbnails get a badge, skipped during presentation */
   hidden?: boolean
+  /** Slide-level research figure payload (RENDER-P0-10) when the page is a generated research figure */
+  researchMetadata?: import('@genoffice/pptx-engine/research-metadata').ResearchFigureSlidePayload
 }
 
 // Convenience type re-exports (for internal render logic)

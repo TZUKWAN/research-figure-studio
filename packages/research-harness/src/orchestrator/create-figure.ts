@@ -23,6 +23,8 @@ import type { CriticVerdict } from '../critic/metric-critic.js'
 import { criticVerdict } from '../critic/metric-critic.js'
 import { routeEdgesWithObstacles, type RoutedEdge } from '../routing/router.js'
 import { normalizeVisualPlan } from '../visual/visualPlan.js'
+
+import { minimumHeightForUnits, minimumWidthForUnits } from '../visual/microLayout.js'
 import { auditScientific, type ScientificIssue } from '../critic/scientific-critic.js'
 import {
   OUTPUT_CONTEXT_DEFAULT_WIDTH_MM,
@@ -149,6 +151,8 @@ export interface OrchestrationResult {
   visualPlan?: import('../visual/visualPlan.js').VisualPlan
   /** resolved scientific domain (P1): drives renderer primitives + connector language */
   domain?: import('../contract/domain-profile.js').ScientificDomain
+  /** forward typography scale applied for the publication contract (1 = none) */
+  contractFontScale?: number
   /** relations deliberately expressed through position/grouping rather than a connector */
   unrenderedRelations?: RoutedEdge[]
   /** ranked candidate summary (P2 art direction): the set the winner was chosen from */
@@ -191,6 +195,26 @@ interface CandidateAttemptBudget {
 
 const MAX_ROUTE_FIXES_PER_CANDIDATE = 1
 
+
+// RENDER-P0-01: per-module hard fit constraints derived from the model's
+// visual decomposition. The solver reserves the composite size; the renderer
+// must never re-derive or inflate geometry after the solve.
+function unitFitConstraints(
+  visualPlan: import('../visual/visualPlan.js').VisualPlan,
+  measured: MeasuredNode[],
+): Map<string, { minHeightForWidth: (w: number) => number; minWidth: number }> | undefined {
+  if (visualPlan.modules.length === 0) return undefined
+  const widthById = new Map(measured.map((node) => [node.id, node.bounds.minWidth]))
+  const fit = new Map<string, { minHeightForWidth: (w: number) => number; minWidth: number }>()
+  for (const module of visualPlan.modules) {
+    const innerWidth = Math.max(60, (widthById.get(module.moduleId) ?? 96) - 8)
+    fit.set(module.moduleId, {
+      minHeightForWidth: (w: number) => minimumHeightForUnits(module, Math.max(60, w - 8)),
+      minWidth: minimumWidthForUnits(module) || innerWidth,
+    })
+  }
+  return fit.size > 0 ? fit : undefined
+}
 export async function orchestrateFigure(
   input: OrchestrationInput,
   llm: OrchestratorLlm,
@@ -939,6 +963,7 @@ export async function orchestrateFigure(
     // the WINNER's decomposition only; an attempt without one ships empty
     visualPlan: best.plan.visualPlan ?? { modules: [] },
     domain,
+    contractFontScale,
     unrenderedRelations,
     candidates: candidates.map((candidate) => ({
       source: candidate.source,

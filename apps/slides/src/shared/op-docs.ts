@@ -194,6 +194,11 @@ export const OP_DOCS: Record<string, OpDoc> = {
     aiCallable: false,
   },
   setNotes: { sig: '{text} — speaker notes', group: 'slide' },
+  setSlideResearchMetadata: {
+    sig: '{payload:{schemaVersion,figureRunId,figureFamily,domain,thesis,nodes,relations}} — internal research-figure payload written by create_research_figure',
+    group: 'slide',
+    aiCallable: false,
+  },
   addComment: { sig: '{text,author}', group: 'slide' },
   deleteComment: { sig: '{authorId,idx}', group: 'slide' },
 

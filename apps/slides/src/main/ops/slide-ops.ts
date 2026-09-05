@@ -38,6 +38,8 @@ import {
   setSlideBackground,
   setSlideBackgroundImage,
   setSlideBgGraphicsHidden,
+  getSlideResearchMetadata,
+  setSlideResearchMetadata,
   setSlideHidden,
   setSlideLayout,
   setSlideNotes,
@@ -645,5 +647,42 @@ register({
       }
     }
     return { op, after: { patched, remapped, backgrounds } }
+  },
+})
+
+// ── setSlideResearchMetadata ────────────────────────────────────────────
+// Slide-level research figure payload (RENDER-P0-10): the semantic graph and
+// suppressed/spatial relations ride the slide as a compact versioned record,
+// so a reopened deck can recover the real FigureGraph. One op inside the
+// creation transaction → atomic with the shapes it describes.
+register({
+  name: 'setSlideResearchMetadata',
+  validate(op, ctx) {
+    resolveSlide(ctx, op)
+    const payload = op.payload
+    if (
+      typeof payload !== 'object' ||
+      payload === null ||
+      typeof (payload as { schemaVersion?: unknown }).schemaVersion !== 'number' ||
+      typeof (payload as { figureRunId?: unknown }).figureRunId !== 'string' ||
+      !Array.isArray((payload as { nodes?: unknown }).nodes) ||
+      !Array.isArray((payload as { relations?: unknown }).relations)
+    ) {
+      throw new GuidedError(
+        'op "setSlideResearchMetadata" needs "payload": a ResearchFigureSlidePayload (schemaVersion/figureRunId/nodes/relations).',
+      )
+    }
+  },
+  apply(op, ctx): OpRecord {
+    const { slide } = resolveSlide(ctx, op)
+    const before = getSlideResearchMetadata(slide)
+    if (
+      !setSlideResearchMetadata(slide, op.payload as Parameters<typeof setSlideResearchMetadata>[1])
+    ) {
+      throw new GuidedError(
+        'op "setSlideResearchMetadata": the slide XML has no <p:cSld> element to carry the payload.',
+      )
+    }
+    return { op, before: before ?? null, after: op.payload }
   },
 })

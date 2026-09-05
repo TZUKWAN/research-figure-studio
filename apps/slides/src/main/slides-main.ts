@@ -1449,11 +1449,13 @@ export function registerSlidesIpc(): void {
     const session = sessions.get(e.sender.id)
     if (!session) return null
     const ops = Array.isArray(req?.ops) ? (req.ops as Parameters<typeof runTxn>[1]['ops']) : []
-    if (ops.length === 0 || ops.length > 50) {
+    // Composite research-figure creation runs as one atomic transaction and
+    // legitimately exceeds the conversational batch size.
+    if (ops.length === 0 || ops.length > 200) {
       return {
         applied: false,
         failures: [
-          { index: 0, error: 'ops must be a non-empty array (at most 50 per transaction).' },
+          { index: 0, error: 'ops must be a non-empty array (at most 200 per transaction).' },
         ],
       }
     }

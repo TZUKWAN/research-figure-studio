@@ -19,6 +19,7 @@ import type {
 import { tableRowGridCols } from '@genoffice/pptx-engine/table-grid'
 import { elementDurableId, groupChildDurableId } from '@genoffice/pptx-engine/identity'
 import { isBackgroundLikeElement } from '@genoffice/pptx-engine/background-promote'
+import { getSlideResearchMetadata } from '@genoffice/pptx-engine/research-metadata'
 import { buildChartNode } from './build-chart'
 import type {
   RenderSlide,
@@ -182,6 +183,7 @@ export function buildRenderSlide(
   // inlined here as a small regex so we only depend on pptx-engine types (safe to bundle in the renderer).
   const sldOpen = /<p:sld\b[^>]*>/.exec(slide.bodyPrefix)?.[0]
   const hidden = !!sldOpen && /\sshow="0"/.test(sldOpen)
+  const researchPayload = getSlideResearchMetadata(slide)
   return {
     widthPx: vp.widthPx,
     heightPx: vp.heightPx,
@@ -191,6 +193,7 @@ export function buildRenderSlide(
     ...(slide.masterSpHidden ? { bgGraphicsHidden: true } : {}),
     nodes,
     ...(hidden ? { hidden: true } : {}),
+    ...(researchPayload ? { researchMetadata: researchPayload } : {}),
   }
 }
 
