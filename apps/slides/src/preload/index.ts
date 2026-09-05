@@ -355,6 +355,10 @@ const api: SlidesApi = {
   setAiSettings: (settings: AiSettings) => ipcRenderer.invoke('ai:set-settings', settings),
   getPromptDefaults: () => ipcRenderer.invoke('prompts:defaults'),
   getPromptOverrides: () => ipcRenderer.invoke('prompts:get-overrides'),
+  getPromptOverrideRecords: () => ipcRenderer.invoke('prompts:get-override-records'),
+  getPromptPolicyVersion: () => ipcRenderer.invoke('prompts:get-policy-version'),
+  aiGetCapabilityProfile: (provider: string, model: string) =>
+    ipcRenderer.invoke('ai:get-capability-profile', { provider, model }),
   setPromptOverride: (id: string, text: string) =>
     ipcRenderer.invoke('prompts:set-override', id, text),
   clearPromptOverride: (id: string) => ipcRenderer.invoke('prompts:clear-override', id),

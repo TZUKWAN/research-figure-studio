@@ -7,6 +7,7 @@ import type {
   AgentToolResult,
   AgentTransport,
   ToolExecution,
+  ToolProgress,
 } from './types'
 
 export interface ToolExecutedEvent<TSnapshot> {
@@ -19,6 +20,12 @@ export interface ToolExecutedEvent<TSnapshot> {
   snapshotBefore?: TSnapshot | undefined
 }
 
+/**
+ * Machine-readable completion status of a run (AI-P1-04): the final text may
+ * claim anything — this field is derived from loop facts, not model prose.
+ */
+export type AgentCompletion = 'complete' | 'partial' | 'failed' | 'cancelled'
+
 export interface AgentRunResult {
   /** final assistant text of the run ('' when cut off) */
   text: string
@@ -27,13 +34,22 @@ export interface AgentRunResult {
   turnLimit: boolean
   /** the final turn hit the token limit (stop_reason max_tokens): text is incomplete; set only when true */
   truncated?: boolean
+  /** loop-derived completion status; `reason` always present unless 'complete' */
+  completion: AgentCompletion
+  unfinishedReason?: 'turn-limit' | 'max-tokens' | 'cancelled' | 'input-parse-failed'
+  /** total unusable tool inputs this run (AI-P1-03: consecutive resets no longer hide a weak model) */
+  invalidToolInputs: number
 }
 
 export interface AgentLoopEvents<TSnapshot> {
   /** cumulative assistant text of the current turn (call per delta) */
   onText?(text: string): void
+  /** incremental assistant text delta of the current turn (AI-P1-01); onText stays for compatibility */
+  onTextDelta?(delta: string): void
   /** a tool is about to execute (UI shows a live "running" indicator; onToolExecuted always follows) */
   onToolStart?(call: AgentToolCall): void
+  /** mid-execution status from a long-running tool (stage summaries only) */
+  onToolProgress?(call: AgentToolCall, progress: ToolProgress): void
   onToolExecuted?(event: ToolExecutedEvent<TSnapshot>): void
   /** a turn requested tools and they ran; the loop is going back to the model */
   onTurnEnd?(): void
@@ -80,6 +96,23 @@ const STALE_TOOL_OUTPUT_MAX = 1_000
 
 /** Cap on consecutive tool-input parse failures (a successful parse resets it); abort beyond it (keeps the model from burning turns on bad JSON) */
 const MAX_INPUT_PARSE_RETRIES = 3
+/**
+ * Whole-run budget for unusable tool inputs (AI-P1-03): consecutive resets let
+ * a weak model that fails half its calls burn turns forever; the total cap
+ * bounds that. Kept generous (2× maxTurns) so legitimate long runs never trip it.
+ */
+const MAX_INPUT_PARSE_TOTAL = 16
+
+/**
+ * The "(empty stream)" suffix is a cross-layer contract with the ai-provider
+ * protocols: the gateway closed the SSE stream without content, tool calls, or
+ * message framing — a transient soft-failure. Centralized here so the retry
+ * policy never grew ad-hoc `includes` matches (AI-P1-12 keeps legacy strings
+ * working but gives them one home).
+ */
+export function isEmptyStreamMessage(error: string): boolean {
+  return error.includes('(empty stream)')
+}
 
 /**
  * Backoff schedule for in-place same-turn retries on empty-stream errors.
@@ -179,6 +212,10 @@ export class AgentLoop<TSnapshot = unknown> {
   private finalizing = false
   private mutationSeen = false
   private inputParseFails = 0
+  /** whole-run unusable-tool-input counter (AI-P1-03) */
+  private invalidToolInputTotal = 0
+  /** set when the run was aborted for repeated unusable tool inputs (drives completion='failed') */
+  private inputParseAbort = false
   private turnStopReason: string | null = null
   private turnText = ''
   private turnReasoning = ''
@@ -253,6 +290,7 @@ export class AgentLoop<TSnapshot = unknown> {
     this.finalizing = false
     this.mutationSeen = false
     this.inputParseFails = 0
+    this.invalidToolInputTotal = 0
     this.executedCalls = []
     this.verifyRetryUsed = false
     this.abortController = new AbortController()
@@ -279,7 +317,7 @@ export class AgentLoop<TSnapshot = unknown> {
     if (generation !== this.generation) return // reset during compaction
     if (this.cancelled) {
       this.running = false
-      this.options.events?.onDone?.({ text: '', cancelled: true, turnLimit: false })
+      this.options.events?.onDone?.(this.runResult(''))
       return
     }
     // Leftover unanswered user message (a previous run failed before replying):
@@ -489,7 +527,13 @@ export class AgentLoop<TSnapshot = unknown> {
     let settled = false
     this.handle = this.options.transport.stream(
       {
-        system: this.options.skill.systemPrompt + (this.options.systemSuffix?.() ?? ''),
+        // Durable structured state (AI-P0-10) rides the system prompt, which is
+        // rebuilt fresh every turn — it can never be summarized away by context
+        // compaction the way conversation history can.
+        system:
+          this.options.skill.systemPrompt +
+          (this.options.skill.durableContext ? `\n\n${this.options.skill.durableContext()}` : '') +
+          (this.options.systemSuffix?.() ?? ''),
         messages: [...this.history],
         tools: this.finalizing ? [] : this.options.skill.tools,
       },
@@ -497,6 +541,7 @@ export class AgentLoop<TSnapshot = unknown> {
         onDelta: (text) => {
           if (generation !== this.generation || settled) return
           this.turnText += text
+          this.options.events?.onTextDelta?.(text)
           this.options.events?.onText?.(this.turnText)
         },
         onReasoning: (text) => {
@@ -525,7 +570,7 @@ export class AgentLoop<TSnapshot = unknown> {
           // a turn whose text/tool calls the UI already saw)
           if (
             delay !== undefined &&
-            error.includes('(empty stream)') &&
+            isEmptyStreamMessage(error) &&
             !this.cancelled &&
             !this.turnText &&
             this.toolCalls.length === 0
@@ -547,6 +592,38 @@ export class AgentLoop<TSnapshot = unknown> {
         },
       },
     )
+  }
+
+  /** Loop-derived completion status: machine truth, independent of final prose (AI-P1-04). */
+  private completion(): AgentRunResult['completion'] {
+    if (this.inputParseAbort) return 'failed'
+    if (this.cancelled) return 'cancelled'
+    if (this.finalizing) return 'partial'
+    if (this.turnStopReason === 'max_tokens') return 'partial'
+    return 'complete'
+  }
+
+  private runResult(text: string): AgentRunResult {
+    const completion = this.completion()
+    return {
+      text,
+      cancelled: this.cancelled,
+      turnLimit: this.finalizing,
+      invalidToolInputs: this.invalidToolInputTotal,
+      completion,
+      ...(completion !== 'complete'
+        ? {
+            unfinishedReason: this.inputParseAbort
+              ? ('input-parse-failed' as const)
+              : this.cancelled
+                ? ('cancelled' as const)
+                : this.finalizing
+                  ? ('turn-limit' as const)
+                  : ('max-tokens' as const),
+          }
+        : {}),
+      ...(this.turnStopReason === 'max_tokens' && !this.cancelled ? { truncated: true } : {}),
+    }
   }
 
   private async finishTurn(): Promise<void> {
@@ -593,13 +670,7 @@ export class AgentLoop<TSnapshot = unknown> {
       this.history.push({ role: 'assistant', text: this.turnText || COMPLETED_VIA_TOOLS_TEXT })
       this.running = false
       this.runUserMsg = null
-      events?.onDone?.({
-        text: this.turnText,
-        cancelled: this.cancelled,
-        turnLimit: this.finalizing,
-        // set only when true so exact-shape consumers/tests stay unaffected
-        ...(this.turnStopReason === 'max_tokens' && !this.cancelled ? { truncated: true } : {}),
-      })
+      events?.onDone?.(this.runResult(this.turnText))
       return
     }
 
@@ -634,6 +705,7 @@ export class AgentLoop<TSnapshot = unknown> {
       // don't execute; feed a targeted error back so the model retries correctly
       if (call.truncated || call.inputError) {
         this.inputParseFails++
+        this.invalidToolInputTotal++
         const output = call.truncated
           ? 'Tool arguments were cut off by the output length limit; the tool was not executed. Split this operation into several smaller tool calls (less content per call) and try again.'
           : `Tool input JSON failed to parse; the tool was not executed: ${call.inputError}\nFix the arguments (make sure quotes inside strings are escaped) and call again.`
@@ -649,7 +721,9 @@ export class AgentLoop<TSnapshot = unknown> {
       const snapshot = !this.mutationSeen ? captureSnapshot?.() : undefined
       let execution: ToolExecution
       try {
-        execution = await skill.executeTool(call, this.abortController?.signal)
+        execution = await skill.executeTool(call, this.abortController?.signal, (progress) => {
+          if (generation === this.generation) events?.onToolProgress?.(call, progress)
+        })
       } catch (e) {
         execution = {
           output: e instanceof Error ? e.message : String(e),
@@ -679,16 +753,21 @@ export class AgentLoop<TSnapshot = unknown> {
     if (this.cancelled) {
       this.running = false
       this.runUserMsg = null
-      events?.onDone?.({ text: this.turnText, cancelled: true, turnLimit: false })
+      events?.onDone?.(this.runResult(this.turnText))
       return
     }
 
-    // Bad-input retries hit the cap: abort instead of burning more turns
-    if (this.inputParseFails >= MAX_INPUT_PARSE_RETRIES) {
+    // Bad-input retries hit the consecutive cap (or the whole-run budget):
+    // abort instead of burning more turns
+    if (
+      this.inputParseFails >= MAX_INPUT_PARSE_RETRIES ||
+      this.invalidToolInputTotal >= MAX_INPUT_PARSE_TOTAL
+    ) {
+      this.inputParseAbort = true
       this.running = false
       this.rollbackFailedRun()
       events?.onError?.(
-        `Tool input was unusable (unparseable or truncated) ${MAX_INPUT_PARSE_RETRIES} times in a row; retries stopped, please send the request again`,
+        `Tool input was unusable (unparseable or truncated) ${this.invalidToolInputTotal} time(s); retries stopped, please send the request again`,
       )
       return
     }

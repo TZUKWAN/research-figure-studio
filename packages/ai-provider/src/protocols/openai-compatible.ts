@@ -118,6 +118,17 @@ export interface OpenAiRequestOptions {
   bodyExtras?: Record<string, unknown> | undefined
 }
 
+/**
+ * Structured-output enforcement (AI-P0-01): when set, the request carries the
+ * JSON schema natively (response_format json_schema). Gateways that reject the
+ * field get ONE automatic plain retry with a JSON-only instruction — a custom
+ * endpoint breaking on the field must not kill the pipeline.
+ */
+export interface StructuredRequestOptions {
+  name: string
+  schema: Record<string, unknown>
+}
+
 export async function streamOpenAiCompatible(
   baseUrl: string,
   config: AiProviderConfig,
@@ -127,10 +138,22 @@ export async function streamOpenAiCompatible(
   maxTokens: number,
   cb: StreamCallbacks,
   options: OpenAiRequestOptions = {},
+  structured?: StructuredRequestOptions,
 ): Promise<void> {
   const wd = createStreamWatchdog(cb.signal)
   return wd.guard(() =>
-    openAiCompatibleTurn(baseUrl, config, system, messages, tools, maxTokens, cb, wd, options),
+    openAiCompatibleTurn(
+      baseUrl,
+      config,
+      system,
+      messages,
+      tools,
+      maxTokens,
+      cb,
+      wd,
+      options,
+      structured,
+    ),
   )
 }
 
@@ -144,6 +167,8 @@ async function openAiCompatibleTurn(
   cb: StreamCallbacks,
   wd: StreamWatchdog,
   options: OpenAiRequestOptions,
+  structured?: StructuredRequestOptions,
+  allowStructuredFallback = true,
 ): Promise<void> {
   const onBytes = () => {
     wd.touch()
@@ -162,13 +187,30 @@ async function openAiCompatibleTurn(
       ...(options.useMaxCompletionTokens
         ? { max_completion_tokens: maxTokens }
         : { max_tokens: maxTokens }),
-      messages: openAiMessages(system, messages, modelEchoesReasoning(config.model)),
+      messages: openAiMessages(
+        system +
+          (structured && allowStructuredFallback
+            ? ''
+            : structured
+              ? '\nRespond with ONLY one JSON object matching the described schema. No prose, no code fence.'
+              : ''),
+        messages,
+        modelEchoesReasoning(config.model),
+      ),
       ...(tools.length > 0
         ? {
             tools: tools.map((t) => ({
               type: 'function',
               function: { name: t.name, description: t.description, parameters: t.inputSchema },
             })),
+          }
+        : {}),
+      ...(structured
+        ? {
+            response_format: {
+              type: 'json_schema',
+              json_schema: { name: structured.name, strict: false, schema: structured.schema },
+            },
           }
         : {}),
       ...(options.omitTemperature ? {} : { temperature: 0.3 }),
@@ -179,7 +221,27 @@ async function openAiCompatibleTurn(
   // headers arrived: ping the renderer watchdog too, or a slow first chunk could trip it
   onBytes()
   if (!response.ok || !response.body) {
-    throw new Error(`HTTP ${response.status}: ${httpBodyDetail(await response.text())}`)
+    const detail = await response.text()
+    // One plain retry when the gateway does not know `response_format` (or any
+    // other 400 on a schema-carrying request): degrade instead of failing the
+    // whole structured call. The retry strips native enforcement and relies on
+    // the JSON-only instruction + client-side repair.
+    if (response.status === 400 && structured && allowStructuredFallback) {
+      return openAiCompatibleTurn(
+        baseUrl,
+        config,
+        system,
+        messages,
+        tools,
+        maxTokens,
+        cb,
+        wd,
+        options,
+        structured,
+        false,
+      )
+    }
+    throw new Error(`HTTP ${response.status}: ${httpBodyDetail(detail)}`)
   }
   const jsonBody = await jsonBodyInsteadOfSse(response)
   if (jsonBody !== null) {

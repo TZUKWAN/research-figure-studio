@@ -14,6 +14,16 @@ import {
 
 export const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta'
 
+/**
+ * Structured-output enforcement (AI-P0-01): Gemini's JSON mode via
+ * generationConfig.response_mime_type + response_schema. Gateways rejecting
+ * the fields get ONE plain retry with a JSON-only instruction.
+ */
+export interface GeminiStructuredOptions {
+  name: string
+  schema: Record<string, unknown>
+}
+
 function geminiContents(messages: AgentMessage[]): unknown[] {
   return messages.map((m) => {
     if (m.role === 'user') {
@@ -117,9 +127,12 @@ export async function streamGemini(
   maxTokens: number,
   cb: StreamCallbacks,
   baseUrl = GEMINI_BASE_URL,
+  structured?: GeminiStructuredOptions,
 ): Promise<void> {
   const wd = createStreamWatchdog(cb.signal)
-  return wd.guard(() => geminiTurn(config, system, messages, tools, maxTokens, cb, baseUrl, wd))
+  return wd.guard(() =>
+    geminiTurn(config, system, messages, tools, maxTokens, cb, baseUrl, wd, structured),
+  )
 }
 
 async function geminiTurn(
@@ -131,6 +144,8 @@ async function geminiTurn(
   cb: StreamCallbacks,
   baseUrl: string,
   wd: StreamWatchdog,
+  structured?: GeminiStructuredOptions,
+  allowStructuredFallback = true,
 ): Promise<void> {
   const onBytes = () => {
     wd.touch()
@@ -146,7 +161,17 @@ async function geminiTurn(
       ...gensparkAttributionHeaders(baseUrl),
     },
     body: JSON.stringify({
-      systemInstruction: { parts: [{ text: system }] },
+      systemInstruction: {
+        parts: [
+          {
+            text:
+              system +
+              (structured && !allowStructuredFallback
+                ? '\nRespond with ONLY one JSON object matching the described schema. No prose, no code fence.'
+                : ''),
+          },
+        ],
+      },
       contents: geminiContents(messages),
       ...(tools.length > 0
         ? {
@@ -161,13 +186,35 @@ async function geminiTurn(
             ],
           }
         : {}),
-      generationConfig: { temperature: 0.3, maxOutputTokens: maxTokens },
+      generationConfig: {
+        temperature: 0.3,
+        maxOutputTokens: maxTokens,
+        ...(structured
+          ? { responseMimeType: 'application/json', responseSchema: structured.schema }
+          : {}),
+      },
     }),
   })
   // headers arrived: ping the renderer watchdog too, or a slow first chunk could trip it
   onBytes()
   if (!response.ok || !response.body) {
-    throw new Error(`Gemini HTTP ${response.status}: ${httpBodyDetail(await response.text())}`)
+    const detail = await response.text()
+    // One plain retry when the gateway rejects responseMimeType/responseSchema
+    if (response.status === 400 && structured && allowStructuredFallback) {
+      return geminiTurn(
+        config,
+        system,
+        messages,
+        tools,
+        maxTokens,
+        cb,
+        baseUrl,
+        wd,
+        structured,
+        false,
+      )
+    }
+    throw new Error(`Gemini HTTP ${response.status}: ${httpBodyDetail(detail)}`)
   }
   const jsonBody = await jsonBodyInsteadOfSse(response)
   if (jsonBody !== null) {

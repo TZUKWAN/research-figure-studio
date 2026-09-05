@@ -83,6 +83,13 @@ export interface AiStreamRequest {
   messages: AgentMessage[]
   tools?: AgentToolDef[]
   maxTokens?: number
+  /**
+   * Structured-output enforcement (AI-P0-01): when present the provider is
+   * asked for schema-constrained JSON (native per protocol, plain retry on
+   * rejection). The renderer still validates — this is a carrier, not a trust
+   * boundary.
+   */
+  jsonSchema?: { name: string; schema: Record<string, unknown> }
 }
 
 export interface AiStreamChunk {
@@ -98,4 +105,6 @@ export interface AiStreamChunk {
   errorCode?: 'timeout' | 'credits' | 'network'
   /** normalized stop reason carried on 'done' ('max_tokens' = output cut off by the token limit) */
   stopReason?: string
+  /** whether this request errored — structured consumers branch on the taxonomy code */
+  aiErrorCode?: string
 }

@@ -116,10 +116,14 @@ describe('ai:chat IPC handler', () => {
       agent: Record<string, string>
       defs: Array<{ id: string }>
     }
+    // AI-P0-03: defaults are the EDITABLE POLICY layer only — the machine
+    // output schema is generated (prompt-protocol.ts) and never shipped as
+    // user-editable text.
     expect(result.agent['research.semantic-planner']).toContain('expressionMode')
-    expect(result.agent['research.semantic-planner']).toContain('narrative')
-    expect(result.agent['research.composition-designer']).toContain('visualPlan')
-    expect(result.agent['research.composition-designer']).toContain('routingIntent')
+    expect(result.agent['research.semantic-planner']).toContain('Semantic Planner')
+    expect(result.agent['research.semantic-planner']).not.toContain('OUTPUT SCHEMA')
+    expect(result.agent['research.composition-designer']).toContain('Composition Designer')
+    expect(result.agent['research.composition-designer']).not.toContain('OUTPUT SCHEMA')
     expect(result.defs.map((d) => d.id)).toContain('research.semantic-planner')
     expect(result.defs.map((d) => d.id)).toContain('research.composition-designer')
   })

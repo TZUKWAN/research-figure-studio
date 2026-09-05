@@ -1567,8 +1567,17 @@ export interface SlidesApi {
     defs: { id: string; titleZh: string; titleEn: string; descZh: string; descEn: string }[]
   }>
   getPromptOverrides: () => Promise<Record<string, string>>
+  /** versioned override records (AI-P0-04); absent on older main processes */
+  getPromptOverrideRecords?: () => Promise<Record<string, import('./prompt-protocol').PromptOverrideRecord>>
+  /** current editable-policy version the app composes prompts with */
+  getPromptPolicyVersion?: () => Promise<number>
   setPromptOverride: (id: string, text: string) => Promise<boolean>
   clearPromptOverride: (id: string) => Promise<boolean>
+  /** probed capability profile for one provider/model (AI-P0-06); null when never probed */
+  aiGetCapabilityProfile?: (
+    provider: string,
+    model: string,
+  ) => Promise<import('@genoffice/ai-provider').ModelCapabilityProfile | null>
   aiStream: (request: AiStreamRequest) => Promise<void>
   aiStreamCancel: (requestId: string) => Promise<void>
   /** Genspark account status (gsk login state); with withEmail also fetches the email (needs a network request, slower) */

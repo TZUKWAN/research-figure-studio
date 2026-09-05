@@ -15,6 +15,20 @@ import {
 
 export const ANTHROPIC_BASE_URL = 'https://api.anthropic.com'
 
+/**
+ * Structured-output enforcement (AI-P0-01): Anthropic has no response_format;
+ * the schema travels as ONE forced tool (tool_choice type:tool) so the answer
+ * must satisfy the input_schema. Gateways rejecting tool_choice get ONE plain
+ * retry with a JSON-only instruction.
+ */
+export interface AnthropicStructuredOptions {
+  name: string
+  schema: Record<string, unknown>
+}
+
+const STRUCTURED_JSON_INSTRUCTION =
+  '\nRespond with ONLY one JSON object matching the described schema. No prose, no code fence, no trailing notes.'
+
 function anthropicMessages(messages: AgentMessage[]): unknown[] {
   return messages.map((m) => {
     if (m.role === 'user') {
@@ -105,9 +119,12 @@ export async function streamAnthropic(
   maxTokens: number,
   cb: StreamCallbacks,
   baseUrl = ANTHROPIC_BASE_URL,
+  structured?: AnthropicStructuredOptions,
 ): Promise<void> {
   const wd = createStreamWatchdog(cb.signal)
-  return wd.guard(() => anthropicTurn(config, system, messages, tools, maxTokens, cb, baseUrl, wd))
+  return wd.guard(() =>
+    anthropicTurn(config, system, messages, tools, maxTokens, cb, baseUrl, wd, structured),
+  )
 }
 
 async function anthropicTurn(
@@ -119,12 +136,16 @@ async function anthropicTurn(
   cb: StreamCallbacks,
   baseUrl: string,
   wd: StreamWatchdog,
+  structured?: AnthropicStructuredOptions,
+  allowStructuredFallback = true,
 ): Promise<void> {
   const onBytes = () => {
     wd.touch()
     cb.onActivity?.()
   }
   let response: Response
+  const requestSystem =
+    system + (structured && !allowStructuredFallback ? STRUCTURED_JSON_INSTRUCTION : '')
   try {
     response = await aiFetch(`${baseUrl.replace(/\/$/, '')}/v1/messages`, {
       method: 'POST',
@@ -142,17 +163,28 @@ async function anthropicTurn(
       body: JSON.stringify({
         model: config.model,
         max_tokens: maxTokens,
-        system,
+        system: requestSystem,
         messages: anthropicMessages(messages),
-        ...(tools.length > 0
+        ...(structured
           ? {
-              tools: tools.map((t) => ({
-                name: t.name,
-                description: t.description,
-                input_schema: t.inputSchema,
-              })),
+              tools: [
+                {
+                  name: structured.name,
+                  description: 'Return the structured result conforming to input_schema.',
+                  input_schema: structured.schema,
+                },
+              ],
+              tool_choice: { type: 'tool', name: structured.name },
             }
-          : {}),
+          : tools.length > 0
+            ? {
+                tools: tools.map((t) => ({
+                  name: t.name,
+                  description: t.description,
+                  input_schema: t.inputSchema,
+                })),
+              }
+            : {}),
         stream: true,
       }),
     })
@@ -167,7 +199,23 @@ async function anthropicTurn(
   // headers arrived: ping the renderer watchdog too, or a slow first chunk could trip it
   onBytes()
   if (!response.ok || !response.body) {
-    throw new Error(`Claude HTTP ${response.status}: ${httpBodyDetail(await response.text())}`)
+    const detail = await response.text()
+    // One plain retry when the gateway rejects the forced-tool shape
+    if (response.status === 400 && structured && allowStructuredFallback) {
+      return anthropicTurn(
+        config,
+        system,
+        messages,
+        tools,
+        maxTokens,
+        cb,
+        baseUrl,
+        wd,
+        structured,
+        false,
+      )
+    }
+    throw new Error(`Claude HTTP ${response.status}: ${httpBodyDetail(detail)}`)
   }
   const jsonBody = await jsonBodyInsteadOfSse(response)
   if (jsonBody !== null) {

@@ -23,6 +23,8 @@ export * from './critic/intent.js'
 export * from './critic/info-density.js'
 export * from './orchestrator/create-figure.js'
 export * from './events.js'
+export * from './protocol/figure-plan-protocol.js'
+export * from './protocol/runtime-capabilities.js'
 
 /** FigurePlan: the planner's temporary contract (PPT state stays source of truth). */
 export interface FigurePlanRegion {

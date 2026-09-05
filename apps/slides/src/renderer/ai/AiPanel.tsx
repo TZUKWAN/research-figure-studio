@@ -218,6 +218,8 @@ function safeJsonInput(input: unknown): string | undefined {
 /** Generation progress snapshot in the chat stream (same card updated in real time) */
 interface DeckProgressSnapshot {
   style?: { label: string; status: 'running' | 'done' | 'error'; summary: string }
+  /** research figure orchestration stages (create_research_figure, AI-P1-02) */
+  figure?: { label: string; status: 'running' | 'done' | 'error'; summary: string }
   plan?: {
     label: string
     done: number
@@ -811,6 +813,7 @@ export function AiPanel({
       timeoutMs: number,
       signal?: AbortSignal,
       maxTokens?: number,
+      jsonSchema?: { name: string; schema: Record<string, unknown> },
     ): Promise<LlmResult> =>
       new Promise((resolve) => {
         if (signal?.aborted) {
@@ -819,6 +822,7 @@ export function AiPanel({
         }
         const requestId = crypto.randomUUID()
         let buf = ''
+        let structuredPayload: string | null = null
         let settled = false
         const finish = (r: LlmResult, cancelUpstream = false) => {
           if (settled) return
@@ -856,13 +860,22 @@ export function AiPanel({
           if (chunk.requestId !== requestId) return
           armTimeout() // any chunk (including pings) proves the turn is alive
           if (chunk.type === 'delta') buf += chunk.text ?? ''
-          else if (chunk.type === 'done')
+          else if (chunk.type === 'tool-call') {
+            // Structured (schema-forced) calls may answer as a tool call —
+            // Anthropic native enforcement works exactly that way (AI-P0-01).
+            if (jsonSchema && chunk.toolCall?.name === jsonSchema.name) {
+              structuredPayload = JSON.stringify(chunk.toolCall.input ?? {})
+            }
+          } else if (chunk.type === 'done') {
+            // Structured (schema-forced) responses aggregate the tool-call
+            // payload; plain responses aggregate the streamed text.
+            const text = structuredPayload ?? buf
             finish(
-              buf.trim()
-                ? { ok: true, text: buf }
-                : { ok: false, text: buf, error: tGlobal('aiErrEmptyOutput'), errKind: 'empty' },
+              text.trim()
+                ? { ok: true, text }
+                : { ok: false, text, error: tGlobal('aiErrEmptyOutput'), errKind: 'empty' },
             )
-          else if (chunk.type === 'error')
+          } else if (chunk.type === 'error')
             finish({
               ok: false,
               error: chunk.error ?? tGlobal('aiErrUnknown'),
@@ -881,6 +894,7 @@ export function AiPanel({
             system,
             messages: [{ role: 'user', text: user }],
             ...(maxTokens ? { maxTokens } : {}),
+            ...(jsonSchema ? { jsonSchema } : {}),
           })
           .catch((e) =>
             finish({
@@ -898,6 +912,7 @@ export function AiPanel({
       useGenModel = true,
       signal?: AbortSignal,
       maxTokens?: number,
+      jsonSchema?: { name: string; schema: Record<string, unknown> },
     ): Promise<LlmResult> => {
       const first = await runLlmAttempt(
         useGenModel ? settingsForGen() : settingsRef.current,
@@ -906,6 +921,7 @@ export function AiPanel({
         timeoutMs,
         signal,
         maxTokens,
+        jsonSchema,
       )
       if (first.ok || !useGenModel || signal?.aborted) return first
       // Only "request errors" fall back to the user's model for a retry; timeouts/empty output don't switch models (mostly network/output problems, switching won't help)
@@ -920,12 +936,46 @@ export function AiPanel({
       getSlides: () => slidesRef.current,
       getCurrent: () => currentRef.current,
       // Creation Orchestrator (create_research_figure): one raw LLM call with
-      // the user's own model (no gen-model override) for schema-contract stages
-      runLlm: async (system, user) => {
-        const result = await runLlmOnce(system, user, undefined, false)
+      // the user's own model (no gen-model override) for schema-contract stages.
+      // signal: user stop must abort in-flight pipeline LLM calls too (AI-P1-05).
+      runLlm: async (system, user, signal) => {
+        const result = await runLlmOnce(system, user, undefined, false, signal)
         return result.ok
           ? { ok: true, text: result.text }
           : { ok: false, error: result.error ?? 'LLM call failed' }
+      },
+      // Structured pipeline call (AI-P0-01): schema rides the stream request so
+      // the provider enforces it natively when capable; the response text is
+      // still extracted + validated client-side — a carrier, not a trust boundary.
+      runStructured: async ({ system, user, jsonSchema, signal }) => {
+        const result = await runLlmOnce(
+          system,
+          user,
+          undefined,
+          false,
+          signal,
+          undefined,
+          jsonSchema,
+        )
+        return result.ok
+          ? {
+              ok: true,
+              text: result.text,
+              mode: jsonSchema ? ('native-json' as const) : ('plain' as const),
+            }
+          : { ok: false, error: result.error ?? 'LLM call failed' }
+      },
+      // Probed capability profile (AI-P0-06); null when this model was never probed.
+      getCapabilityProfile: async () => {
+        try {
+          const settings = settingsRef.current
+          const provider = settings.provider
+          const model = settings.providers?.[provider]?.model ?? ''
+          if (!model) return null
+          return (await window.slidesApi.aiGetCapabilityProfile?.(provider, model)) ?? null
+        } catch {
+          return null
+        }
       },
       // A queue run names its targets explicitly; whatever is selected on the
       // canvas right now is unrelated and would only compete with them
@@ -1250,6 +1300,12 @@ export function AiPanel({
             return {
               ...prev,
               style: { label: event.label, status: event.status, summary: event.summary },
+            }
+          }
+          if (event.stage === 'figure') {
+            return {
+              ...prev,
+              figure: { label: event.label, status: event.status, summary: event.summary },
             }
           }
           if (event.stage === 'plan') {
@@ -2820,7 +2876,7 @@ function DeckProgressCard({ progress }: { progress: DeckProgressSnapshot }) {
   // Collapsed by default: while generating only the one-line head shows (fewer concurrent loaders);
   // expanding is a view-only toggle
   const [open, setOpen] = useState(false)
-  const { style, plan, images, pages, isDone, finalTotal } = progress
+  const { style, figure, plan, images, pages, isDone, finalTotal } = progress
 
   type StepStatus = 'done' | 'error' | 'running'
 
@@ -2841,6 +2897,11 @@ function DeckProgressCard({ progress }: { progress: DeckProgressSnapshot }) {
 
   if (style) {
     steps.push({ key: 'style', ...stepView(style.status, style.label, style.summary) })
+  }
+  if (figure) {
+    // Research figure orchestration stages stream in as running summaries
+    // (semantic planning / composition / audit …) — same display as `style`.
+    steps.push({ key: 'figure', ...stepView(figure.status, figure.label, figure.summary) })
   }
   if (plan) {
     steps.push({ key: 'plan', ...stepView(plan.status, plan.label, plan.summary) })
