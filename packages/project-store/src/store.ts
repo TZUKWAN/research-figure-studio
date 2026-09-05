@@ -10,22 +10,31 @@
  *
  * Design principles:
  * - No Electron dependency; the userData path is injected by the caller
- * - All write failures warn silently, never throw (append path)
- * - JSONL parsing is line-by-line tolerant: bad lines are skipped, no crash
- * - seq is maintained by the store layer: auto-incremented on each appendChatMessage
+ * - Best-effort telemetry/history writes (chat appends) warn silently and
+ *   return a typed ProjectStoreResult. User-visible state mutations
+ *   (index.json / project.json / chat-file moves) are transactional: they
+ *   either commit fully or roll back and throw ProjectStoreError — a write
+ *   failure must never be reported to the UI as success (DESKTOP-P0-05/06)
+ * - JSONL parsing is line-by-line tolerant: bad lines are skipped without
+ *   crashing, counted, backed up once per session, and surfaced through
+ *   chatRecoveryStats so lost history is visible (DESKTOP-P0-08)
+ * - seq is a display-ordering hint, not an identity: every record also gets a
+ *   stable `id` UUID, and seq init/merge scans the WHOLE chat file instead of
+ *   the most recent 10k display window (DESKTOP-P0-07/09)
  */
 
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import {
   appendFileSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   renameSync,
   statSync,
   unlinkSync,
   writeFileSync,
-  readdirSync,
 } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import type {
@@ -40,8 +49,19 @@ import type {
 import { assertStorageId } from './ipc.js'
 
 // ────────────────────────────────────────────────────────────
-// Internal helpers
+// Errors & helpers
 // ────────────────────────────────────────────────────────────
+
+/** Typed failure for user-visible mutations that refused to commit. */
+export class ProjectStoreError extends Error {
+  readonly code: 'io' | 'not-found' | 'invalid'
+
+  constructor(code: 'io' | 'not-found' | 'invalid', message: string) {
+    super(message)
+    this.name = 'ProjectStoreError'
+    this.code = code
+  }
+}
 
 /** Max stored characters for a single tool input/output field */
 const TOOL_FIELD_MAX_CHARS = 16_000
@@ -56,6 +76,10 @@ const TEXT_TRUNCATED_MARK = '\n\n[truncated]'
 
 function nowIso(): string {
   return new Date().toISOString()
+}
+
+function errMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
 }
 
 function ensureDir(dir: string): void {
@@ -112,7 +136,7 @@ export class ProjectStore {
     return join(this.chatsDir(projectId), `${assertStorageId(chatId, 'chat id')}.jsonl`)
   }
 
-  // ── seq counters (in-memory cache, initialized from JSONL line count on first read) ──
+  // ── seq counters (in-memory cache, initialized from a full-file scan on first read) ──
 
   /** projectId:chatId → current max seq */
   private readonly seqCounters = new Map<string, number>()
@@ -129,12 +153,100 @@ export class ProjectStore {
       this.seqCounters.set(key, next)
       return next
     }
-    // Initialization: scan the existing file for the max seq
-    const existing = this.loadChat(projectId, chatId, 10_000)
-    const maxSeq = existing.reduce((m, msg) => Math.max(m, msg.seq), -1)
+    // Initialization scans the WHOLE file for the max seq. Seeding from the
+    // display window (loadChat(limit)) would restart numbering inside long
+    // chats and collide with existing seq values (DESKTOP-P0-09).
+    const { maxSeq } = this.scanChatFile(this.chatPath(projectId, chatId))
     const next = maxSeq + 1
     this.seqCounters.set(key, next)
     return next
+  }
+
+  // ── Chat file scanning (tolerant full read) ──────────────
+
+  /**
+   * Full tolerant read of a chat JSONL: every parseable record, the max seq,
+   * and the corrupted-line count. Records missing a usable seq get one
+   * assigned in memory (monotonic after the running max) instead of being
+   * dropped — a partially damaged line must not silently delete the history
+   * around it.
+   */
+  private scanChatFile(filePath: string): {
+    records: ChatMessage[]
+    maxSeq: number
+    corrupted: number
+  } {
+    const records: ChatMessage[] = []
+    let maxSeq = -1
+    let corrupted = 0
+    try {
+      if (!existsSync(filePath)) return { records, maxSeq, corrupted }
+      const raw = readFileSync(filePath, 'utf8')
+      for (const line of raw.split('\n')) {
+        if (!line.trim()) continue
+        try {
+          const msg = JSON.parse(line) as ChatMessage
+          if (typeof msg.role === 'string' && typeof msg.text === 'string') {
+            const seq =
+              typeof msg.seq === 'number' && Number.isSafeInteger(msg.seq) ? msg.seq : maxSeq + 1
+            records.push({ ...msg, seq })
+            if (seq > maxSeq) maxSeq = seq
+          } else {
+            corrupted++
+          }
+        } catch {
+          corrupted++
+        }
+      }
+    } catch (err) {
+      console.warn('[project-store] scanChatFile read failed:', err)
+      corrupted++
+    }
+    return { records, maxSeq, corrupted }
+  }
+
+  // ── Corruption recovery evidence (DESKTOP-P0-08) ─────────
+
+  /** projectId:chatId → recovery evidence for the most recent damaged load */
+  private readonly recoveryStats = new Map<
+    string,
+    { corruptedLines: number; backupPath?: string }
+  >()
+
+  /** Copies a damaged JSONL aside once per session so evidence survives rewrites. */
+  private noteCorruption(projectId: string, chatId: string, filePath: string, corrupted: number): void {
+    if (corrupted <= 0) return
+    const key = this.seqKey(projectId, chatId)
+    if (this.recoveryStats.has(key)) {
+      const prev = this.recoveryStats.get(key)!
+      prev.corruptedLines = Math.max(prev.corruptedLines, corrupted)
+      return
+    }
+    let backupPath: string | undefined
+    try {
+      backupPath = `${filePath}.corrupt-${Date.now()}.bak`
+      copyFileSync(filePath, backupPath)
+    } catch (err) {
+      console.warn('[project-store] corrupt chat backup failed:', err)
+      backupPath = undefined
+    }
+    this.recoveryStats.set(key, { corruptedLines: corrupted, ...(backupPath ? { backupPath } : {}) })
+  }
+
+  /**
+   * Recovery evidence for one chat: how many JSONL lines were unreadable on the
+   * last load and where the pre-repair backup lives. The UI can surface
+   * "recovered N messages, M lines were corrupted" from this.
+   */
+  chatRecoveryStats(projectId: string, chatId: string): { corruptedLines: number; backupPath?: string } {
+    const key = this.seqKey(projectId, chatId)
+    const cached = this.recoveryStats.get(key)
+    if (cached) return { ...cached }
+    const filePath = this.chatPath(projectId, chatId)
+    const { corrupted } = this.scanChatFile(filePath)
+    if (corrupted > 0) this.noteCorruption(projectId, chatId, filePath, corrupted)
+    const stats = this.recoveryStats.get(key)
+    return stats ? { ...stats } : { corruptedLines: corrupted }
   }
 
   // ── Index read/write ──────────────────────────────────────
@@ -146,6 +258,65 @@ export class ProjectStore {
   private writeIndex(index: ProjectIndex): void {
     ensureDir(this.baseDir)
     writeJson(this.indexPath(), index)
+  }
+
+  // ── Multi-file transactions (DESKTOP-P0-06) ───────────────
+
+  /**
+   * Atomic multi-file commit: every payload is staged as `<path>.tx.tmp`, then
+   * all renames run. If any rename fails, files already swapped in are restored
+   * from the in-memory snapshot (or deleted when they did not exist before),
+   * pending stage files are removed, and ProjectStoreError is thrown —
+   * index.json / project.json pairs can no longer end up half-committed.
+   */
+  private commitTransaction(writes: Array<{ path: string; data: unknown }>): void {
+    const snapshots = writes.map((w) => ({
+      path: w.path,
+      existed: existsSync(w.path),
+      prior: existsSync(w.path) ? readFileSync(w.path, 'utf8') : null,
+    }))
+    const staged: Array<{ target: string; tmp: string }> = []
+    try {
+      for (const w of writes) {
+        ensureDir(dirname(w.path))
+        const tmp = `${w.path}.tx.tmp`
+        writeFileSync(tmp, JSON.stringify(w.data, null, 2), 'utf8')
+        staged.push({ target: w.path, tmp })
+      }
+    } catch (err) {
+      for (const s of staged) {
+        try {
+          unlinkSync(s.tmp)
+        } catch {
+          /* best-effort cleanup */
+        }
+      }
+      throw new ProjectStoreError('io', `transaction stage failed: ${errMessage(err)}`)
+    }
+    const swapped: Array<{ path: string; existed: boolean; prior: string | null }> = []
+    try {
+      for (const s of staged) {
+        renameSync(s.tmp, s.target)
+        swapped.push(snapshots.find((snap) => snap.path === s.target)!)
+      }
+    } catch (err) {
+      for (const snap of swapped) {
+        try {
+          if (snap.existed && snap.prior !== null) writeFileSync(snap.path, snap.prior, 'utf8')
+          else if (!snap.existed) unlinkSync(snap.path)
+        } catch (restoreErr) {
+          console.error('[project-store] transaction restore failed:', restoreErr)
+        }
+      }
+      for (const s of staged) {
+        try {
+          if (existsSync(s.tmp)) unlinkSync(s.tmp)
+        } catch {
+          /* best-effort cleanup */
+        }
+      }
+      throw new ProjectStoreError('io', `transaction commit failed: ${errMessage(err)}`)
+    }
   }
 
   // ── Project read/write ────────────────────────────────────
@@ -199,16 +370,19 @@ export class ProjectStore {
     const existing = index.fileMap[filePath]
     if (existing) return existing
 
-    // Assign to default
+    // Assign to default; fileMap + project.json commit as one transaction so a
+    // crash between the two writes is repaired instead of diverging.
     index.fileMap[filePath] = 'default'
-    this.writeIndex(index)
-
-    // Update the files list in project.json
     const proj = this.readProject('default')
     if (proj && !proj.files.includes(filePath)) {
       proj.files.push(filePath)
       proj.updatedAt = nowIso()
-      this.writeProject(proj)
+      this.commitTransaction([
+        { path: this.indexPath(), data: index },
+        { path: this.projectJsonPath('default'), data: proj },
+      ])
+    } else {
+      this.writeIndex(index)
     }
     return 'default'
   }
@@ -255,21 +429,28 @@ export class ProjectStore {
     if (oldPath === newPath) return
     const index = this.readIndex()
     const pid = index.fileMap[oldPath]
+    const proj = pid !== undefined ? this.readProject(pid) : null
     if (pid !== undefined) {
       delete index.fileMap[oldPath]
       index.fileMap[newPath] = pid
-      const proj = this.readProject(pid)
       if (proj) {
         proj.files = proj.files.map((f) => (f === oldPath ? newPath : f))
         proj.updatedAt = nowIso()
-        this.writeProject(proj)
       }
     }
     // Old data without a mapping: the chatId was derived from the old path hash; register the mapping under that hash on rename so history keeps up
     const chatId = index.chatIdByPath?.[oldPath] ?? ProjectStore.chatIdForFile(oldPath)
     if (index.chatIdByPath?.[oldPath] !== undefined) delete index.chatIdByPath[oldPath]
     index.chatIdByPath = { ...(index.chatIdByPath ?? {}), [newPath]: chatId }
-    this.writeIndex(index)
+
+    if (proj) {
+      this.commitTransaction([
+        { path: this.indexPath(), data: index },
+        { path: this.projectJsonPath(pid!), data: proj },
+      ])
+    } else {
+      this.writeIndex(index)
+    }
   }
 
   /**
@@ -296,8 +477,11 @@ export class ProjectStore {
   }
 
   /**
-   * Appends one message to the JSONL. Write failures warn silently, never throw.
-   * seq is auto-assigned by the store layer (monotonically increasing).
+   * Appends one message to the JSONL. Write failures are reported through the
+   * returned ProjectStoreResult (and warned) instead of throwing — chat history
+   * is best-effort telemetry — but they are never silently swallowed.
+   * seq is auto-assigned by the store layer (monotonically increasing); each
+   * record also receives a stable `id` UUID.
    * When the record file doesn't exist yet, non-assistant messages are buffered;
    * the file is created and flushed only when the first assistant message arrives.
    */
@@ -305,7 +489,7 @@ export class ProjectStore {
     projectId: string,
     chatId: string,
     msg: Omit<ChatMessage, 'seq' | 'ts'> & { ts?: string },
-  ): void {
+  ): { ok: true; seq: number } | { ok: false; error: string } {
     try {
       const seq = this.nextSeq(projectId, chatId)
       const ts = msg.ts ?? nowIso()
@@ -313,7 +497,7 @@ export class ProjectStore {
         msg.text.length > TEXT_MAX_CHARS
           ? msg.text.slice(0, TEXT_MAX_CHARS) + TEXT_TRUNCATED_MARK
           : msg.text
-      const record: ChatMessage = { seq, ts, role: msg.role, text }
+      const record: ChatMessage = { id: randomUUID(), seq, ts, role: msg.role, text }
       if (msg.fileRef !== undefined) record.fileRef = msg.fileRef
       if (msg.tools && msg.tools.length > 0) {
         // Truncate tool inputs/outputs so one JSONL line can't blow up on a huge payload
@@ -330,51 +514,37 @@ export class ProjectStore {
         const buf = this.pendingFirstWrite.get(key) ?? []
         buf.push(record)
         this.pendingFirstWrite.set(key, buf)
-        return
+        return { ok: true, seq }
       }
       ensureDir(this.chatsDir(projectId))
       const buf = this.pendingFirstWrite.get(key) ?? []
       this.pendingFirstWrite.delete(key)
       const lines = [...buf, record].map((r) => JSON.stringify(r) + '\n').join('')
       appendFileSync(this.chatPath(projectId, chatId), lines, 'utf8')
+      return { ok: true, seq }
     } catch (err) {
       console.warn('[project-store] appendChatMessage failed:', err)
+      return { ok: false, error: errMessage(err) }
     }
   }
 
   /**
    * Reads the most recent `limit` messages (in ascending seq order).
-   * A bad JSONL line is skipped without crashing.
+   * A bad JSONL line is skipped without crashing, counted, and backed up once
+   * (see chatRecoveryStats).
    */
   loadChat(projectId: string, chatId: string, limit = 200): ChatMessage[] {
-    let messages: ChatMessage[] = []
     try {
       const pending = this.pendingFirstWrite.get(this.seqKey(projectId, chatId)) ?? []
       const filePath = this.chatPath(projectId, chatId)
-      messages = [...pending]
-      if (existsSync(filePath)) {
-        const raw = readFileSync(filePath, 'utf8')
-        const lines = raw.split('\n').filter((l) => l.trim())
-        for (const line of lines) {
-          try {
-            const msg = JSON.parse(line) as ChatMessage
-            if (
-              typeof msg.seq === 'number' &&
-              typeof msg.role === 'string' &&
-              typeof msg.text === 'string'
-            ) {
-              messages.push(msg)
-            }
-          } catch {
-            // skip bad lines
-          }
-        }
-      }
+      const { records, corrupted } = this.scanChatFile(filePath)
+      if (corrupted > 0) this.noteCorruption(projectId, chatId, filePath, corrupted)
+      const messages = [...pending, ...records]
       // Sort by seq and take the most recent `limit` entries
       messages.sort((a, b) => a.seq - b.seq)
       return messages.slice(-limit)
     } catch {
-      return messages
+      return []
     }
   }
 
@@ -409,37 +579,44 @@ export class ProjectStore {
   /**
    * Moves chats/<fromId>.jsonl to chats/<toId>.jsonl (possibly across projects).
    * If the target exists, don't overwrite: renumber the source messages' seq and
-   * append them at the target's end (old conversations of a same-named file are kept).
+   * append them at the target's end (old conversations of a same-named file are
+   * kept). Both sides are read with a FULL scan — chats longer than the display
+   * window keep their entire history through a merge (DESKTOP-P0-07).
    */
   private renameOrMergeChat(
     fromProjectId: string,
     fromId: string,
     toProjectId: string,
     toId: string,
-  ): void {
-    if (fromProjectId === toProjectId && fromId === toId) return
+  ): { ok: true; merged: boolean } | { ok: false; error: string } {
+    if (fromProjectId === toProjectId && fromId === toId) return { ok: true, merged: false }
     // The source may still have buffered opening messages: materialize them first (once the file is saved, they should be kept)
     this.flushPending(fromProjectId, fromId)
     const oldPath = this.chatPath(fromProjectId, fromId)
     const newPath = this.chatPath(toProjectId, toId)
     let mergedMaxSeq: number | undefined
+    let merged = false
     try {
       if (existsSync(oldPath)) {
         ensureDir(dirname(newPath))
         if (!existsSync(newPath)) {
           renameSync(oldPath, newPath)
         } else {
-          const existing = this.loadChat(toProjectId, toId, 10_000)
-          let seq = existing.reduce((m, msg) => Math.max(m, msg.seq), -1) + 1
-          const moved = this.loadChat(fromProjectId, fromId, 10_000)
-          const lines = moved.map((m) => JSON.stringify({ ...m, seq: seq++ }) + '\n').join('')
+          // Append-then-unlink ordering: a crash between the two duplicates at
+          // worst re-appends on the next merge attempt, it never loses history.
+          const target = this.scanChatFile(newPath)
+          const source = this.scanChatFile(oldPath)
+          let seq = target.maxSeq
+          const lines = source.records.map((m) => JSON.stringify({ ...m, seq: ++seq }) + '\n').join('')
           if (lines) appendFileSync(newPath, lines, 'utf8')
           unlinkSync(oldPath)
-          mergedMaxSeq = seq - 1
+          mergedMaxSeq = seq
+          merged = true
         }
       }
     } catch (err) {
-      console.warn('[project-store] rebindChat rename failed:', err)
+      console.warn('[project-store] rebindChat merge failed:', err)
+      return { ok: false, error: errMessage(err) }
     }
 
     // Migrate the seq counter (when merged, the renumbered max seq wins)
@@ -451,6 +628,7 @@ export class ProjectStore {
     if (next !== undefined) {
       this.seqCounters.set(this.seqKey(toProjectId, toId), next)
     }
+    return { ok: true, merged }
   }
 
   /**
@@ -490,13 +668,94 @@ export class ProjectStore {
     return this.readIndex().projects
   }
 
+  // ── Crash-recovery repair (DESKTOP-P0-06) ─────────────────
+
+  /**
+   * Reconciles index.json ↔ <project>/project.json ↔ fileMap after a crash
+   * left the trio inconsistent. Idempotent and cheap (readdir + stat);
+   * returns a human-readable repair log for diagnostics.
+   */
+  repairConsistency(): string[] {
+    this.ensureDefaultProject()
+    const repairs: string[] = []
+    const index = this.readIndex()
+    let indexDirty = false
+
+    // 1. Drop index entries whose project directory is gone entirely
+    const liveIds = new Set<string>()
+    const liveProjects: ProjectInfo[] = []
+    for (const info of index.projects) {
+      if (existsSync(this.projectJsonPath(info.id))) {
+        liveProjects.push(info)
+        liveIds.add(info.id)
+      } else if (!existsSync(this.projectDir(info.id)) || readdirSync(this.projectDir(info.id)).length === 0) {
+        // directory missing or empty: nothing to recover, the entry is stale
+        repairs.push(`removed stale index entry: ${info.id}`)
+        indexDirty = true
+      } else {
+        // directory exists without project.json: keep the entry (data may be mid-crash)
+        liveProjects.push(info)
+        liveIds.add(info.id)
+      }
+    }
+
+    // 2. Re-register orphaned project directories that carry a project.json
+    try {
+      for (const entry of readdirSync(this.baseDir)) {
+        if (entry.startsWith('.') || liveIds.has(entry)) continue
+        const data = this.readProject(entry)
+        if (data && data.id === entry) {
+          liveProjects.push({
+            id: data.id,
+            name: data.name,
+            createdAt: data.createdAt,
+            updatedAt: data.updatedAt,
+          })
+          liveIds.add(entry)
+          indexDirty = true
+          repairs.push(`re-registered orphaned project: ${entry}`)
+        }
+      }
+    } catch {
+      /* no baseDir yet */
+    }
+
+    // 3. fileMap entries pointing at dead projects return to default
+    for (const [filePath, pid] of Object.entries(index.fileMap)) {
+      if (pid !== 'default' && !liveIds.has(pid)) {
+        index.fileMap[filePath] = 'default'
+        indexDirty = true
+        repairs.push(`file reassigned to default: ${basename(filePath)}`)
+      }
+    }
+
+    if (indexDirty) {
+      index.projects = liveProjects
+      if (!index.projects.some((p) => p.id === 'default')) {
+        const def = this.readProject('default')
+        if (def) {
+          index.projects.unshift({
+            id: 'default',
+            name: def.name,
+            createdAt: def.createdAt,
+            updatedAt: def.updatedAt,
+          })
+        }
+      }
+      this.writeIndex(index)
+    }
+    return repairs
+  }
+
   // ── P1 extended API ────────────────────────────────────────
 
   /**
    * Lists all projects (with file count + last active time).
+   * Runs the crash-consistency repair first so the listing never shows a
+   * half-deleted or half-moved project.
    */
   listProjectsSummary(): ProjectSummary[] {
-    this.ensureDefaultProject()
+    this.repairConsistency()
     const index = this.readIndex()
     return index.projects.map((info) => {
       const fileCount = this.listProjectFiles(info.id).length
@@ -517,7 +776,7 @@ export class ProjectStore {
 
   /**
    * Lists files that currently exist for a project. Stored paths are historical
-   * records and may outlive files deleted or moved outside GenOffice.
+   * records and may outlive files deleted or moved outside the app.
    */
   listProjectFiles(projectId: string): string[] {
     const proj = this.readProject(projectId)
@@ -532,7 +791,7 @@ export class ProjectStore {
    */
   createProject(name: string): ProjectData {
     const trimmed = name.trim()
-    if (!trimmed) throw new Error('Project name cannot be empty')
+    if (!trimmed) throw new ProjectStoreError('invalid', 'Project name cannot be empty')
     const now = nowIso()
     // Generate a stable yet unique id
     const hash = createHash('sha256')
@@ -548,47 +807,56 @@ export class ProjectStore {
       files: [],
     }
     ensureDir(this.projectDir(id))
-    this.writeProject(data)
     const index = this.readIndex()
     // Append at the end (default always stays first)
     index.projects.push({ id, name: trimmed, createdAt: now, updatedAt: now })
-    this.writeIndex(index)
+    this.commitTransaction([
+      { path: this.projectJsonPath(id), data },
+      { path: this.indexPath(), data: index },
+    ])
     return data
   }
 
   /**
    * Renames a project (the default project cannot be renamed).
+   * project.json and index.json commit as one transaction.
    */
   renameProject(id: string, name: string): void {
-    if (id === 'default') throw new Error('The default project cannot be renamed')
+    if (id === 'default') throw new ProjectStoreError('invalid', 'The default project cannot be renamed')
     const trimmed = name.trim()
-    if (!trimmed) throw new Error('Project name cannot be empty')
-    const now = nowIso()
+    if (!trimmed) throw new ProjectStoreError('invalid', 'Project name cannot be empty')
     const proj = this.readProject(id)
-    if (!proj) throw new Error(`Project does not exist: ${id}`)
+    if (!proj) throw new ProjectStoreError('not-found', `Project does not exist: ${id}`)
+    const now = nowIso()
     proj.name = trimmed
     proj.updatedAt = now
-    this.writeProject(proj)
     const index = this.readIndex()
     const entry = index.projects.find((p) => p.id === id)
     if (entry) {
       entry.name = trimmed
       entry.updatedAt = now
     }
-    this.writeIndex(index)
+    this.commitTransaction([
+      { path: this.projectJsonPath(id), data: proj },
+      { path: this.indexPath(), data: index },
+    ])
   }
 
   /**
    * Soft-deletes a project:
-   * 1. Move the directory into projects/.trash/<id>-<ts>/
+   * 1. Move the directory into projects/.trash/<id>-<ts>/ — a failed move
+   *    aborts the whole delete (the old code removed the index entry anyway,
+   *    orphaning the directory)
    * 2. Reassign all of its files in fileMap back to default
    * 3. Remove the project from index.projects
+   * Steps 2+3 commit as one transaction.
    * The default project cannot be deleted.
    */
   deleteProject(id: string): void {
-    if (id === 'default') throw new Error('The default project cannot be deleted')
+    if (id === 'default') throw new ProjectStoreError('invalid', 'The default project cannot be deleted')
     const proj = this.readProject(id)
-    if (!proj) throw new Error(`Project does not exist: ${id}`)
+    if (!proj) throw new ProjectStoreError('not-found', `Project does not exist: ${id}`)
+    this.ensureDefaultProject()
 
     // 1. Soft-delete the directory
     const src = this.projectDir(id)
@@ -596,14 +864,15 @@ export class ProjectStore {
     const trashDir = join(this.baseDir, '.trash')
     ensureDir(trashDir)
     const dst = join(trashDir, `${id}-${ts}`)
-    try {
-      if (existsSync(src)) renameSync(src, dst)
-    } catch (err) {
-      console.warn('[project-store] deleteProject rename to trash failed:', err)
+    if (existsSync(src)) {
+      try {
+        renameSync(src, dst)
+      } catch (err) {
+        throw new ProjectStoreError('io', `move to trash failed: ${errMessage(err)}`)
+      }
     }
 
-    // 2. Reassign this project's files in fileMap back to default
-    this.ensureDefaultProject()
+    // 2+3. fileMap reassignment + index update commit as one transaction
     const index = this.readIndex()
     const movedFiles: string[] = []
     for (const [filePath, pid] of Object.entries(index.fileMap)) {
@@ -612,28 +881,31 @@ export class ProjectStore {
         movedFiles.push(filePath)
       }
     }
-    // Update the default project.json
-    if (movedFiles.length > 0) {
-      const defaultProj = this.readProject('default')
-      if (defaultProj) {
-        for (const f of movedFiles) {
-          if (!defaultProj.files.includes(f)) defaultProj.files.push(f)
-        }
-        defaultProj.updatedAt = nowIso()
-        this.writeProject(defaultProj)
-      }
-    }
-
-    // 3. Remove the index.projects entry
     index.projects = index.projects.filter((p) => p.id !== id)
-    this.writeIndex(index)
+
+    const defaultProj = movedFiles.length > 0 ? this.readProject('default') : null
+    if (defaultProj) {
+      for (const f of movedFiles) {
+        if (!defaultProj.files.includes(f)) defaultProj.files.push(f)
+      }
+      defaultProj.updatedAt = nowIso()
+      this.commitTransaction([
+        { path: this.indexPath(), data: index },
+        { path: this.projectJsonPath('default'), data: defaultProj },
+      ])
+    } else {
+      this.writeIndex(index)
+    }
   }
 
   /**
    * Moves a file from its current project into a target project:
-   * 1. Update fileMap
-   * 2. Update the files lists in both project.json files
-   * 3. Move the corresponding chat's jsonl file to the new project directory
+   * 1. fileMap + both project.json files commit as ONE transaction (the old
+   *    sequential writes could leave the file registered in two projects after
+   *    a mid-sequence failure)
+   * 2. The chat's JSONL then moves best-effort: a failed move leaves the chat
+   *    under the old project directory (recoverable on the next move) instead
+   *    of corrupting the mapping.
    */
   moveFileToProject(filePath: string, targetProjectId: string): void {
     this.ensureDefaultProject()
@@ -644,26 +916,26 @@ export class ProjectStore {
 
     // The target project must exist
     const targetProj = this.readProject(targetProjectId)
-    if (!targetProj) throw new Error(`Target project does not exist: ${targetProjectId}`)
+    if (!targetProj) throw new ProjectStoreError('not-found', `Target project does not exist: ${targetProjectId}`)
 
-    // 1. Update fileMap
+    // 1. Metadata transaction
     index.fileMap[filePath] = targetProjectId
-    this.writeIndex(index)
-
-    // 2. Update fromProject.files
     const fromProj = this.readProject(fromProjectId)
     if (fromProj) {
       fromProj.files = fromProj.files.filter((f) => f !== filePath)
       fromProj.updatedAt = nowIso()
-      this.writeProject(fromProj)
     }
-
-    // 3. Update targetProject.files
     if (!targetProj.files.includes(filePath)) targetProj.files.push(filePath)
     targetProj.updatedAt = nowIso()
-    this.writeProject(targetProj)
 
-    // 4. Move the corresponding chat's JSONL (materialize buffered opening messages first)
+    const writes: Array<{ path: string; data: unknown }> = [
+      { path: this.indexPath(), data: index },
+      { path: this.projectJsonPath(targetProjectId), data: targetProj },
+    ]
+    if (fromProj) writes.push({ path: this.projectJsonPath(fromProjectId), data: fromProj })
+    this.commitTransaction(writes)
+
+    // 2. Chat move (best-effort, after the metadata commit)
     const chatId = this.chatIdForPath(filePath)
     this.flushPending(fromProjectId, chatId)
     const srcChatPath = this.chatPath(fromProjectId, chatId)
@@ -677,7 +949,7 @@ export class ProjectStore {
       console.warn('[project-store] moveFileToProject chat rename failed:', err)
     }
 
-    // 5. Migrate the seq counter cache
+    // 3. Migrate the seq counter cache
     const oldKey = this.seqKey(fromProjectId, chatId)
     const newKey = this.seqKey(targetProjectId, chatId)
     const cur = this.seqCounters.get(oldKey)

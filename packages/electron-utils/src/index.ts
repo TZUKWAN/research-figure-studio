@@ -33,6 +33,25 @@ export {
 } from './safe-remote-url'
 export { fetchRemoteImage, remoteImageHeaders } from './remote-image'
 export {
+  assertBoolean,
+  assertBoundedString,
+  assertEnum,
+  assertHttpUrl,
+  assertPlainObject,
+  assertSafeInt,
+  assertString,
+  assertStringArray,
+  assertTrustedIpcSender,
+  checkFilePath,
+  isTrustedIpcSender,
+  isTrustedRendererUrl,
+  type FilePathCheckOptions,
+  type FilePathCheckResult,
+  type SenderTrustOptions,
+  type TrustedSenderEvent,
+  type UrlPolicy,
+} from './ipc-validators'
+export {
   buildPrintableHtml,
   printHtmlToPdf,
   sanitizePrintableBody,

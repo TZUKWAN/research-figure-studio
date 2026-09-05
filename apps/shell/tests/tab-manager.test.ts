@@ -120,7 +120,8 @@ describe('TabManager in the slides-only shell', () => {
     expect(homeApi).not.toMatch(/newDoc|newSheet|newMarkdown|newPdf/)
     expect(preload).not.toMatch(/newDoc|newSheet|newMarkdown|newPdf/)
     expect(strings).not.toMatch(/^\s+(newDoc|newSheet|newMarkdown|newPdf|filterPdf|filterMd):/m)
-    expect(main).not.toMatch(
+    const homeStrings = readShellSource('main/home-strings.ts')
+    expect(homeStrings).not.toMatch(
       /^\s*(menuNewDoc|menuNewSheet|menuNewMarkdown|menuNewPdf|untitledSheet|untitledDoc|untitledMarkdown|untitledPdf|filterWord|filterExcel|filterPpt|filterMarkdown|filterPdf):/m,
     )
     expect(tabsApi).toContain("export type TabKind = 'home' | 'slides'")
@@ -133,14 +134,19 @@ describe('TabManager in the slides-only shell', () => {
     )
     expect(appFrame).not.toMatch(/docs\/sheets/)
     expect(main).not.toMatch(/docs and sheets modules|apps\/docs\/out|apps\/sheets\/out/)
-    expect(main).toMatch(/const OPEN_DIALOG_EXTENSIONS = \[\s*'pptx',?\s*\]/)
-    expect(main).toMatch(/ipcMain\.handle\(HOME_CHANNELS\.recents/)
-    expect(main).toMatch(/ipcMain\.handle\(HOME_CHANNELS\.starred/)
-    expect(main).toMatch(/ipcMain\.handle\(HOME_CHANNELS\.statPaths/)
-    expect(main).toMatch(/ipcMain\.handle\(HOME_CHANNELS\.toggleStar/)
-    expect(main).toMatch(/ipcMain\.handle\(HOME_CHANNELS\.removeRecent/)
-    expect(main).toMatch(/HOME_CHANNELS\.getDefaultSaveDir/)
-    expect(main).toMatch(/HOME_CHANNELS\.pickDefaultSaveDir/)
+    // Handlers moved into main/ipc/* (God-file split); the open-dialog filter
+    // single source of truth lives in main/file-routing.ts now.
+    const fileRouting = readShellSource('main/file-routing.ts')
+    const homeFileIpc = readShellSource('main/ipc/home-file-ipc.ts')
+    const preferencesIpc = readShellSource('main/ipc/preferences-ipc.ts')
+    expect(fileRouting).toMatch(/const OPEN_DIALOG_EXTENSIONS = \[\s*'pptx',?\s*\]/)
+    expect(homeFileIpc).toMatch(/ipcMain\.handle\(HOME_CHANNELS\.recents/)
+    expect(homeFileIpc).toMatch(/ipcMain\.handle\(HOME_CHANNELS\.starred/)
+    expect(homeFileIpc).toMatch(/ipcMain\.handle\(HOME_CHANNELS\.statPaths/)
+    expect(homeFileIpc).toMatch(/ipcMain\.handle\(HOME_CHANNELS\.toggleStar/)
+    expect(homeFileIpc).toMatch(/ipcMain\.handle\(HOME_CHANNELS\.removeRecent/)
+    expect(preferencesIpc).toMatch(/HOME_CHANNELS\.getDefaultSaveDir/)
+    expect(preferencesIpc).toMatch(/HOME_CHANNELS\.pickDefaultSaveDir/)
   })
 
   it('starts with only the active, non-closable Home tab', () => {

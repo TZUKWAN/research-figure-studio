@@ -635,7 +635,7 @@ export async function savePptx(opened: OpenedPptx): Promise<Uint8Array> {
 }
 
 /**
- * Same output as savePptx, written straight to `filePath`.
+ * Same output as savePptx, written atomically to `filePath`.
  *
  * Prefer this for anything that lands on disk: savePptx has to assemble the whole
  * package into one contiguous buffer, which on a large deck fails outright with
@@ -643,17 +643,36 @@ export async function savePptx(opened: OpenedPptx): Promise<Uint8Array> {
  * time. JSZip throws stream errors from inside its own scheduled callbacks, so the
  * stream's 'error' event — not just the returned promise — has to be handled or the
  * throw escapes as an uncaught exception and takes the process down.
+ *
+ * Crash-safe write (audit DESKTOP-P1-12): the stream lands in a temp file next
+ * to the target and is renamed into place only after the pipeline succeeded, so
+ * a failed or interrupted save can never leave the previous good file half
+ * overwritten. On any failure the temp file is removed and the error rethrown
+ * with the original file untouched.
  */
 export async function savePptxToFile(opened: OpenedPptx, filePath: string): Promise<void> {
-  const { createWriteStream } = await import('node:fs')
+  const { createWriteStream, renameSync, unlinkSync } = await import('node:fs')
   const { pipeline } = await import('node:stream/promises')
+  const tmpPath = `${filePath}.${process.pid}.tmp`
   const source = buildZip(opened).generateNodeStream({
     type: 'nodebuffer',
     compression: 'DEFLATE',
     compressionOptions: { level: 6 },
     streamFiles: true,
   })
-  await pipeline(source, createWriteStream(filePath))
+  try {
+    await pipeline(source, createWriteStream(tmpPath))
+    // rename replaces an existing target on all platforms (Windows: MoveFileEx
+    // with REPLACE_EXISTING), so Save/Save As over an old deck stay atomic.
+    renameSync(tmpPath, filePath)
+  } catch (err) {
+    try {
+      unlinkSync(tmpPath)
+    } catch {
+      /* the temp file may never have been created; the original is untouched */
+    }
+    throw err
+  }
 }
 
 /**

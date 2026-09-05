@@ -1,7 +1,9 @@
-export { ProjectStore } from './store.js'
+export { ProjectStore, ProjectStoreError } from './store.js'
 export type {
   ChatMessage,
   ChatMeta,
+  ChatRecoveryStats,
+  ProjectStoreResult,
   ProjectData,
   ProjectIndex,
   ProjectInfo,

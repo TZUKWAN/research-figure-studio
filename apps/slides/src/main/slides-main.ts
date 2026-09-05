@@ -22,7 +22,7 @@ import type { WebContents } from 'electron'
 import { execFile } from 'node:child_process'
 import { readFile, writeFile, rm, stat, mkdir, open } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
-import { appendFileSync, existsSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
 import { userInfo } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { cleanupExpiredGeneratedPages } from './generated-page-temp'
@@ -260,6 +260,7 @@ const lastSlidePaste = new Map<number, { afterIndex: number; undoLen: number }>(
 const CLOUD_PAGE_PREFIX = 'cloudpptx:'
 const issuedCloudPages = new Set<string>()
 const AI_RUN_STALE_ERROR = 'stale AI run'
+import { appendBoundedLine } from './bounded-append-log'
 import { registerPresenterIpc } from './presenter-show'
 import { registerAttachmentIpc } from './attachments-ipc'
 
@@ -429,20 +430,12 @@ const RECENT_PATH = () => join(app.getPath('userData'), 'slides-recent.json')
 
 // ── Persistent export diagnostics (acceptance ISS-04): the status bar is
 // transient, so PNG-export failures were invisible. Every export stage logs
-// to userData/export-diag.log, surviving until the user reports a problem. ──
+// to userData/export-diag.log, surviving until the user reports a problem.
+// Size-bounded with tail-preserving rotation so long-term use can't bloat the
+// user's profile (audit DESKTOP-P1-11). ──
 const EXPORT_DIAG_LOG = () => join(app.getPath('userData'), 'export-diag.log')
 function appendExportDiag(line: string): void {
-  try {
-    mkdirSync(dirname(EXPORT_DIAG_LOG()), { recursive: true })
-    appendFileSync(
-      EXPORT_DIAG_LOG(),
-      `[${new Date().toISOString()}] ${line}
-`,
-      'utf-8',
-    )
-  } catch {
-    /* diagnostics must never break the export path */
-  }
+  appendBoundedLine(EXPORT_DIAG_LOG(), `[${new Date().toISOString()}] ${line}`)
 }
 
 /** Comment author name: system username, falling back to a generic "User" label. */
@@ -4616,12 +4609,32 @@ async function applyMainProcessProxy(): Promise<void> {
     // dispatcher below — forward the proxy to them via env
     setGskProxyUrl(proxyUrl)
     try {
-      const { ProxyAgent, setGlobalDispatcher } = await import('undici')
-      setGlobalDispatcher(new ProxyAgent(proxyUrl))
+      // EnvHttpProxyAgent instead of ProxyAgent so NO_PROXY is honored: a
+      // user-configured local model endpoint (Ollama / LM Studio on
+      // 127.0.0.1) must never be routed through the corporate proxy
+      // (audit DESKTOP-P1-08).
+      const bypass = new Set(
+        (process.env.NO_PROXY ?? process.env.no_proxy ?? '')
+          .split(',')
+          .map((host) => host.trim())
+          .filter(Boolean),
+      )
+      for (const host of ['localhost', '127.0.0.1', '::1']) bypass.add(host)
+      const noProxy = [...bypass].join(',')
+      process.env.NO_PROXY = noProxy
+      process.env.no_proxy = noProxy
+      process.env.HTTPS_PROXY = proxyUrl
+      process.env.HTTP_PROXY = proxyUrl
+      const { EnvHttpProxyAgent, setGlobalDispatcher } = await import('undici')
+      setGlobalDispatcher(new EnvHttpProxyAgent())
       // strip user:pass credentials before logging
-      console.log('[proxy] main-process fetch via', proxyUrl.replace(/\/\/[^@/]*@/, '//***@'))
+      console.log(
+        '[proxy] main-process fetch via',
+        proxyUrl.replace(/\/\/[^@/]*@/, '//***@'),
+        '(localhost bypassed)',
+      )
     } catch (e) {
-      console.warn('[proxy] failed to set ProxyAgent:', e)
+      console.warn('[proxy] failed to set proxy dispatcher:', e)
     }
   }
   const envProxy =

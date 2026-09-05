@@ -109,4 +109,37 @@ describe('savePptxToFile error containment', () => {
     }
     expect(uncaught).toBeNull()
   })
+
+  // Crash-safe save (audit DESKTOP-P1-12): the previous good file must survive
+  // a failed write byte-identical, and no temp file may be left behind.
+  it('leaves the previous file untouched and no temp residue when the write fails', async () => {
+    const { existsSync, readdirSync, writeFileSync } = await import('node:fs')
+    const opened = await openPptx(fx('01_standard_business.pptx'))
+    const dir = mkdtempSync(join(tmpdir(), 'save-atomic-'))
+    const target = join(dir, 'deck.pptx')
+    await savePptxToFile(opened, target)
+    const goodBytes = readFileSync(target)
+
+    writeFileSync(target, goodBytes) // pin the known-good bytes
+    await expect(
+      savePptxToFile(opened, join(dir, 'missing-dir', 'out.pptx')),
+    ).rejects.toThrow()
+    expect(readFileSync(target).equals(goodBytes)).toBe(true)
+    const residue = readdirSync(dir).filter((name) => name.endsWith('.tmp'))
+    expect(residue).toEqual([])
+    expect(existsSync(join(dir, 'missing-dir'))).toBe(false)
+  })
+
+  it('overwrites an existing target in place and leaves no temp files', async () => {
+    const { readdirSync } = await import('node:fs')
+    const opened = await openPptx(fx('01_standard_business.pptx'))
+    const dir = mkdtempSync(join(tmpdir(), 'save-atomic-'))
+    const target = join(dir, 'deck.pptx')
+    await savePptxToFile(opened, target)
+    const first = readFileSync(target)
+    await savePptxToFile(opened, target)
+    const second = readFileSync(target)
+    expect(second.equals(first)).toBe(true)
+    expect(readdirSync(dir)).toEqual(['deck.pptx'])
+  })
 })
