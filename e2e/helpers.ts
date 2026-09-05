@@ -25,6 +25,8 @@ interface LaunchOptions {
   lang?: string
   /** pre-seed app-settings.json with onboardingSeen=true to start at the home screen */
   onboardingSeen?: boolean
+  /** pre-seed ai-settings.json (BYOK) — e.g. a deterministic stub provider */
+  aiSettings?: string
   /** subdir of e2e/artifacts to store this launch's video in */
   videoDir: string
   /** absolute document path passed as argv, opened in an editor tab on launch */
@@ -47,6 +49,9 @@ export async function launchShell(options: LaunchOptions): Promise<LaunchedApp> 
       join(userDataDir, 'app-settings.json'),
       JSON.stringify({ onboardingSeen: true }),
     )
+  }
+  if (options.aiSettings) {
+    await writeFile(join(userDataDir, 'ai-settings.json'), options.aiSettings)
   }
   const require = createRequire(join(SHELL_DIR, 'package.json'))
   const executablePath = require('electron') as unknown as string
