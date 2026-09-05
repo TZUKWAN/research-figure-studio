@@ -2,7 +2,7 @@
   "name": "genoffice",
   "version": "0.1.0",
   "private": true,
-  "description": "AI-native PowerPoint-compatible presentation editor",
+  "description": "Metis Diagram: AI-native research figure and presentation canvas",
   "license": "Apache-2.0",
   "engines": {
     "node": ">=22.12.0",
@@ -10,7 +10,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/genspark-ai/genoffice.git"
+    "url": "git+https://github.com/TZUKWAN/research-figure-studio.git"
   },
   "workspaces": [
     "apps/*",

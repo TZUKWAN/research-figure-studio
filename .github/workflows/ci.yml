@@ -7,7 +7,7 @@ name: CI
 
 on:
   push:
-    branches: [main, 'dev_*', 'release_*']
+    branches: [main, 'dev_*', 'release_*', 'refactor/*', 'audit/*', 'fix/*']
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -139,3 +139,67 @@ jobs:
             e2e/artifacts
             e2e/test-results
           retention-days: 7
+
+  windows-integration:
+    # Windows-specific regressions ship silently when CI is Linux-only: the
+    # PNG-export bug was a backslash path separator (audit DESKTOP-P0-11).
+    # No Electron E2E here — the suite below covers the path/file/export/persistence
+    # code that actually differs on Windows, at a fraction of the runtime.
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests (path/file/export/persistence-sensitive workspaces)
+        run: |
+          npm run test -w @genoffice/electron-utils
+          npm run test -w @genoffice/project-store
+          npm run test -w @genoffice/pptx-engine
+          npm run test -w @genoffice/pptx-render
+          npm run test -w @genoffice/file-parse
+          npm run test -w @genoffice/i18n
+          npm run test -w @genoffice/shell
+          npm run test -w @genoffice/slides
+
+  security:
+    # Dependency audit as an information gate with an explicit severity policy:
+    # transient moderate dev-dependency advisories must not block all
+    # development, so only high/critical failures fail the job
+    # (audit DESKTOP-P1-18). PR-scoped dependency review on top.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Dependency review (PRs)
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@v4 # tag: repo pins by SHA where the SHA is verified; keep v4 until pinned
+        with:
+          fail-on-severity: high
+
+      - name: npm audit (high/critical gate)
+        run: npm audit --audit-level=high
