@@ -11,11 +11,13 @@ export const RELATION_TYPES = [
   'process',
   'data-flow',
   'transformation',
-  'association',
+  'promotion',
+  'inhibition',
   'mediation',
   'moderation',
   'feedback',
-  'inhibition',
+  'hypothesis',
+  'association',
   'mapping',
   'hierarchy',
   'bidirectional',
@@ -123,9 +125,10 @@ function normText(value: unknown): string {
 function defaultPresentation(relation: RelationType, role: EdgeRouteRole): RelationPresentation {
   if (relation === 'feedback' || role === 'feedback') return 'feedback-loop'
   if (relation === 'inhibition') return 'inhibition'
-  if (relation === 'association') return 'line'
+  if (relation === 'moderation' || relation === 'hypothesis') return 'dashed-arrow'
+  if (relation === 'association' || relation === 'mapping' || relation === 'bidirectional')
+    return 'line'
   if (relation === 'hierarchy') return 'containment'
-  if (relation === 'moderation') return 'dashed-arrow'
   return 'arrow'
 }
 

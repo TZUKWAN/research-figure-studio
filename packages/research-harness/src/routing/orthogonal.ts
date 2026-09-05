@@ -18,13 +18,8 @@
  *  5. Fan-in/fan-out: ports are spread by lane offset; a real junction is
  *     emitted for >=3 sources into the same target.
  */
-import type { Rect } from './geometry.js'
-import { anchorPoint, ANCHOR_IDX, type AnchorSide } from './router.js'
-
-export interface Pt {
-  x: number
-  y: number
-}
+import type { Pt, Rect } from './geometry.js'
+import { anchorPoint, type AnchorSide } from './router.js'
 
 export interface RouteCandidate {
   kind: 'straight' | 'elbow'
@@ -83,10 +78,6 @@ function poly(points: Pt[]): Array<{ a: Pt; b: Pt }> {
   const segs: Array<{ a: Pt; b: Pt }> = []
   for (let i = 0; i + 1 < points.length; i++) segs.push({ a: points[i]!, b: points[i + 1]! })
   return segs
-}
-
-function axisAligned(segments: Array<{ a: Pt; b: Pt }>): boolean {
-  return segments.every((s) => s.a.x === s.b.x || s.a.y === s.b.y)
 }
 
 function segIntersect(s1: { a: Pt; b: Pt }, s2: { a: Pt; b: Pt }): boolean {

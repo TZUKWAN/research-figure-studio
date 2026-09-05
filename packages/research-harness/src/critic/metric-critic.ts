@@ -1,12 +1,12 @@
 /**
- * Visual/Metric Critic (Phase 7, P0 rewrite). Two separated layers:
+ * Visual/Metric Critic (QA deep-fix rewrite). Two separated layers:
  *
  *  1. HARD GATES — boolean feasibility. Any failure blocks delivery and maps
  *     to a repair class. Gates are never averaged into the score.
  *  2. SOFT SCORES — a weighted 0–10 rubric whose weights sum to exactly 1.0.
- *     Every weighted metric is real (computed from placements/edges/routes);
- *     no constant placeholders. Additional diagnostics (density, spine
- *     clarity, connector naturalness) are reported but not weighted.
+ *     Every weighted metric is computed from placements/edges/routes;
+ *     metrics whose required input was not supplied report a NEUTRAL 8 and
+ *     say so in `metricNotes` instead of inventing a number.
  *
  * Verdict semantics (stable contract):
  *   semantic hard failure or structural intent failure → RECOMPOSE
@@ -15,30 +15,54 @@
  *   otherwise thresholded on the weighted overall
  */
 import type { SolveResult } from '../constraints/solver.js'
-import { edgeCrossingCount, connectorNodeIntersections, routeEdges } from '../routing/router.js'
+import { routeEdges } from '../routing/router.js'
 
 import type { FigureEdgesInput } from '../composition/candidate.js'
 import type { RoutedEdge } from '../routing/router.js'
 import { anchorPoint } from '../routing/router.js'
-import type { Rect } from '../routing/geometry.js'
+import type { Rect, Pt, Segment } from '../routing/geometry.js'
+import { segmentContact, segmentIntersectsRect } from '../routing/geometry.js'
 import { auditIntent } from './intent.js'
 import { criticInfoDensity } from './info-density.js'
+import { relationSemantic } from '../semantic/relation-semantics.js'
+import { familyProfileFor, fillScore } from './family-quality.js'
+import type { FigureFamily } from '../contract/figure-contract.js'
+import {
+  resolveReadingFlow,
+  readingPathPositions,
+  directionalProgressById,
+} from './reading-flow.js'
+import { routeNaturalness } from './route-naturalness.js'
 
-type Pt = { x: number; y: number }
+/** Segment tagged with its route + index so legal contacts can be excluded. */
+interface TaggedSegment extends Segment {
+  routeKey: string
+  segmentIndex: number
+}
 
-function routedSegments(route: RoutedEdge, rects: Map<string, Rect>): Array<{ a: Pt; b: Pt }> {
+/**
+ * Flatten a route into axis-aligned segments with anchor truth from the rects.
+ * Shared by the crossing audit and the node-intersection audit.
+ */
+export function routedSegments(route: RoutedEdge, rects: Map<string, Rect>): TaggedSegment[] {
   if (route.status !== 'routed' || !route.start || !route.end) return []
   const from = rects.get(route.fromId)
   const to = rects.get(route.toId)
   if (!from || !to) return []
   const sp = anchorPoint(from, route.start.side)
   const ep = anchorPoint(to, route.end.side)
-  if (route.kind === 'straight') return [{ a: sp, b: ep }]
+  const tag = (a: Pt, b: Pt, segmentIndex: number): TaggedSegment => ({
+    a,
+    b,
+    routeKey: route.key,
+    segmentIndex,
+  })
+  if (route.kind === 'straight') return [tag(sp, ep, 0)]
   if (route.routeY !== undefined) {
     return [
-      { a: sp, b: { x: sp.x, y: route.routeY } },
-      { a: { x: sp.x, y: route.routeY }, b: { x: ep.x, y: route.routeY } },
-      { a: { x: ep.x, y: route.routeY }, b: ep },
+      tag(sp, { x: sp.x, y: route.routeY }, 0),
+      tag({ x: sp.x, y: route.routeY }, { x: ep.x, y: route.routeY }, 1),
+      tag({ x: ep.x, y: route.routeY }, ep, 2),
     ]
   }
   const horizontalStart = route.start.side === 'right' || route.start.side === 'left'
@@ -46,72 +70,83 @@ function routedSegments(route: RoutedEdge, rects: Map<string, Rect>): Array<{ a:
   if (horizontalStart && horizontalEnd) {
     const midX = (sp.x + ep.x) / 2
     return [
-      { a: sp, b: { x: midX, y: sp.y } },
-      { a: { x: midX, y: sp.y }, b: { x: midX, y: ep.y } },
-      { a: { x: midX, y: ep.y }, b: ep },
+      tag(sp, { x: midX, y: sp.y }, 0),
+      tag({ x: midX, y: sp.y }, { x: midX, y: ep.y }, 1),
+      tag({ x: midX, y: ep.y }, ep, 2),
     ]
   }
   if (!horizontalStart && !horizontalEnd) {
     const midY = (sp.y + ep.y) / 2
     return [
-      { a: sp, b: { x: sp.x, y: midY } },
-      { a: { x: sp.x, y: midY }, b: { x: ep.x, y: midY } },
-      { a: { x: ep.x, y: midY }, b: ep },
+      tag(sp, { x: sp.x, y: midY }, 0),
+      tag({ x: sp.x, y: midY }, { x: ep.x, y: midY }, 1),
+      tag({ x: ep.x, y: midY }, ep, 2),
     ]
   }
   if (horizontalStart) {
     const corner = { x: ep.x, y: sp.y }
-    return [
-      { a: sp, b: corner },
-      { a: corner, b: ep },
-    ]
+    return [tag(sp, corner, 0), tag(corner, ep, 1)]
   }
   const corner = { x: sp.x, y: ep.y }
-  return [
-    { a: sp, b: corner },
-    { a: corner, b: ep },
-  ]
+  return [tag(sp, corner, 0), tag(corner, ep, 1)]
 }
 
-function segIntersect2(s1: { a: Pt; b: Pt }, s2: { a: Pt; b: Pt }): boolean {
-  const d = (p1: Pt, p2: Pt, p3: Pt) =>
-    (p2.x - p1.x) * (p3.y - p1.y) - (p2.y - p1.y) * (p3.x - p1.x)
-  const d1 = d(s1.a, s1.b, s2.a)
-  const d2 = d(s1.a, s1.b, s2.b)
-  const d3 = d(s2.a, s2.b, s1.a)
-  const d4 = d(s2.a, s2.b, s1.b)
-  return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))
+export interface TypographySignal {
+  /** resolved on-canvas font sizes (pt) */
+  titlePt: number
+  detailPt: number
+  /** wrapped line counts at the solved box width */
+  titleLines: number
+  detailLines: number
+  /** lines the node could still show before clamping (capacity) */
+  maxTitleLines: number
+  maxDetailLines: number
+  /** px height the text block needs when unclamped */
+  textBlockH: number
+  padY: number
 }
 
 export interface CriticScores {
   // ── weighted rubric (CRITIC_WEIGHTS sums to exactly 1.0) ──
-  /** relation coverage + graph honesty: declared connectors realized, no geometry lies */
+  /** composite: relation realization + direction correctness + sign preservation */
   scientificFidelity: number
   /** required evidence visible on canvas (mustShow / node coverage) */
   evidenceCompleteness: number
-  /** visual center dominance + monotone reading progress: the 5-second test */
+  /** visual center dominance + directional reading progress: the 5-second test */
   fiveSecondClarity: number
   /** importance ↔ area rank correlation */
   visualHierarchy: number
-  /** canvas fill band: neither empty nor overloaded */
+  /** family-profiled fill band + focal expectation (NOT a universal 0.15) */
   compositionQuality: number
-  /** crossings / node intersections / anchor-side naturalness */
+  /** crossings / node intersections / orientation-free route naturalness */
   relationClarity: number
-  /** measurable readability proxy: no oversized wide nodes at shared rank */
+  /** measurable readability: real font pt, lines, overflow, occupancy */
   typography: number
-  /** quadrant balance of occupied canvas */
+  /** hull margins + area-density distribution relative to declared balance */
   whitespaceBalance: number
-  /** anti card-wall: equal-size averaging penalized when importance varies */
+  /** anti card-wall: tolerance-binned size clustering vs importance spread */
   visualRestraint: number
-  /** every semantic node placed and reachable as a distinct editable element */
-  editability: number
+  /**
+   * graph addressability: every semantic node is a distinct placed element.
+   * NOT PPTX editability — real editability is audited post-render.
+   * @deprecated renamed from `editability`; alias kept one release.
+   */
+  structuralAddressability: number
   // ── real diagnostics (reported, NOT weighted) ──
+  /** informative text tokens per canvas area (from the plan) */
   informationDensity: number
-  contentDensity: number
   primaryClarity: number
   connectorNaturalness: number
   groupingClarity: number
   overall: number
+}
+
+/** Deprecated alias kept for one release; identical value, weaker meaning. */
+export interface DeprecatedScoreAliases {
+  /** @deprecated use `structuralAddressability` */
+  editability: number
+  /** @deprecated merged into `informationDensity` (same real metric now) */
+  contentDensity: number
 }
 
 export type CriticVerdictLevel = 'PASS' | 'ROUTE_FIX' | 'LOCAL_LAYOUT_FIX' | 'RECOMPOSE'
@@ -137,13 +172,15 @@ export interface HardGateResult {
 }
 
 export interface CriticVerdict {
-  scores: CriticScores
+  scores: CriticScores & DeprecatedScoreAliases
   verdict: CriticVerdictLevel
   gateIssues: string[]
   /** boolean feasibility gates; any fail blocks delivery regardless of score */
   hardGates: HardGateResult[]
   hardPass: boolean
   decisions?: CriticDecision[]
+  /** which metrics ran on real input vs neutral fallback — auditability */
+  metricNotes?: string[]
   /** edges to re-route when verdict === 'ROUTE_FIX' */
   edgeIds?: string[]
   /** human-readable dominant reason for the verdict */
@@ -167,6 +204,12 @@ export interface CriticInput {
   routed?: RoutedEdge[]
   /** venue/contract-driven PASS threshold (default 7.5) */
   passThreshold?: number
+  /** figure family selecting the composition quality profile */
+  family?: FigureFamily
+  /** per-node measurable typography signals keyed by node id (QA-P0-01) */
+  typography?: Map<string, TypographySignal>
+  /** effective final font floor context: final print width (mm) */
+  finalWidthMm?: number
 }
 
 const CONNECTOR_PRESENTATIONS = new Set([
@@ -178,6 +221,11 @@ const CONNECTOR_PRESENTATIONS = new Set([
   'junction',
 ])
 
+const SIGN_PRESENTATION: Record<string, string> = {
+  inhibition: 'inhibition',
+  feedback: 'feedback-loop',
+}
+
 /**
  * Soft rubric weights. MUST sum to exactly 1.0 — enforced by a unit test.
  * Every entry is a real computed metric; no constant placeholders.
@@ -185,12 +233,7 @@ const CONNECTOR_PRESENTATIONS = new Set([
 export const CRITIC_WEIGHTS: Record<
   keyof Omit<
     CriticScores,
-    | 'overall'
-    | 'informationDensity'
-    | 'contentDensity'
-    | 'primaryClarity'
-    | 'connectorNaturalness'
-    | 'groupingClarity'
+    'overall' | 'informationDensity' | 'primaryClarity' | 'connectorNaturalness' | 'groupingClarity'
   >,
   number
 > = {
@@ -203,61 +246,25 @@ export const CRITIC_WEIGHTS: Record<
   typography: 0.08,
   whitespaceBalance: 0.05,
   visualRestraint: 0.04,
-  editability: 0.03,
+  structuralAddressability: 0.03,
 }
+
+/** px tolerance for tangential contact with a node's exclusion zone. */
+const NODE_PAD_PX = 8
 
 export function criticVerdict(input: CriticInput): CriticVerdict {
   const placements = input.solve.placements
   const rects = new Map<string, Rect>(placements.map((p) => [p.id, p]))
-  const routed = routeEdges(
-    input.edges.map((edge, index) => ({
-      key: `e${index}`,
-      fromId: edge.from,
-      toId: edge.to,
-      role: edge.role,
-      relation: edge.relation,
-    })),
-    rects,
-  )
-  let crossings = 0
-  const withArea = placements.map((p) => ({
-    area: p.w * p.h,
-    importance: input.importance.get(p.id) ?? 0.5,
-  }))
-  const intersections: Array<{ key: string; nodeId: string }> = []
-  if (input.routed) {
-    const segs = input.routed.flatMap((route) => routedSegments(route, rects))
-    for (let i = 0; i < segs.length; i++) {
-      for (let j = i + 1; j < segs.length; j++) {
-        if (segIntersect2(segs[i]!, segs[j]!)) crossings++
-      }
-    }
-    const pad = 8
-    for (const route of input.routed) {
-      for (const seg of routedSegments(route, rects)) {
-        for (const [id, rect] of rects) {
-          if (id === route.fromId || id === route.toId) continue
-          const ex = { x: rect.x - pad, y: rect.y - pad, w: rect.w + pad * 2, h: rect.h + pad * 2 }
-          const minX = Math.min(seg.a.x, seg.b.x)
-          const maxX = Math.max(seg.a.x, seg.b.x)
-          const minY = Math.min(seg.a.y, seg.b.y)
-          const maxY = Math.max(seg.a.y, seg.b.y)
-          const fullyInside =
-            minX >= ex.x && maxX <= ex.x + ex.w && minY >= ex.y && maxY <= ex.y + ex.h
-          const crosses =
-            segIntersect2(seg, {
-              a: { x: ex.x, y: ex.y },
-              b: { x: ex.x + ex.w, y: ex.y + ex.h },
-            }) ||
-            segIntersect2(seg, { a: { x: ex.x + ex.w, y: ex.y }, b: { x: ex.x, y: ex.y + ex.h } })
-          if (fullyInside || crosses) intersections.push({ key: route.key, nodeId: id })
-        }
-      }
-    }
-  } else {
-    crossings = edgeCrossingCount(
+  const metricNotes: string[] = []
+
+  // ── route index (QA-P0-07): key → route, PAIR → routes[] (multi-edge safe).
+  // Production routes carry the semantic edge id in `key`; inline fallback
+  // routes use e${index}. Nothing in the audits may collapse a pair.
+  const routes: RoutedEdge[] =
+    input.routed ??
+    routeEdges(
       input.edges.map((edge, index) => ({
-        key: `e${index}`,
+        key: edge.id ?? `e${index}`,
         fromId: edge.from,
         toId: edge.to,
         role: edge.role,
@@ -265,19 +272,71 @@ export function criticVerdict(input: CriticInput): CriticVerdict {
       })),
       rects,
     )
-    for (const hit of connectorNodeIntersections(
-      input.edges.map((edge, index) => ({
-        key: `e${index}`,
-        fromId: edge.from,
-        toId: edge.to,
-        role: edge.role,
-        relation: edge.relation,
-      })),
-      rects,
-    )) {
-      intersections.push(hit)
+  const routeByKey = new Map<string, RoutedEdge>()
+  const routesByEndpoint = new Map<string, RoutedEdge[]>()
+  for (const route of routes) {
+    routeByKey.set(route.key, route)
+    const pair = `${route.fromId}\u0000${route.toId}`
+    routesByEndpoint.set(pair, [...(routesByEndpoint.get(pair) ?? []), route])
+  }
+
+  // ── flatten + audit geometry ──
+  const segs: TaggedSegment[] = []
+  const segsByRoute = new Map<string, TaggedSegment[]>()
+  for (const route of routes) {
+    const routeSegs = routedSegments(route, rects)
+    segsByRoute.set(route.key, routeSegs)
+    segs.push(...routeSegs)
+  }
+
+  // QA-P0-08: crossings exclude LEGAL CONTACT — adjacent segments of the same
+  // route (elbow joints) and shared anchor endpoints of different routes.
+  let crossings = 0
+  for (let i = 0; i < segs.length; i++) {
+    for (let j = i + 1; j < segs.length; j++) {
+      const s1 = segs[i]!
+      const s2 = segs[j]!
+      if (s1.routeKey === s2.routeKey && Math.abs(s1.segmentIndex - s2.segmentIndex) === 1) {
+        continue // consecutive segments of one route meet at a legit elbow
+      }
+      const contact = segmentContact(s1, s2)
+      if (contact === 'cross' || contact === 'collinear-overlap') crossings++
     }
   }
+
+  // QA-P0-09: node intersections via Liang–Barsky against the padded rect —
+  // never a diagonal proxy. Endpoint nodes are exempt; tangent within 1px of
+  // the padded boundary is tolerated.
+  const intersections: Array<{ key: string; nodeId: string }> = []
+  const seenIntersections = new Set<string>()
+  for (const route of routes) {
+    for (const seg of segsByRoute.get(route.key) ?? []) {
+      for (const [id, rect] of rects) {
+        if (id === route.fromId || id === route.toId) continue
+        const ex = {
+          x: rect.x - NODE_PAD_PX,
+          y: rect.y - NODE_PAD_PX,
+          w: rect.w + NODE_PAD_PX * 2,
+          h: rect.h + NODE_PAD_PX * 2,
+        }
+        if (segmentIntersectsRect(seg, ex, 1)) {
+          const hitKey = `${route.key}\u0000${id}`
+          if (!seenIntersections.has(hitKey)) {
+            seenIntersections.add(hitKey)
+            intersections.push({ key: route.key, nodeId: id })
+          }
+        }
+      }
+    }
+  }
+
+  const withArea = placements.map((p) => ({
+    id: p.id,
+    area: p.w * p.h,
+    importance: input.importance.get(p.id) ?? 0.5,
+  }))
+
+  // visualHierarchy is P0.5-owned (Spearman); kept untouched here.
   const visualHierarchy = clamp10(
     10 *
       Math.abs(
@@ -287,6 +346,7 @@ export function criticVerdict(input: CriticInput): CriticVerdict {
         ),
       ),
   )
+
   let groupingClarity = 8
   if (input.groupIds && input.groupIds.size > 0) {
     const byGroup = new Map<string, string[]>()
@@ -307,79 +367,52 @@ export function criticVerdict(input: CriticInput): CriticVerdict {
     }
     groupingClarity = clamp10(total ? (tight / total) * 10 : 8)
   }
+
+  // ── QA-P0-02: composition quality from the FAMILY profile, not 0.15 ──
+  const profile = familyProfileFor(input.family)
   const area = placements.reduce((sum, p) => sum + p.w * p.h, 0)
-  const fill = area / (input.canvasW * input.canvasH)
-  const compositionQuality = clamp10(
-    fill < 0.03 ? 4 : fill > 0.6 ? 3 : 10 - Math.abs(fill - 0.15) * 10,
+  const fill = area / Math.max(1, input.canvasW * input.canvasH)
+  let compositionQuality = clamp10(fillScore(fill, profile))
+  const focalDeficit = focalScore(withArea, input.importance, profile)
+  compositionQuality = clamp10(compositionQuality * 0.8 + focalDeficit * 0.2)
+
+  // ── QA-P0-03: whitespace from hull margins + area density, intent-aware ──
+  const declaredBalance = input.intent?.spatial?.composition.balance
+  const whitespaceBalance = whitespaceScore(
+    placements,
+    input.canvasW,
+    input.canvasH,
+    declaredBalance,
+    profile,
   )
-  const quadrants = [0, 0, 0, 0]
-  for (const p of placements) {
-    const cx = p.x + p.w / 2
-    const cy = p.y + p.h / 2
-    quadrants[(cx < input.canvasW / 2 ? 0 : 1) + (cy < input.canvasH / 2 ? 0 : 2)]!++
-  }
-  const qMax = Math.max(...quadrants)
-  const qMin = Math.min(...quadrants)
-  const whitespaceBalance = clamp10(
-    placements.length ? 10 - (qMax - qMin) * (4 / Math.max(4, placements.length)) * 1.2 : 5,
-  )
+
+  // ── relation clarity: crossings + intersections + naturalness ──
   const connectorQuality = clamp10(10 - crossings * 1.5 - intersections.length * 4)
-  const utilization = placements.map((p) => p.w / Math.max(1, input.canvasW))
-  const wideCount = utilization.filter((u) => u > 0.34).length
-  const typography = clamp10(10 - wideCount * 2)
-  const safe = (v: number) => (Number.isFinite(v) ? v : 5)
-
-  // ── route bookkeeping (real, from the final routed set when provided) ──
-  const routeByKey = new Map<string, RoutedEdge>()
-  const routeByEndpoints = new Map<string, RoutedEdge>()
-  if (input.routed) {
-    for (const route of input.routed) {
-      routeByKey.set(route.key, route)
-      routeByEndpoints.set(`${route.fromId}\u0000${route.toId}`, route)
-    }
-  }
-  const declaredConnectors = input.edges.filter(
-    (edge) => !edge.presentation || CONNECTOR_PRESENTATIONS.has(edge.presentation),
-  )
-  const unroutableDeclared = input.routed
-    ? input.routed.filter((route) => route.status === 'unroutable').length
-    : 0
-  const realizedConnectors = input.routed
-    ? declaredConnectors.filter((edge) => {
-        // production routes are keyed by semantic edge id; the inline fallback
-        // router uses e${index}. Match by endpoints, which both share.
-        const route =
-          routeByEndpoints.get(`${edge.from}\u0000${edge.to}`) ??
-          routeByKey.get(`e${input.edges.indexOf(edge)}`)
-        return route ? route.status === 'routed' : false
-      })
-    : declaredConnectors
-  const relationCoverage =
-    declaredConnectors.length === 0 ? 1 : realizedConnectors.length / declaredConnectors.length
-  const scientificFidelity = clamp10(10 * relationCoverage - input.solve.issues.length * 2)
-
-  // anchor-side naturalness (real, same rule as info-density critic)
-  let unnatural = 0
-  const naturalRoutes = input.routed ?? routed
-  for (const route of naturalRoutes) {
-    if (route.status !== 'routed' || !route.start || !route.end) continue
-    const a = placements.find((p) => p.id === route.fromId)
-    const b = placements.find((p) => p.id === route.toId)
+  let unnaturalWeighted = 0
+  let naturalnessTotal = 0
+  for (const route of routes) {
+    if (route.status !== 'routed') continue
+    const a = rects.get(route.fromId)
+    const b = rects.get(route.toId)
     if (!a || !b) continue
-    const v = a.y + a.h / 2 < b.y + b.h / 2 ? 'over' : 'under'
-    const h = a.x + a.w / 2 < b.x + b.w / 2 ? 'right' : 'left'
-    if (v === 'over' && route.end.side === 'bottom') unnatural++
-    if (v === 'over' && route.start.side === 'right') unnatural++
-    if (h === 'right' && route.start.side === 'left' && route.end.side === 'right') unnatural++
+    const natural = routeNaturalness(route, segsByRoute.get(route.key) ?? [], a, b)
+    unnaturalWeighted += 10 - natural.score
+    naturalnessTotal++
   }
   const connectorNaturalness = clamp10(
-    naturalRoutes.length === 0 ? 10 : Math.max(0, 10 - unnatural * 1.5),
+    naturalnessTotal === 0 ? 10 : 10 - unnaturalWeighted / naturalnessTotal,
   )
   const relationClarity = clamp10(connectorQuality * 0.6 + connectorNaturalness * 0.4)
 
-  // ── five-second clarity: visual center dominance + monotone progress ──
+  // ── QA-P0-04: five-second clarity over the DECLARED reading flow ──
+  const flow = input.intent?.spatial
+    ? resolveReadingFlow(input.intent.spatial, input.intent.plan)
+    : resolveReadingFlow(undefined, input.intent?.plan)
+  const pathPositions = readingPathPositions(input.intent?.plan.narrative?.readingPath)
+  const visualCenterId =
+    input.intent?.spatial?.composition.visualCenter ?? input.intent?.plan.narrative?.visualCenter
+
   let centerScore = 7
-  const visualCenterId = input.intent?.spatial?.composition.visualCenter
   if (visualCenterId) {
     const centerRect = rects.get(visualCenterId)
     if (centerRect) {
@@ -402,13 +435,18 @@ export function criticVerdict(input: CriticInput): CriticVerdict {
   }
   let progressOk = 0
   let progressTotal = 0
+  const canvas = { w: input.canvasW, h: input.canvasH }
   for (const edge of input.edges) {
     if (edge.role === 'feedback') continue
-    const a = rects.get(edge.from)
-    const b = rects.get(edge.to)
-    if (!a || !b) continue
+    const semantic = relationSemantic(edge.relation)
+    if (!semantic || !semantic.monotonicAlongFlow) continue
+    const progress = directionalProgressById(flow, edge.from, edge.to, rects, canvas, {
+      ...(visualCenterId ? { visualCenterId } : {}),
+      ...(pathPositions ? { pathPositions } : {}),
+    })
+    if (progress === null) continue // flow cannot judge (e.g. radial w/o center): skip, don't punish
     progressTotal++
-    if (b.x + b.w / 2 >= a.x + a.w / 2 - 8) progressOk++
+    if (progress >= -8) progressOk++
   }
   const progressScore = clamp10(progressTotal ? (progressOk / progressTotal) * 10 : 7)
   const fiveSecondClarity = clamp10(centerScore * 0.5 + progressScore * 0.5)
@@ -417,6 +455,7 @@ export function criticVerdict(input: CriticInput): CriticVerdict {
   const planNodes = input.intent?.plan.nodes
   let evidenceCompleteness: number
   let missingRequired: string[] = []
+  const unroutableDeclared = routes.filter((route) => route.status === 'unroutable').length
   if (planNodes && planNodes.length > 0) {
     const placedIds = new Set(placements.map((p) => p.id))
     const nodeCoverage = planNodes.filter((n) => placedIds.has(n.id)).length / planNodes.length
@@ -433,27 +472,66 @@ export function criticVerdict(input: CriticInput): CriticVerdict {
     evidenceCompleteness = clamp10(10 - unroutableDeclared * 2)
   }
 
-  // ── editability: distinct placed elements + resolvable graph ──
+  // ── QA-P0-14: structural addressability (NOT PPTX editability) ──
   const uniquePlaced = new Set(placements.map((p) => p.id)).size
-  const editability =
+  const structuralAddressability =
     planNodes && planNodes.length > 0
       ? clamp10((uniquePlaced / planNodes.length) * 10 - unroutableDeclared)
       : clamp10(10 - unroutableDeclared * 2)
 
-  // ── visual restraint: equal-size averaging penalized when importance varies ──
-  const sizeCluster = new Map<string, number>()
-  for (const p of placements) {
-    const key = `${p.w}x${p.h}`
-    sizeCluster.set(key, (sizeCluster.get(key) ?? 0) + 1)
+  // ── QA-P0-01: typography from measurable signals ──
+  const typographyResult = typographyScore(input, placements)
+  const typography = typographyResult.score
+  if (typographyResult.note) metricNotes.push(typographyResult.note)
+
+  // ── QA-P0-13: restraint via tolerance bins + area CV, not exact strings ──
+  const visualRestraint = restraintScore(placements, input.importance)
+
+  // ── QA-P0-11: scientific fidelity as a composite, evidence excluded ──
+  const declaredConnectors = input.edges.filter(
+    (edge) => !edge.presentation || CONNECTOR_PRESENTATIONS.has(edge.presentation),
+  )
+  const declaredById = new Map(
+    declaredConnectors.map((edge, index) => [edge.id ?? `e${index}`, edge] as const),
+  )
+  let realizedCount = 0
+  let directionScoreSum = 0
+  let signScoreSum = 0
+  for (const [edgeId, edge] of declaredById) {
+    const route =
+      routeByKey.get(edgeId) ??
+      (routesByEndpoint.get(`${edge.from}\u0000${edge.to}`) ?? []).find(
+        (candidate) => candidate.status === 'routed',
+      )
+    // An unrealized declared relation fails EVERY fidelity dimension: the
+    // science it carries is absent from the canvas, not merely misplaced.
+    if (!route || route.status !== 'routed') continue
+    realizedCount++
+    let edgeDirection = 1
+    const semantic = relationSemantic(edge.relation)
+    if (semantic?.monotonicAlongFlow && edge.role !== 'feedback') {
+      const progress = directionalProgressById(flow, edge.from, edge.to, rects, canvas, {
+        ...(visualCenterId ? { visualCenterId } : {}),
+        ...(pathPositions ? { pathPositions } : {}),
+      })
+      if (progress !== null && progress < -8) edgeDirection = 0
+    }
+    directionScoreSum += edgeDirection
+    let edgeSign = 1
+    const expectedPresentation = SIGN_PRESENTATION[edge.relation]
+    if (expectedPresentation) {
+      edgeSign = (route.presentation ?? edge.presentation) === expectedPresentation ? 1 : 0
+    }
+    signScoreSum += edgeSign
   }
-  const modalCluster = Math.max(0, ...sizeCluster.values())
-  const modalRatio = placements.length ? modalCluster / placements.length : 0
-  const importanceValues = [...input.importance.values()]
-  const importanceSpread =
-    importanceValues.length >= 2 ? Math.max(...importanceValues) - Math.min(...importanceValues) : 0
-  // neutral 8 = insufficient contrast data to judge; NOT a padded perfect score
-  const visualRestraint =
-    importanceSpread >= 0.25 ? clamp10(10 - Math.max(0, modalRatio - 0.5) * 12) : 8
+  const realizationCoverage =
+    declaredConnectors.length === 0 ? 1 : realizedCount / declaredConnectors.length
+  const directionScore = declaredById.size === 0 ? 1 : directionScoreSum / declaredById.size
+  const signScore = declaredById.size === 0 ? 1 : signScoreSum / declaredById.size
+  const scientificFidelity = clamp10(
+    10 * (0.6 * realizationCoverage + 0.25 * directionScore + 0.15 * signScore) -
+      input.solve.issues.length * 2,
+  )
 
   const overallScore = clamp10(
     CRITIC_WEIGHTS.scientificFidelity * scientificFidelity +
@@ -465,16 +543,17 @@ export function criticVerdict(input: CriticInput): CriticVerdict {
       CRITIC_WEIGHTS.typography * typography +
       CRITIC_WEIGHTS.whitespaceBalance * whitespaceBalance +
       CRITIC_WEIGHTS.visualRestraint * visualRestraint +
-      CRITIC_WEIGHTS.editability * editability,
+      CRITIC_WEIGHTS.structuralAddressability * structuralAddressability,
   )
 
   const gateIssues: string[] = [...input.solve.issues]
   for (const hit of intersections)
     gateIssues.push(`connector passes through node ${hit.nodeId} (${hit.key})`)
-  let infoDensity: ReturnType<typeof criticInfoDensity> | null = null
+  let infoDensityValue = 5
+  let primaryScore = 8
   let semanticDensityDecision: CriticDecision | null = null
   if (input.intent) {
-    infoDensity = criticInfoDensity({
+    const infoDensity = criticInfoDensity({
       plan: input.intent.plan,
       ...(input.intent.spatial ? { planIntent: input.intent.spatial } : {}),
       solve: { placements, issues: input.solve.issues, intentDriftPx: input.solve.intentDriftPx },
@@ -482,6 +561,11 @@ export function criticVerdict(input: CriticInput): CriticVerdict {
       canvasH: input.canvasH,
       ...(input.routed ? { routed: input.routed } : {}),
     })
+    // QA-P0-12: ONE density metric — informative tokens per area. The old
+    // `contentDensity` field was a copy of compositionQuality; `informationDensity`
+    // now carries the real value and `contentDensity` is a deprecated alias.
+    infoDensityValue = infoDensity.density
+    primaryScore = infoDensity.primaryClarity
     // Density is a SEMANTIC decision, not a geometry gate: a minimal statement
     // is valid by design. Only genuine over-summarisation of rich content
     // escalates, and it escalates to semantic replan — never to the router.
@@ -500,10 +584,9 @@ export function criticVerdict(input: CriticInput): CriticVerdict {
       }
       gateIssues.push(semanticDensityDecision.message)
     }
+  } else {
+    metricNotes.push('informationDensity: neutral (no plan intent supplied)')
   }
-  const densityScore = infoDensity ? infoDensity.density : clamp10(compositionQuality)
-  const primaryScore = infoDensity ? infoDensity.primaryClarity : 8
-  const naturalnessScore = infoDensity ? infoDensity.connectorNaturalness : connectorNaturalness
   const intentFailures = input.intent?.spatial
     ? auditIntent(input.intent.spatial, placements, input.canvasW, input.canvasH)
     : []
@@ -607,7 +690,8 @@ export function criticVerdict(input: CriticInput): CriticVerdict {
     verdict = 'RECOMPOSE'
     reason = `overall ${overallScore}/10 far below PASS threshold`
   }
-  const scores: CriticScores = {
+  const safe = (v: number) => (Number.isFinite(v) ? v : 5)
+  const scores: CriticScores & DeprecatedScoreAliases = {
     scientificFidelity: safe(scientificFidelity),
     evidenceCompleteness: safe(evidenceCompleteness),
     fiveSecondClarity: safe(fiveSecondClarity),
@@ -617,11 +701,13 @@ export function criticVerdict(input: CriticInput): CriticVerdict {
     typography: safe(typography),
     whitespaceBalance: safe(whitespaceBalance),
     visualRestraint: safe(visualRestraint),
-    editability: safe(editability),
-    informationDensity: safe(clamp10(compositionQuality)),
-    contentDensity: safe(densityScore),
+    structuralAddressability: safe(structuralAddressability),
+    // deprecated aliases — removed in a future release
+    editability: safe(structuralAddressability),
+    contentDensity: safe(infoDensityValue),
+    informationDensity: safe(infoDensityValue),
     primaryClarity: safe(primaryScore),
-    connectorNaturalness: safe(naturalnessScore),
+    connectorNaturalness: safe(connectorNaturalness),
     groupingClarity: safe(groupingClarity),
     overall: safe(overallScore),
   }
@@ -632,9 +718,145 @@ export function criticVerdict(input: CriticInput): CriticVerdict {
     hardGates,
     hardPass,
     decisions,
+    ...(metricNotes.length > 0 ? { metricNotes } : {}),
     ...(verdict === 'ROUTE_FIX' ? { edgeIds: routeEdgeIds } : {}),
     ...(reason ? { reason } : {}),
   }
+}
+
+// ── metric helpers (all pure, all unit-testable) ──
+
+/** QA-P0-01: typography from measurable signals; neutral 8 when unmeasured. */
+function typographyScore(
+  input: CriticInput,
+  placements: Array<{ id: string; w: number; h: number }>,
+): { score: number; note?: string } {
+  const signals = input.typography
+  if (!signals || signals.size === 0) {
+    return { score: 8, note: 'typography: neutral 8 — no measured signals supplied' }
+  }
+  let penalty = 0
+  let worstOverflow = 0
+  let smallestEffectivePt = Infinity
+  let judged = 0
+  for (const placement of placements) {
+    const signal = signals.get(placement.id)
+    if (!signal) continue
+    judged++
+    // text must fit its box: unclamped block height vs available height
+    const available = Math.max(1, placement.h - signal.padY * 2)
+    const overflow = Math.max(0, signal.textBlockH - available) / available
+    worstOverflow = Math.max(worstOverflow, overflow)
+    if (overflow > 0.15) penalty += Math.min(4, overflow * 8)
+    // wrapped lines beyond capacity mean text was clamped away
+    const clampedLines =
+      Math.max(0, signal.titleLines - signal.maxTitleLines) +
+      Math.max(0, signal.detailLines - signal.maxDetailLines)
+    if (clampedLines > 0) penalty += Math.min(3, clampedLines * 0.75)
+    // effective final size vs canvas-scale floor (6pt at final width)
+    if (input.finalWidthMm && input.finalWidthMm > 0) {
+      const canvasMm = (input.canvasW * 25.4) / 96
+      const effectiveDetail = (signal.detailPt * input.finalWidthMm) / Math.max(1, canvasMm)
+      smallestEffectivePt = Math.min(smallestEffectivePt, effectiveDetail)
+    }
+    // single node monopolising canvas width hurts scanability
+    const occupancy = placement.w / Math.max(1, input.canvasW)
+    if (occupancy > 0.6) penalty += 2
+  }
+  if (smallestEffectivePt !== Infinity && smallestEffectivePt < 4.5) penalty += 2
+  if (judged === 0)
+    return { score: 8, note: 'typography: neutral 8 — signals do not match placements' }
+  return { score: clamp10(10 - penalty) }
+}
+
+/** QA-P0-13: tolerance-binned equal-size clustering (8px bins + area CV). */
+function restraintScore(
+  placements: Array<{ w: number; h: number }>,
+  importance: Map<string, number>,
+): number {
+  if (placements.length < 3) return 8
+  const BIN = 8
+  const bins = new Map<string, number>()
+  for (const p of placements) {
+    const key = `${Math.round(p.w / BIN)}:${Math.round(p.h / BIN)}`
+    bins.set(key, (bins.get(key) ?? 0) + 1)
+  }
+  const modalRatio = Math.max(0, ...bins.values()) / placements.length
+  const areas = placements.map((p) => p.w * p.h)
+  const mean = areas.reduce((a, b) => a + b, 0) / areas.length
+  const cv =
+    mean > 0 ? Math.sqrt(areas.reduce((s, a) => s + (a - mean) ** 2, 0) / areas.length) / mean : 0
+  const values = [...importance.values()]
+  const spread = values.length >= 2 ? Math.max(...values) - Math.min(...values) : 0
+  // neutral 8 = insufficient contrast data to judge; NOT a padded perfect score
+  if (spread < 0.25) return 8
+  // a card wall = one dominant size bin AND flat area distribution
+  const wallSignal = Math.max(0, modalRatio - 0.5) * 12 + Math.max(0, 0.08 - cv) * 30
+  return clamp10(10 - wallSignal)
+}
+
+/** focal expectation: the most important node should hold visible area share. */
+function focalScore(
+  withArea: Array<{ id: string; area: number; importance: number }>,
+  importance: Map<string, number>,
+  profile: { focalExpectation: number },
+): number {
+  if (withArea.length === 0) return 5
+  const totalArea = withArea.reduce((sum, v) => sum + v.area, 0)
+  if (totalArea <= 0) return 5
+  const mostImportantId = [...importance.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
+  if (!mostImportantId) return 5
+  const focalArea = withArea.find((v) => v.id === mostImportantId)?.area ?? 0
+  const share = focalArea / totalArea
+  // meeting half the expectation is fine; falling below a third hurts
+  return clamp10(10 * Math.min(1, share / Math.max(0.05, profile.focalExpectation * 0.8)))
+}
+
+/** QA-P0-03: hull margins + area-weighted density, intent-aware. */
+function whitespaceScore(
+  placements: Array<{ id: string; x: number; y: number; w: number; h: number }>,
+  canvasW: number,
+  canvasH: number,
+  declaredBalance?: 'symmetric' | 'asymmetric' | 'loosely-balanced',
+  profile?: { whitespaceTolerance: number },
+): number {
+  if (placements.length === 0) return 5
+  const tolerance = profile?.whitespaceTolerance ?? 0.6
+  const minX = Math.min(...placements.map((p) => p.x))
+  const maxX = Math.max(...placements.map((p) => p.x + p.w))
+  const minY = Math.min(...placements.map((p) => p.y))
+  const maxY = Math.max(...placements.map((p) => p.y + p.h))
+  const left = minX
+  const right = canvasW - maxX
+  const top = minY
+  const bottom = canvasH - maxY
+  let penalty = 0
+  // 1) edge margins: content must not crowd the canvas edge (5% floor)
+  const minMargin = Math.min(left, right, top, bottom)
+  if (minMargin < canvasW * 0.03) penalty += 3
+  else if (minMargin < canvasW * 0.05) penalty += 1
+  // 2) L/R balance by AREA — skipped for declared asymmetric compositions
+  if (declaredBalance !== 'asymmetric' && canvasW > 0) {
+    const lrImbalance = Math.abs(left - right) / canvasW
+    if (lrImbalance > 0.3 && tolerance < 0.7) penalty += (lrImbalance - 0.3) * 8 * (1 - tolerance)
+  }
+  // 3) local negative space: 4×4 area-density grid; both wall-to-wall coverage
+  //    and one vast empty quadrant beyond tolerance are composition faults
+  const cells = 4
+  const cellArea = new Array<number>(cells * cells).fill(0)
+  for (const p of placements) {
+    const x0 = Math.max(0, Math.floor((p.x / canvasW) * cells))
+    const x1 = Math.min(cells - 1, Math.floor(((p.x + p.w) / canvasW) * cells))
+    const y0 = Math.max(0, Math.floor((p.y / canvasH) * cells))
+    const y1 = Math.min(cells - 1, Math.floor(((p.y + p.h) / canvasH) * cells))
+    for (let cy = y0; cy <= y1; cy++) {
+      for (let cx = x0; cx <= x1; cx++)
+        cellArea[cy * cells + cx]! += (p.w * p.h) / Math.max(1, (x1 - x0 + 1) * (y1 - y0 + 1))
+    }
+  }
+  const emptyCells = cellArea.filter((a) => a <= 0).length
+  if (emptyCells === 0) penalty += 2 // no breathing room anywhere
+  return clamp10(10 - penalty)
 }
 
 function clamp10(v: number): number {

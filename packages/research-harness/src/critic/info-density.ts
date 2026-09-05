@@ -8,8 +8,8 @@ import type { FigurePlanV2 } from '../semantic/figure-plan.js'
 import type { SpatialPlan } from '../composition/spatial-plan.js'
 import type { SolveResult } from '../constraints/solver.js'
 import type { RoutedEdge } from '../routing/router.js'
-import type { Rect } from '../routing/geometry.js'
-import { anchorPoint } from '../routing/router.js'
+import { routedSegments } from './metric-critic.js'
+import { routeNaturalness } from './route-naturalness.js'
 
 export interface ContentDensityVerdict {
   /** 0..10 — higher = more scientific content surfaced */
@@ -79,24 +79,23 @@ export function criticInfoDensity(input: {
   }
 
   // --- Primary logic clarity (spine reachability) ---
-  const titleToPlacement = new Map(
+  // Placements are keyed by SEMANTIC ID throughout the pipeline; the spine
+  // is a list of semantic ids. (An earlier revision looked titles up in an
+  // id-keyed map, which silently degraded this metric to a constant.)
+  const rectById = new Map(
     input.solve.placements.map((p) => [p.id, { x: p.x, y: p.y, w: p.w, h: p.h }]),
   )
   const spine = input.plan.primarySpine ?? []
   let primaryClarity = spine.length === 0 ? 8 : 5
   if (spine.length >= 2) {
-    // chain the spine titles and check each consecutive pair is reachable on
+    // chain the spine ids and check each consecutive pair is reachable on
     // a single straight axis-aligned line OR the routed path keeps the spine
     // monotonically advancing without crossing
     let monotone = 0
     let total = 0
     for (let i = 0; i + 1 < spine.length; i++) {
-      const a = titleToPlacement.get(
-        input.plan.nodes.find((n) => n.id === spine[i])?.visible.title ?? '',
-      )
-      const b = titleToPlacement.get(
-        input.plan.nodes.find((n) => n.id === spine[i + 1])?.visible.title ?? '',
-      )
+      const a = rectById.get(spine[i] ?? '')
+      const b = rectById.get(spine[i + 1] ?? '')
       if (!a || !b) continue
       total++
       const dx = b.x - a.x
@@ -116,37 +115,30 @@ export function criticInfoDensity(input: {
     )
   }
 
-  // --- Connector naturalness ---
+  // --- Connector naturalness (QA-P0-10: orientation-free, shared impl) ---
   let connectorNaturalness = 10
   if (input.routed && input.routed.length > 0) {
-    let unnatural = 0
+    let unnaturalWeighted = 0
+    let judged = 0
     for (const route of input.routed) {
-      if (route.status !== 'routed' || !route.start || !route.end) continue
+      if (route.status !== 'routed') continue
       const a = input.solve.placements.find((p) => p.id === route.fromId)
       const b = input.solve.placements.find((p) => p.id === route.toId)
       if (!a || !b) continue
-      const sp = anchorPoint(a, route.start.side)
-      const ep = anchorPoint(b, route.end.side)
-      const rects: Rect = { x: a.x, y: a.y, w: a.w, h: a.h }
-      const rectt: Rect = { x: b.x, y: b.y, w: b.w, h: b.h }
-      const v = a.y + a.h / 2 < b.y + b.h / 2 ? 'over' : 'under'
-      const h = a.x + a.w / 2 < b.x + b.w / 2 ? 'right' : 'left'
-      if (v === 'over' && route.end.side === 'bottom') unnatural++
-      if (v === 'over' && route.start.side === 'right') unnatural++
-      if (h === 'right' && route.end.side === 'left' && route.start.side === 'right') {
-        // perfect: don't penalise
-      } else if (h === 'right' && route.start.side === 'left' && route.end.side === 'right') {
-        unnatural++
-      }
-      void sp
-      void ep
-      void rects
-      void rectt
+      const rectsById = new Map(input.solve.placements.map((p) => [p.id, p]))
+      const verdict = routeNaturalness(
+        route,
+        routedSegments(route, rectsById),
+        { x: a.x, y: a.y, w: a.w, h: a.h },
+        { x: b.x, y: b.y, w: b.w, h: b.h },
+      )
+      unnaturalWeighted += 10 - verdict.score
+      judged++
     }
-    connectorNaturalness = Math.max(0, 10 - unnatural * 1.5)
-    if (unnatural > 0)
+    connectorNaturalness = judged === 0 ? 10 : Math.max(0, 10 - unnaturalWeighted / judged)
+    if (connectorNaturalness < 10)
       notes.push(
-        `${unnatural} connector(s) chose sides inconsistent with the spatial relation between the two nodes`,
+        `${judged} connector(s) audited; naturalness ${connectorNaturalness}/10 — anchors or paths inconsistent with the spatial relation between the two nodes`,
       )
   }
 

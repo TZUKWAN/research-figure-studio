@@ -35,6 +35,12 @@ import { normalizeVisualPlan } from '../visual/visualPlan.js'
 import { compositionSignature } from '../composition/priors.js'
 import { auditScientific, type ScientificIssue } from '../critic/scientific-critic.js'
 import {
+  validateDomain,
+  validateFamily,
+  familyFromFigureType,
+} from '../critic/family-validators.js'
+import type { TypographySignal } from '../critic/metric-critic.js'
+import {
   OUTPUT_CONTEXT_DEFAULT_WIDTH_MM,
   OUTPUT_CONTEXT_MIN_TEXT_PT,
   publicationAudit,
@@ -43,7 +49,6 @@ import {
 import {
   domainPresentationDefault,
   resolveDomain,
-  DOMAIN_PROFILES,
 } from '../contract/domain-profile.js'
 
 export interface OrchestratorLlm {
@@ -318,6 +323,34 @@ export async function orchestrateFigure(
     plan.nodes.flatMap((node) => (node.groupId ? [[node.id, node.groupId] as const] : [])),
   )
   const direction = plan.readingIntent?.preferredDirection === 'TB' ? 'TB' : 'LR'
+  // QA-P0-02/01: the critic scores composition against the figure FAMILY and
+  // typography against MEASURED signals — both wired from the same data the
+  // composer used, so the rubric can never silently drift from reality.
+  const family = (input.contract?.figureFamily ??
+    familyFromFigureType(plan.figureType) ??
+    'freeform') as import('../contract/figure-contract.js').FigureFamily
+  const PT_TO_PX = 96 / 72
+  const typographySignals = new Map<string, TypographySignal>()
+  for (const [index, node] of plan.nodes.entries()) {
+    const m = measured[index]
+    if (!m || m.title !== node.id) continue
+    const spec = specFor(node.type)
+    const textBlockH =
+      m.titleLines * spec.titleSizePt * PT_TO_PX * spec.lineHeight +
+      (m.detailLines > 0
+        ? spec.titleGapY + m.detailLines * spec.detailSizePt * PT_TO_PX * spec.lineHeight
+        : 0)
+    typographySignals.set(node.id, {
+      titlePt: spec.titleSizePt,
+      detailPt: spec.detailSizePt,
+      titleLines: m.titleLines,
+      detailLines: m.detailLines,
+      maxTitleLines: spec.maxTitleLines,
+      maxDetailLines: spec.maxDetailLines,
+      textBlockH,
+      padY: spec.padY,
+    })
+  }
 
   const maxRecompose = input.maxRecompose ?? 2
   let critique: string[] | undefined
@@ -449,8 +482,7 @@ export async function orchestrateFigure(
     if (connectorInputs.length > densityCap) {
       const rank: Record<string, number> = { primary: 0, feedback: 1, secondary: 2 }
       const sorted = [...connectorInputs].sort(
-        (a, b) =>
-          (rank[a.priority] ?? 2) - (rank[b.priority] ?? 2) || a.key.localeCompare(b.key),
+        (a, b) => (rank[a.priority] ?? 2) - (rank[b.priority] ?? 2) || a.key.localeCompare(b.key),
       )
       const kept = sorted.slice(0, densityCap)
       const demoted = sorted.slice(densityCap)
@@ -480,17 +512,38 @@ export async function orchestrateFigure(
       intent: { plan, spatial: best.plan },
       routed: routes,
       passThreshold: qualityThresholdFor(input.contract),
+      family,
+      typography: typographySignals,
+      ...(input.contract
+        ? {
+            finalWidthMm:
+              input.contract.output.finalWidthMm ??
+              OUTPUT_CONTEXT_DEFAULT_WIDTH_MM[input.contract.output.context],
+          }
+        : {}),
     })
     // Scientific audit (17.3): evidence coverage, connector realization,
-    // causal direction, dominance. Hard scientific failures escalate a PASS —
-    // the figure may look clean while silently dropping required science.
-    const scientificIssues: ScientificIssue[] = auditScientific({
-      plan,
-      placements: best.solve.placements,
-      routes,
-      importance,
-      ...(direction === 'TB' ? { direction } : {}),
-    })
+    // direction across ALL reading flows, contradiction/cycle policy, orphans,
+    // scoped duplicate labels, multi-signal dominance. Hard scientific
+    // failures escalate a PASS — the figure may look clean while silently
+    // dropping required science.
+    const scientificIssues: ScientificIssue[] = [
+      ...auditScientific({
+        plan,
+        placements: best.solve.placements,
+        routes,
+        importance,
+        spatial: best.plan,
+        family,
+        domain,
+        ...(plan.readingIntent?.preferredDirection
+          ? { direction: plan.readingIntent.preferredDirection }
+          : {}),
+      }),
+      // QA-P1-06/07: domain + family validators (structured, soft)
+      ...validateDomain(plan, domain),
+      ...validateFamily(plan, family),
+    ]
     const hardScientific = scientificIssues.filter((issue) => issue.severity === 'hard')
     if (hardScientific.length > 0 && critic.verdict === 'PASS') {
       const needsRoute = hardScientific.some((issue) => issue.repairClass === 'ROUTE_FIX')
@@ -570,6 +623,15 @@ export async function orchestrateFigure(
         intent: { plan, spatial: best.plan },
         routed: routes,
         passThreshold: qualityThresholdFor(input.contract),
+        family,
+        typography: typographySignals,
+        ...(input.contract
+          ? {
+              finalWidthMm:
+                input.contract.output.finalWidthMm ??
+                OUTPUT_CONTEXT_DEFAULT_WIDTH_MM[input.contract.output.context],
+            }
+          : {}),
       })
       emit('route.repaired', true, critic.verdict)
       emit('critic.completed', true, `${critic.verdict} (after L2)`)
