@@ -57,6 +57,8 @@ export interface SemanticEdgeInput {
   to: string
   /** moderation edges may target an edge instead of a node */
   targetEdge?: string
+  /** edge-level qualification (COMP-P0-02): node ids that moderate THIS edge */
+  qualifiedBy?: string[]
   /** optional compatibility hint for connector routing */
   role?: string
   relation?: string
@@ -71,6 +73,8 @@ export interface SemanticEdge {
   from: string
   to: string
   targetEdge?: string
+  /** node ids qualifying (moderating) this edge — moderator → effect, not moderator → node */
+  qualifiedBy?: string[]
   role: EdgeRouteRole
   relation: RelationType
   /** parser supplies a semantic default; optional for backward-compatible direct fixtures */
@@ -132,7 +136,11 @@ function defaultPresentation(relation: RelationType, role: EdgeRouteRole): Relat
   return 'arrow'
 }
 
-function parseEdge(edge: Record<string, unknown>, index: number): SemanticEdge | null {
+function parseEdge(
+  edge: Record<string, unknown>,
+  index: number,
+  errors?: string[],
+): SemanticEdge | null {
   const from = normText(edge.from)
   const to = normText(edge.to)
   const role = normEnum(edge.role ?? 'main', EDGE_ROUTE_ROLES)
@@ -140,12 +148,32 @@ function parseEdge(edge: Record<string, unknown>, index: number): SemanticEdge |
     edge.relation === undefined ? 'process' : edge.relation,
     RELATION_TYPE_SET,
   )
-  if (!from || !to || from === to || !role || !relation) return null
+  const id = normText(edge.id) || `edge:${from}->${to}:${relation}:${index}`
+  const ref = normText(edge.id) || `at index ${index}`
+  const fail = (message: string): null => {
+    errors?.push(message)
+    return null
+  }
+  if (!from) return fail(`edge ${ref}: "from" is missing`)
+  if (!to) return fail(`edge ${ref}: "to" is missing`)
+  if (from === to) return fail(`edge ${ref}: self loop ${from}->${to} is not allowed`)
+  if (!role) return fail(`edge ${ref}: role "${String(edge.role)}" unsupported (main|feedback)`)
+  if (!relation) {
+    return fail(
+      `edge ${ref}: relation "${String(edge.relation)}" unsupported (allowed: ${RELATION_TYPES.join(', ')})`,
+    )
+  }
   const normalizedRelation = relation as RelationType
   const normalizedRole = role as EdgeRouteRole
   const presentation = normEnum(edge.presentation, RELATION_PRESENTATION_SET)
+  if (edge.presentation !== undefined && !presentation) {
+    return fail(
+      `edge ${ref}: presentation "${String(edge.presentation)}" unsupported (allowed: ${RELATION_PRESENTATIONS.join(', ')})`,
+    )
+  }
+  const qualifiedBy = strings(edge.qualifiedBy)
   const parsed: SemanticEdge = {
-    id: normText(edge.id) || `edge:${from}->${to}:${normalizedRelation}:${index}`,
+    id,
     from,
     to,
     role: normalizedRole,
@@ -155,32 +183,47 @@ function parseEdge(edge: Record<string, unknown>, index: number): SemanticEdge |
   }
   const targetEdge = normText(edge.targetEdge)
   if (targetEdge) parsed.targetEdge = targetEdge
+  if (qualifiedBy.length > 0) parsed.qualifiedBy = qualifiedBy
   const label = normText(edge.label)
   if (label) parsed.label = label
   return parsed
 }
 
+function strings(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((v) => (typeof v === 'string' ? v.trim() : '')).filter(Boolean)
+    : []
+}
+
 /**
- * Parse + repair (R0/R1) a raw edge list. Deterministic: casing repairs, id
- * passthrough, relation defaults to `process`. Returns null when any edge is
- * malformed — callers surface a retry message instead of guessing topology.
- *
- * When `tables` is supplied every edge is also resolved against them; an
- * edge naming an unknown node/region rejects the whole list.
+ * Parse + collect SPECIFIC validation errors (ORCH-P0-02). Returns the parsed
+ * edges when every entry is valid; null plus per-edge diagnostics otherwise.
+ * `knownIds` (node ids) enables endpoint existence checks; `edgeIds` enables
+ * targetEdge existence checks. Deterministic.
  */
-export function parseSemanticEdges(
+export function parseSemanticEdgesDetailed(
   rawEdges: unknown,
-  tables?: [EndpointTable, EndpointTable],
-): SemanticEdge[] | null {
-  if (!Array.isArray(rawEdges)) return null
+  known?: { nodeIds?: Set<string>; edgeIds?: Set<string> },
+): { edges: SemanticEdge[] | null; errors: string[] } {
+  if (!Array.isArray(rawEdges)) {
+    return { edges: null, errors: ['edges must be an array'] }
+  }
+  const errors: string[] = []
   const edges: SemanticEdge[] = []
   const seenIds = new Set<string>()
   const seenRelations = new Set<string>()
   for (const [index, raw] of rawEdges.entries()) {
-    const parsed = parseEdge((raw ?? {}) as Record<string, unknown>, index)
-    if (!parsed) return null
+    if (typeof raw !== 'object' || raw === null) {
+      errors.push(`edge at index ${index} must be an object`)
+      continue
+    }
+    const parsed = parseEdge(raw as Record<string, unknown>, index, errors)
+    if (!parsed) continue
     const id = parsed.id ?? `edge:${parsed.from}->${parsed.to}:${parsed.relation}:${index}`
-    if (seenIds.has(id)) return null
+    if (seenIds.has(id)) {
+      errors.push(`duplicate edge id ${id}`)
+      continue
+    }
     const semanticIdentity = [
       parsed.from,
       parsed.to,
@@ -189,12 +232,62 @@ export function parseSemanticEdges(
       parsed.targetEdge ?? '',
       parsed.label ?? '',
     ].join('\u0000')
-    if (seenRelations.has(semanticIdentity)) return null
+    if (seenRelations.has(semanticIdentity)) {
+      errors.push(`duplicate edge ${parsed.from}->${parsed.to} (${parsed.relation})`)
+      continue
+    }
+    if (known?.nodeIds) {
+      for (const [label, ref] of [
+        ['from', parsed.from],
+        ['to', parsed.to],
+      ] as const) {
+        if (!known.nodeIds.has(ref)) {
+          errors.push(`edge ${id}: ${label} references missing node "${ref}"`)
+        }
+      }
+    }
+    if (parsed.qualifiedBy && known?.nodeIds) {
+      for (const qualifier of parsed.qualifiedBy) {
+        if (!known.nodeIds.has(qualifier)) {
+          errors.push(`edge ${id}: qualifiedBy references missing node "${qualifier}"`)
+        }
+      }
+    }
     parsed.id = id
     seenIds.add(id)
     seenRelations.add(semanticIdentity)
     edges.push(parsed)
   }
+  if (errors.length > 0) return { edges: null, errors }
+  if (known?.edgeIds) {
+    for (const edge of edges) {
+      if (edge.targetEdge && !known.edgeIds.has(edge.targetEdge)) {
+        errors.push(`edge ${edge.id}: targetEdge "${edge.targetEdge}" does not match any edge id`)
+      }
+    }
+  }
+  if (errors.length > 0) return { edges: null, errors }
+  return { edges, errors: [] }
+}
+
+/**
+ * Parse + repair (R0/R1) a raw edge list. Deterministic: casing repairs, id
+ * passthrough, relation defaults to `process`. Returns null when any edge is
+ * malformed — callers surface a retry message instead of guessing topology.
+ *
+ * When `tables` is supplied every edge is also resolved against them; an
+ * edge naming an unknown node/region rejects the whole list. Use
+ * `parseSemanticEdgesDetailed` when specific validation errors are needed.
+ */
+export function parseSemanticEdges(
+  rawEdges: unknown,
+  tables?: [EndpointTable, EndpointTable],
+): SemanticEdge[] | null {
+  const nodeIds = tables
+    ? new Set([...tables[0].byRef.keys(), ...tables[1].byRef.keys()])
+    : undefined
+  const { edges } = parseSemanticEdgesDetailed(rawEdges, nodeIds ? { nodeIds } : {})
+  if (!edges) return null
   if (tables) {
     for (const edge of edges) {
       if (resolveEdge(edge, tables[0], tables[1]).length === 0) return null

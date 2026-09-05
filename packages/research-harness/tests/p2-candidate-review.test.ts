@@ -41,11 +41,17 @@ function measure(titles: string[]) {
 const ids = ['hub', 's1', 's2', 's3', 's4', 's5', 'out']
 const measured = measure(ids)
 const meta = new Map(ids.map((id) => [id, { importance: id === 'hub' ? 0.95 : 0.45 }]))
+// Integration note: with the semantic-orchestration grammar set merged in,
+// the original one-output fan left only ONE hard-screen-clean candidate, so
+// the blend contract had nothing to rank. The two-output fan keeps ≥2 clean
+// candidates under the merged grammars, preserving the blend contract.
 const edges = [
   { from: 's1', to: 'hub', role: 'main' as const, relation: 'causal' },
   { from: 's2', to: 'hub', role: 'main' as const, relation: 'causal' },
   { from: 's3', to: 'hub', role: 'main' as const, relation: 'data-flow' },
+  { from: 'hub', to: 's4', role: 'main' as const, relation: 'process' },
   { from: 'hub', to: 's5', role: 'main' as const, relation: 'process' },
+  { from: 's4', to: 'out', role: 'main' as const, relation: 'process' },
   { from: 's5', to: 'out', role: 'main' as const, relation: 'process' },
 ]
 

@@ -221,6 +221,7 @@ describe('QA-P1-10: adversarial geometric corners', () => {
       )
       expect(spatial).not.toBeNull()
       const measured = ['a', 'b', 'c', 'd'].map((id) => ({
+        id,
         title: id,
         titleLines: 1,
         detailLines: 0,
@@ -262,6 +263,7 @@ describe('QA-P1-10: adversarial geometric corners', () => {
       { readingFlow: 'LR' },
     )!
     const measured = ['a', 'b'].map((id) => ({
+      id,
       title: id,
       titleLines: 1,
       detailLines: 0,

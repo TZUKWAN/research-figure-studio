@@ -40,7 +40,7 @@ export interface SolveResult {
 export function solveGeometry(input: SolveInput): SolveResult {
   const margin = input.marginPx ?? Math.round(input.canvasW * 0.06)
   const minGap = input.minGapPx ?? 12
-  const measuredById = new Map(input.measured.map((node) => [node.title, node]))
+  const measuredById = new Map(input.measured.map((node) => [node.id, node]))
   const issues: string[] = []
 
   // 1) Honor the composer's boxHint at face value (no grid snap, no

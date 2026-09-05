@@ -2,7 +2,7 @@
  * FigurePlan v2 (Phase 1/2 semantic schema). Separates semantic meaning from
  * visible text (GOAL §9) and makes relation-typed edges the sole topology.
  */
-import { parseSemanticEdges, type SemanticEdge } from './schema.js'
+import { parseSemanticEdgesDetailed, type SemanticEdge } from './schema.js'
 import type { VisibleText } from '../measurement/measure.js'
 
 export const SEMANTIC_NODE_TYPES = [
@@ -41,6 +41,10 @@ export interface SemanticNode {
   provenanceRefs?: string[]
   /** what kind of claim the node makes; drives provenance gating */
   claimType?: 'qualitative' | 'quantitative' | 'derived' | 'sample'
+  /** phase label for timeline stages (COMP-P1-03): e.g. "2020-03" or "Phase 1" */
+  phase?: string
+  /** raw time point for timeline ordering; ordering itself comes from timeOrder */
+  timePoint?: string
 }
 
 export interface SemanticGroup {
@@ -102,6 +106,18 @@ export interface FigurePlanV2 {
   readingIntent?: {
     preferredDirection?: 'LR' | 'RL' | 'TB' | 'BT' | 'radial' | 'mixed'
   }
+  /** explicit temporal order over node ids (COMP-P1-03; subset of node ids) */
+  timeOrder?: string[]
+  /** explicit matrix axes (COMP-P1-04): groups used as rows / columns */
+  matrix?: MatrixSpec
+}
+
+/** Row/column semantics for the matrix family. Group ids must exist in groups. */
+export interface MatrixSpec {
+  rowGroupIds: string[]
+  columnGroupIds: string[]
+  /** what one cell expresses, e.g. "effect size", "presence" */
+  cellRelation?: string
 }
 
 const NODE_TYPE_SET = new Set<string>(SEMANTIC_NODE_TYPES)
@@ -161,28 +177,69 @@ function parseNarrative(raw: unknown, ids: Set<string>, thesis: string): Narrati
  * null when the plan cannot be repaired (caller triggers R2 model repair).
  */
 export function parseFigurePlanV2(raw: unknown): FigurePlanV2 | null {
-  if (typeof raw !== 'object' || raw === null) return null
+  return parseFigurePlanV2WithDiagnostics(raw).plan
+}
+
+export interface FigurePlanDiagnostics {
+  plan: FigurePlanV2 | null
+  /** SPECIFIC validation errors (ORCH-P0-02): one actionable message each */
+  errors: string[]
+}
+
+/**
+ * Diagnostics-aware parse: collects EVERY independent schema error instead of
+ * bailing at the first. The semantic repair loop feeds these exact strings
+ * back to the planner, so "schema validation failed" alone is never sent.
+ */
+export function parseFigurePlanV2WithDiagnostics(raw: unknown): FigurePlanDiagnostics {
+  const errors: string[] = []
+  if (typeof raw !== 'object' || raw === null) {
+    return { plan: null, errors: ['FigurePlan must be a JSON object'] }
+  }
   const plan = raw as Record<string, unknown>
   const thesis = text(plan.thesis)
+  if (!thesis) errors.push('missing "thesis"')
   const figureType = text(plan.figureType) || 'input-core-output'
-  const rawNodes = Array.isArray(plan.nodes) ? plan.nodes : []
-  if (!thesis || rawNodes.length === 0) return null
+  if (!Array.isArray(plan.nodes)) {
+    return { plan: null, errors: [...errors, '"nodes" must be an array'] }
+  }
+  const rawNodes = plan.nodes
 
   const nodes: SemanticNode[] = []
   const ids = new Set<string>()
-  for (const rawNode of rawNodes) {
+  for (const [index, rawNode] of rawNodes.entries()) {
     const node = (rawNode ?? {}) as Record<string, unknown>
     const id = text(node.id)
-    if (!id || ids.has(id)) return null
+    if (!id) {
+      errors.push(`node at index ${index} is missing "id"`)
+      continue
+    }
+    if (ids.has(id)) {
+      errors.push(`duplicate node id "${id}"`)
+      continue
+    }
     const type = text(node.type)
     const semanticLabel = text(node.semanticLabel) || text(node.title)
     const visible = (node.visible ?? {}) as Record<string, unknown>
     const visibleTitle = text(visible.title) || semanticLabel
-    if (!semanticLabel) return null
-    const importanceRaw = typeof node.importance === 'number' ? node.importance : 0.5
+    if (!semanticLabel) {
+      errors.push(`node "${id}" is missing "semanticLabel"`)
+      continue
+    }
     const role = text(node.role) || 'core'
-    if (!NODE_TYPE_SET.has(type || 'process') && type !== '') return null
-    if (!ROLE_SET.has(role)) return null
+    if (!NODE_TYPE_SET.has(type || 'process') && type !== '') {
+      errors.push(
+        `node "${id}": type "${type}" unsupported (allowed: ${SEMANTIC_NODE_TYPES.join(', ')})`,
+      )
+    }
+    if (!ROLE_SET.has(role)) {
+      errors.push(`node "${id}": role "${role}" unsupported (allowed: ${[...ROLE_SET].join(', ')})`)
+    }
+    if (typeof node.importance === 'number' && !Number.isFinite(node.importance)) {
+      errors.push(`node "${id}": importance must be a finite number`)
+      continue
+    }
+    const importanceRaw = typeof node.importance === 'number' ? node.importance : 0.5
     ids.add(id)
     nodes.push({
       id,
@@ -193,7 +250,7 @@ export function parseFigurePlanV2(raw: unknown): FigurePlanV2 | null {
         ...(text(visible.detail) ? { detail: text(visible.detail) } : {}),
       },
       importance: Math.min(1, Math.max(0, importanceRaw)),
-      role: role as SemanticRole,
+      role: (ROLE_SET.has(role) ? role : 'core') as SemanticRole,
       ...(text(node.groupId) ? { groupId: text(node.groupId) } : {}),
       ...(strings(node.evidenceRefs).length > 0
         ? { evidenceRefs: strings(node.evidenceRefs) }
@@ -207,16 +264,35 @@ export function parseFigurePlanV2(raw: unknown): FigurePlanV2 | null {
               'qualitative' | 'quantitative' | 'derived' | 'sample',
           }
         : {}),
+      ...(text(node.phase) ? { phase: text(node.phase) } : {}),
+      ...(text(node.timePoint) ? { timePoint: text(node.timePoint) } : {}),
     })
+  }
+  if (nodes.length === 0) {
+    errors.push('"nodes" must contain at least one valid node')
+    return { plan: null, errors }
   }
 
   const titleTable = {
     byRef: new Map<string, number[]>(nodes.map((node, index) => [node.id, [index]])),
   }
-  const edges = parseSemanticEdges(plan.edges, [titleTable, titleTable])
-  if (edges === null) return null
+  const edgeIds = new Set<string>(
+    (Array.isArray(plan.edges) ? plan.edges : []).flatMap((edge) => {
+      const id = text((edge as Record<string, unknown> | null)?.id)
+      return id ? [id] : []
+    }),
+  )
+  const detailed = parseSemanticEdgesDetailed(plan.edges, {
+    nodeIds: ids,
+    edgeIds,
+  })
+  if (!detailed.edges) {
+    return { plan: null, errors: [...errors, ...detailed.errors] }
+  }
+  const edges = detailed.edges
 
   const groups: SemanticGroup[] = []
+  const groupIds = new Set<string>()
   const rawGroups = Array.isArray(plan.groups) ? plan.groups : []
   for (const rawGroup of rawGroups) {
     const group = (rawGroup ?? {}) as Record<string, unknown>
@@ -227,6 +303,11 @@ export function parseFigurePlanV2(raw: unknown): FigurePlanV2 | null {
         )
       : []
     if (!gid || memberIds.length === 0) continue
+    if (groupIds.has(gid)) {
+      errors.push(`duplicate group id "${gid}"`)
+      continue
+    }
+    groupIds.add(gid)
     groups.push({ id: gid, ...(text(group.label) ? { label: text(group.label) } : {}), memberIds })
   }
 
@@ -238,33 +319,56 @@ export function parseFigurePlanV2(raw: unknown): FigurePlanV2 | null {
 
   const narrative = parseNarrative(plan.narrative, ids, thesis)
 
+  const timeOrder = strings(plan.timeOrder).filter((id) => ids.has(id))
+
+  const rawMatrix = (plan.matrix ?? {}) as Record<string, unknown>
+  const rowGroupIds = strings(rawMatrix.rowGroupIds).filter((id) => groupIds.has(id))
+  const columnGroupIds = strings(rawMatrix.columnGroupIds).filter((id) => groupIds.has(id))
+  const matrix: MatrixSpec | undefined =
+    rowGroupIds.length > 0 && columnGroupIds.length > 0
+      ? {
+          rowGroupIds,
+          columnGroupIds,
+          ...(text(rawMatrix.cellRelation) ? { cellRelation: text(rawMatrix.cellRelation) } : {}),
+        }
+      : undefined
+
+  if (errors.length > 0) return { plan: null, errors }
+
   return {
-    thesis,
-    figureType,
-    ...(narrative ? { narrative } : {}),
-    nodes,
-    edges,
-    groups,
-    globalIntent: {
-      emphasis: stringList(intent.emphasis).filter((item) => ids.has(item)),
-      secondary: stringList(intent.secondary).filter((item) => ids.has(item)),
-      optional: stringList(intent.optional).filter((item) => ids.has(item)),
+    plan: {
+      thesis,
+      figureType,
+      ...(narrative ? { narrative } : {}),
+      nodes,
+      edges,
+      groups,
+      globalIntent: {
+        emphasis: stringList(intent.emphasis).filter((item) => ids.has(item)),
+        secondary: stringList(intent.secondary).filter((item) => ids.has(item)),
+        optional: stringList(intent.optional).filter((item) => ids.has(item)),
+      },
+      ...(Array.isArray(plan.primarySpine)
+        ? {
+            primarySpine: (plan.primarySpine as unknown[]).filter(
+              (id): id is string => typeof id === 'string' && ids.has(id),
+            ),
+          }
+        : {}),
+      ...(typeof plan.readingIntent === 'object' && plan.readingIntent !== null
+        ? {
+            readingIntent: {
+              preferredDirection: text(
+                (plan.readingIntent as Record<string, unknown>).preferredDirection,
+              ) as FigurePlanV2['readingIntent'] extends { preferredDirection?: infer D }
+                ? D
+                : never,
+            },
+          }
+        : {}),
+      ...(timeOrder.length > 0 ? { timeOrder } : {}),
+      ...(matrix ? { matrix } : {}),
     },
-    ...(Array.isArray(plan.primarySpine)
-      ? {
-          primarySpine: (plan.primarySpine as unknown[]).filter(
-            (id): id is string => typeof id === 'string' && ids.has(id),
-          ),
-        }
-      : {}),
-    ...(typeof plan.readingIntent === 'object' && plan.readingIntent !== null
-      ? {
-          readingIntent: {
-            preferredDirection: text(
-              (plan.readingIntent as Record<string, unknown>).preferredDirection,
-            ) as FigurePlanV2['readingIntent'] extends { preferredDirection?: infer D } ? D : never,
-          },
-        }
-      : {}),
+    errors: [],
   }
 }

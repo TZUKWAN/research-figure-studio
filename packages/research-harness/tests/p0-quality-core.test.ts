@@ -239,7 +239,7 @@ describe('P0 composition diversity', () => {
   ]
   const meta = new Map(ids.map((id) => [id, { importance: id === 'hub' ? 0.95 : 0.45 }]))
 
-  function fingerprint(candidate: ReturnType<typeof candidateFromPrior>): number[] {
+  function fingerprint(candidate: NonNullable<ReturnType<typeof candidateFromPrior>>): number[] {
     // 4x4 quadrant occupancy + normalized radial distance histogram (8 bins)
     const quad = [0, 0, 0, 0]
     const radial = [0, 0, 0, 0, 0, 0, 0, 0]
@@ -257,8 +257,10 @@ describe('P0 composition diversity', () => {
     const linearPrior = priorById('linear-process')!
     const radial = candidateFromPrior(radialPrior, measured, edges, 1280, 720, meta)
     const linear = candidateFromPrior(linearPrior, measured, edges, 1280, 720, meta)
-    const fpRadial = fingerprint(radial)
-    const fpLinear = fingerprint(linear)
+    expect(radial).not.toBeNull()
+    expect(linear).not.toBeNull()
+    const fpRadial = fingerprint(radial!)
+    const fpLinear = fingerprint(linear!)
     const l1 = fpRadial.reduce((sum, v, i) => sum + Math.abs(v - fpLinear[i]!), 0)
     expect(l1).toBeGreaterThanOrEqual(4)
   })

@@ -2,18 +2,15 @@
  * Creation Orchestrator (Phase 3, GOAL §23/§65) with the Visual Quality
  * Stabilization repair hierarchy: ROUTE_FIX re-runs the orthogonal router,
  * LOCAL_LAYOUT_FIX promotes the next-ranked candidate, RECOMPOSE (≤2) redraws
- * composition intent. Creation NEVER depends on tool calling; Editing keeps
- * the existing ReAct + execute_slide_script path untouched.
+ * composition intent, and SEMANTIC_REPLAN (bounded) replaces the FigurePlan
+ * itself and REBUILDS every derived state object (audit ORCH-P0-01..05).
+ * Creation NEVER depends on tool calling; Editing keeps the existing ReAct +
+ * execute_slide_script path untouched.
  */
-import { parseFigurePlanV2, type FigurePlanV2 } from '../semantic/figure-plan.js'
 import type { RelationPresentation } from '../semantic/schema.js'
+import type { FigurePlanV2 } from '../semantic/figure-plan.js'
 import { normalizeSpatialPlan, type SpatialPlan } from '../composition/spatial-plan.js'
-import {
-  measureNode,
-  estimatorMeasurer,
-  type MeasuredNode,
-  type NodeTextSpec,
-} from '../measurement/measure.js'
+import { measureNode, type MeasuredNode, type NodeTextSpec } from '../measurement/measure.js'
 import { SEMANTIC_NODE_STYLES } from '../components/semantic-styles.js'
 import {
   capabilityProfile,
@@ -21,38 +18,37 @@ import {
   type AutonomyLevel,
   type CapabilityInput,
 } from '../models/autonomy.js'
-import {
-  generateCandidates,
-  type CompositionCandidate,
-  type FigureEdgesInput,
-  type NodeMeta,
-} from '../composition/candidate.js'
+import { generateCandidates, type CompositionCandidate } from '../composition/candidate.js'
 import type { CriticVerdict } from '../critic/metric-critic.js'
 import { criticVerdict } from '../critic/metric-critic.js'
 import { routeEdgesWithObstacles, type RoutedEdge } from '../routing/router.js'
-import { classifyEdges, type EdgeTarget } from '../constraints/edge-aware-solver.js'
 import { normalizeVisualPlan } from '../visual/visualPlan.js'
-import { compositionSignature } from '../composition/priors.js'
 import { auditScientific, type ScientificIssue } from '../critic/scientific-critic.js'
-import {
-  validateDomain,
-  validateFamily,
-  familyFromFigureType,
-} from '../critic/family-validators.js'
-import type { TypographySignal } from '../critic/metric-critic.js'
 import {
   OUTPUT_CONTEXT_DEFAULT_WIDTH_MM,
   OUTPUT_CONTEXT_MIN_TEXT_PT,
   publicationAudit,
   qualityThresholdFor,
 } from '../contract/figure-contract.js'
+import { domainPresentationDefault, resolveDomain } from '../contract/domain-profile.js'
+import {
+  compileSemanticAttempt,
+  compileSemanticReplanFeedback,
+  isSemanticFailure,
+  planSemanticFigure,
+  type SemanticAttemptState,
+} from './semantic-attempt.js'
+import { familyStrategyFor, UnsupportedFigureFamilyError } from '../composition/family-strategy.js'
 import { auditFigureContract, type RenderedText } from '../contract/contract-audit.js'
 import { evaluateDeliveryGate } from '../delivery/delivery-gate.js'
 import { resolveFigureTypography } from '../render/typography.js'
 import {
-  domainPresentationDefault,
-  resolveDomain,
-} from '../contract/domain-profile.js'
+  validateDomain,
+  validateFamily,
+  familyFromFigureType,
+} from '../critic/family-validators.js'
+import type { TypographySignal } from '../critic/metric-critic.js'
+import { resolveReadingFlow, type ReadingFlow } from '../critic/reading-flow.js'
 
 export interface OrchestratorLlm {
   /** semantic planner: research meaning ONLY (no coordinates/colors) */
@@ -88,6 +84,8 @@ export interface OrchestrationInput {
   nodeSpec?: FigureNodeSpec
   measure?: typeof measureNode
   maxRecompose?: number
+  /** bounded semantic replans (real FigurePlan replacement); default 1 */
+  maxSemanticReplans?: number
   /** publication contract (P1): venue, final size, forbidden claims, provenance */
   contract?: import('../contract/figure-contract.js').FigureContract
   /** domain hint when no contract is supplied */
@@ -95,7 +93,12 @@ export interface OrchestrationInput {
 }
 
 export type OrchestrationStage =
-  | 'semantic.plan'
+  | 'semantic.plan.started'
+  | 'semantic.plan.completed'
+  | 'semantic.plan.failed'
+  | 'semantic.replan.started'
+  | 'semantic.replan.completed'
+  | 'semantic.replan.failed'
   | 'text.optimized'
   | 'measurement.completed'
   | 'capability.selected'
@@ -104,6 +107,7 @@ export type OrchestrationStage =
   | 'layout.solved'
   | 'route.repaired'
   | 'layout.repaired'
+  | 'critic.started'
   | 'critic.completed'
   | 'recompose.started'
   | 'figure.completed'
@@ -113,17 +117,24 @@ export interface OrchestrationEvent {
   stage: OrchestrationStage
   ok: boolean
   detail?: string
+  /** wall-clock ms — events are real happenings, never pre-emptive oks */
+  timestamp: number
+  /** semantic attempt index (0 = initial plan) */
+  attemptId?: number
+  /** candidate identifier when one is in scope */
+  candidateId?: string
 }
 
-/** Repair hierarchy actually applied (extended P0 ladder). */
+/** Repair hierarchy actually applied (extended P0 ladder + real L6). */
 export type AppliedRepair =
   | 'L2 ROUTE_FIX'
   | 'L3 LOCAL_GEOMETRY_FIX'
   | 'L3 LOCAL_GEOMETRY_FIX (budget exhausted)'
   | 'L4 COMPOSITION_REDESIGN'
-  | 'L5 RECOMPOSE (semantic replan)'
+  | 'L5 RECOMPOSE (semantic replan budget exhausted)'
   | 'L5 RECOMPOSE (composition redesign)'
   | 'L6 SEMANTIC_REPLAN'
+  | 'L6 SEMANTIC_REPLAN (replan failed)'
   | 'CONTENT_REDUCE'
   | 'TYPOGRAPHY_FIX'
 
@@ -134,7 +145,7 @@ export interface OrchestrationResult {
   autonomy?: AutonomyLevel
   measured?: MeasuredNode[]
   best?: CompositionCandidate
-  /** model-authored decomposition already scoped to semantic node IDs */
+  /** the WINNER's decomposition only — never a previous attempt's (ORCH-P0-04) */
   visualPlan?: import('../visual/visualPlan.js').VisualPlan
   /** resolved scientific domain (P1): drives renderer primitives + connector language */
   domain?: import('../contract/domain-profile.js').ScientificDomain
@@ -149,6 +160,10 @@ export interface OrchestrationResult {
   routes?: RoutedEdge[]
   critic?: CriticVerdict
   repairs?: AppliedRepair[]
+  /** how many REAL semantic replans replaced the FigurePlan */
+  semanticReplans?: number
+  /** per-attempt semantic diagnostics (ORCH-P0-02): parse vs schema errors */
+  semanticDiagnostics?: import('./semantic-attempt.js').SemanticPlanAttemptResult['diagnostics']
   error?: string
 }
 
@@ -169,28 +184,61 @@ function median(values: number[]): number {
   return sorted[Math.floor(sorted.length / 2)]!
 }
 
+/** per-candidate retry budget (ORCH-P0-05) — never a run-global boolean */
+interface CandidateAttemptBudget {
+  routeFixes: number
+}
+
+const MAX_ROUTE_FIXES_PER_CANDIDATE = 1
+
 export async function orchestrateFigure(
   input: OrchestrationInput,
   llm: OrchestratorLlm,
   onEvent?: (event: OrchestrationEvent) => void,
 ): Promise<OrchestrationResult> {
   const trace: OrchestrationEvent[] = []
-  const emit = (stage: OrchestrationStage, ok: boolean, detail?: string) => {
-    const event = { stage, ok, ...(detail ? { detail } : {}) }
+  const emit = (
+    stage: OrchestrationStage,
+    ok: boolean,
+    detail?: string,
+    extra?: { attemptId?: number; candidateId?: string },
+  ) => {
+    const event: OrchestrationEvent = {
+      stage,
+      ok,
+      timestamp: Date.now(),
+      ...(detail ? { detail } : {}),
+      ...(extra ?? {}),
+    }
     trace.push(event)
     onEvent?.(event)
   }
-  // P1/P0.5: domain resolution + Render Typography single source of truth.
-  // Every visible pt size is resolved ONCE here (contract-scaled); measurement,
-  // the renderer and the publication audit all consume the same object.
+  // P1: domain resolution + final-size-aware typography scale. The contract's
+  // physical floor is solved FORWARD — canvas fonts scale up so the printed
+  // figure clears the floor — rather than gated after the fact.
   const domain = resolveDomain(input.contract?.domain ?? input.domainHint)
-  /** P0.5: single source of truth for every visible pt; resolved after parse */
-  let typography: import('../render/typography.js').ResolvedFigureTypography | null = null
+  let contractFontScale = 1
+  if (input.contract) {
+    const finalWidthMm =
+      input.contract.output.finalWidthMm ??
+      OUTPUT_CONTEXT_DEFAULT_WIDTH_MM[input.contract.output.context]
+    const floorPt =
+      input.contract.minTextPtAtFinalSize ??
+      OUTPUT_CONTEXT_MIN_TEXT_PT[input.contract.output.context]
+    const canvasMm = (input.canvasW * 25.4) / 96
+    const smallestDefault = Math.min(
+      ...Object.values(SEMANTIC_NODE_STYLES).map((style) => style.detailSizePt),
+    )
+    contractFontScale = Math.max(1, (floorPt * canvasMm) / finalWidthMm / smallestDefault)
+  }
   const specFor = (type: keyof typeof SEMANTIC_NODE_STYLES): NodeTextSpec => {
     const style = SEMANTIC_NODE_STYLES[type]
+    const round1 = (v: number) => Math.round(v * 10) / 10
     return {
-      titleSizePt: style.titleSizePt,
-      detailSizePt: style.detailSizePt,
+      titleSizePt: round1((input.nodeSpec?.titleSizePt ?? style.titleSizePt) * contractFontScale),
+      detailSizePt: round1(
+        (input.nodeSpec?.detailSizePt ?? style.detailSizePt) * contractFontScale,
+      ),
       maxTitleLines: style.maxTitleLines,
       maxDetailLines: style.maxDetailLines,
       padX: input.nodeSpec?.padX ?? style.padX,
@@ -204,105 +252,82 @@ export async function orchestrateFigure(
     }
   }
 
-  // SEMANTIC_PLAN (+R2 repair loop handled by the caller on null)
-  emit('semantic.plan', true)
-  let plan: FigurePlanV2 | null = null
-  try {
-    plan = parseFigurePlanV2(await llm.semanticPlan(input.thesis))
-  } catch (err) {
-    emit('figure.failed', false, err instanceof Error ? err.message : String(err))
-    return {
-      ok: false,
-      trace,
-      error: `semantic planner failed: ${err instanceof Error ? err.message : String(err)}`,
-    }
-  }
-  if (!plan) {
-    emit('figure.failed', false, 'FigurePlan v2 failed schema validation')
-    return { ok: false, trace, error: 'FigurePlan v2 failed schema validation' }
-  }
-
-  // P0.5: resolve the contract-scaled typography NOW (after parse, before any
-  // measurement). The renderer and publication audit consume this same object.
-  typography = resolveFigureTypography({
-    plan,
-    contract: input.contract,
-    canvasW: input.canvasW,
-    nodeSpecOverrides: input.nodeSpec,
-  })
-
-  // TEXT_OPTIMIZE: if the planner did not compress visible titles, derive a
-  // restrained fallback (first clause, ≤14 chars) — soft rule, meaning kept.
-  emit('text.optimized', true)
-  for (const node of plan.nodes) {
-    if (!node.visible.title) {
-      node.visible.title = node.semanticLabel.slice(0, 14)
+  // QA-P0-02: the critic scores composition against the figure FAMILY even
+  // without a contract — legacy figureType strings map onto families.
+  let familyFallback: import('../contract/figure-contract.js').FigureFamily | undefined
+  // FigureFamily strategy (COMP-P1-02): a DECLARED unsupported family fails
+  // loudly here — it never silently degrades to freeform.
+  let family: import('../contract/figure-contract.js').FigureFamily | undefined
+  if (input.contract) {
+    try {
+      const strategy = familyStrategyFor(input.contract.figureFamily)
+      if (strategy) family = strategy.family
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err)
+      emit('figure.failed', false, error)
+      return { ok: false, trace, error }
     }
   }
 
-  // MEASURE — Component Registry v2: each semantic type measures with ITS OWN
-  // visual capacity (mechanism ≠ variable ≠ annotation)
-  emit('measurement.completed', true)
-  const measure = input.measure ?? measureNode
-  const measured = plan.nodes.map((node) => ({
-    ...measure(
-      { title: node.visible.title, detail: node.visible.detail },
-      {
-        ...specFor(node.type),
-        titleSizePt: typography!.node[node.id]!.titlePt,
-        detailSizePt: typography!.node[node.id]!.detailPt,
-      },
-      estimatorMeasurer(),
-    ),
-    title: node.id,
-  }))
-
-  // CAPABILITY_SELECT
-  const capability = capabilityProfile(input.capability ?? {})
-  const complexity = {
-    nodeCount: plan.nodes.length,
-    edgeCount: plan.edges.length,
-    hasFeedback: plan.edges.some((edge) => edge.relation === 'feedback'),
-    hasModeration: plan.edges.some((edge) => edge.relation === 'moderation'),
-  }
-  const autonomy = input.autonomyOverride ?? selectAutonomy(capability, complexity)
-  emit('capability.selected', true, autonomy)
-
-  // Semantic IDs are the internal identity everywhere. Visible titles remain
-  // display text only, so routing and criticism cannot lose a node to title
-  // translation or duplicate labels.
-  const edges: FigureEdgesInput[] = plan.edges.map((edge, index) => {
-    const presentation =
-      edge.presentation ?? domainPresentationDefault(domain, edge.relation) ?? undefined
-    return {
-      id: edge.id ?? `edge:${edge.from}->${edge.to}:${edge.relation}:${index}`,
-      from: edge.from,
-      to: edge.to,
-      role: edge.role,
-      relation: edge.relation,
-      ...(presentation ? { presentation } : {}),
+  const forbiddenClaims = [
+    ...(input.contract?.forbiddenClaims ?? []),
+    ...(input.contract?.visibleTextPolicy?.forbidden ?? []),
+  ]
+  // QA-P0-01: critic typography signals derived from the SAME measured data
+  // and the SAME SSOT pt the renderer draws — never re-derived or drifted.
+  const buildTypographySignals = (
+    attemptState: SemanticAttemptState,
+  ): Map<string, TypographySignal> => {
+    const PT_TO_PX = 96 / 72
+    const signals = new Map<string, TypographySignal>()
+    for (const [index, node] of attemptState.plan.nodes.entries()) {
+      const m = attemptState.measured[index]
+      if (!m || m.id !== node.id) continue
+      const spec = specFor(node.type)
+      const pt = typography?.node[node.id]
+      const titlePt = pt?.titlePt ?? spec.titleSizePt
+      const detailPt = pt?.detailPt ?? spec.detailSizePt
+      const textBlockH =
+        m.titleLines * titlePt * PT_TO_PX * spec.lineHeight +
+        (m.detailLines > 0
+          ? spec.titleGapY + m.detailLines * detailPt * PT_TO_PX * spec.lineHeight
+          : 0)
+      signals.set(node.id, {
+        titlePt,
+        detailPt,
+        titleLines: m.titleLines,
+        detailLines: m.detailLines,
+        maxTitleLines: spec.maxTitleLines,
+        maxDetailLines: spec.maxDetailLines,
+        textBlockH,
+        padY: spec.padY,
+      })
     }
-  })
-  // P0.5: full contract audit over the FINAL render intent (macro titles/details,
-  // micro-unit labels, edge labels). Runs each critic round; results feed the
-  // delivery gate. Plan-level claims stay as an early precheck signal.
+    return signals
+  }
+
+  // P0.5: full Figure Contract audit over the FINAL render intent (macro
+  // titles/details, micro-unit labels, edge labels). Runs each critic round;
+  // results feed the delivery gate.
   const auditContract = (
+    attemptPlan: FigurePlanV2,
+    attemptVisualPlan: import('../visual/visualPlan.js').VisualPlan | undefined,
     placements: Array<{ id: string }>,
   ): { violations: number; missingEvidence: number; messages: string[] } => {
     if (!input.contract) return { violations: 0, missingEvidence: 0, messages: [] }
     const rendered: RenderedText[] = []
-    for (const node of plan.nodes) {
+    for (const node of attemptPlan.nodes) {
       rendered.push({ id: node.id, kind: 'title', text: node.visible.title })
       if (node.visible.detail)
         rendered.push({ id: node.id, kind: 'detail', text: node.visible.detail })
     }
-    for (const module of visualPlan.modules) {
+    for (const module of attemptVisualPlan?.modules ?? []) {
       for (const unit of module.units) {
         rendered.push({ id: unit.id, kind: 'micro', text: unit.label })
         if (unit.detail) rendered.push({ id: unit.id, kind: 'micro', text: unit.detail })
       }
     }
-    for (const edge of plan.edges) {
+    for (const edge of attemptPlan.edges) {
       if (edge.label)
         rendered.push({
           id: edge.id ?? `${edge.from}->${edge.to}`,
@@ -311,7 +336,7 @@ export async function orchestrateFigure(
         })
     }
     const evidenceRefs = new Map<string, string[]>()
-    for (const node of plan.nodes) {
+    for (const node of attemptPlan.nodes) {
       const refs = [...(node.evidenceRefs ?? []), ...(node.provenanceRefs ?? [])]
       if (refs.length > 0) evidenceRefs.set(node.id, refs)
     }
@@ -329,110 +354,155 @@ export async function orchestrateFigure(
       messages: issues.map((issue) => `${issue.kind}: ${issue.message}`),
     }
   }
-  const forbiddenClaims = [
-    ...(input.contract?.forbiddenClaims ?? []),
-    ...(input.contract?.visibleTextPolicy?.forbidden ?? []),
-  ]
-  const forbiddenHits = forbiddenClaims.filter((claim) => {
-    const needle = claim.toLowerCase()
-    return plan.nodes.some(
-      (node) =>
-        node.visible.title.toLowerCase().includes(needle) ||
-        node.visible.detail?.toLowerCase().includes(needle) ||
-        node.semanticLabel.toLowerCase().includes(needle),
-    )
-  })
-  const signals = {
-    roles: new Set(plan.nodes.map((node) => node.role)),
-    relations: new Set(plan.edges.map((edge) => edge.relation)),
-    signature: compositionSignature({
-      nodeCount: plan.nodes.length,
-      edgeCount: plan.edges.length,
-      relations: new Set(plan.edges.map((edge) => edge.relation)),
-      roles: new Set(plan.nodes.map((node) => node.role)),
-      edges: plan.edges.map((edge) => ({ from: edge.from, to: edge.to, role: edge.role })),
-      importances: plan.nodes.map((node) => node.importance),
-    }),
-  }
-  const meta = new Map<string, NodeMeta>(
-    plan.nodes.map((node) => [
-      node.id,
-      { importance: node.importance, ...(node.groupId ? { groupId: node.groupId } : {}) },
-    ]),
-  )
-  const edgeTargets: EdgeTarget[] = classifyEdges(plan)
-  const edgePriorityById = new Map<string, 'primary' | 'secondary' | 'feedback'>()
-  for (const e of edgeTargets) {
-    edgePriorityById.set(`${e.fromId}\u0000${e.toId}`, e.priority)
-  }
-  const collisionClasses = new Map(
-    plan.nodes.map((node) => [node.id, SEMANTIC_NODE_STYLES[node.type].collisionClass]),
-  )
-  const importance = new Map(plan.nodes.map((node) => [node.id, node.importance]))
-  const groupIds = new Map(
-    plan.nodes.flatMap((node) => (node.groupId ? [[node.id, node.groupId] as const] : [])),
-  )
-  const direction = plan.readingIntent?.preferredDirection === 'TB' ? 'TB' : 'LR'
-  // QA-P0-02/01: the critic scores composition against the figure FAMILY and
-  // typography against MEASURED signals — both wired from the same data the
-  // composer used, so the rubric can never silently drift from reality.
-  const family = (input.contract?.figureFamily ??
-    familyFromFigureType(plan.figureType) ??
-    'freeform') as import('../contract/figure-contract.js').FigureFamily
-  const PT_TO_PX = 96 / 72
-  const typographySignals = new Map<string, TypographySignal>()
-  for (const [index, node] of plan.nodes.entries()) {
-    const m = measured[index]
-    if (!m || m.title !== node.id) continue
-    const spec = specFor(node.type)
-    // P0.5 typography SSOT wins: the resolved (contract-scaled) pt is what the
-    // renderer actually draws, so the critic must audit THAT, not the raw spec
-    const resolvedPt = typography?.node[node.id]
-    const titlePt = resolvedPt?.titlePt ?? spec.titleSizePt
-    const detailPt = resolvedPt?.detailPt ?? spec.detailSizePt
-    const textBlockH =
-      m.titleLines * titlePt * PT_TO_PX * spec.lineHeight +
-      (m.detailLines > 0 ? spec.titleGapY + m.detailLines * detailPt * PT_TO_PX * spec.lineHeight : 0)
-    typographySignals.set(node.id, {
-      titlePt,
-      detailPt,
-      titleLines: m.titleLines,
-      detailLines: m.detailLines,
-      maxTitleLines: spec.maxTitleLines,
-      maxDetailLines: spec.maxDetailLines,
-      textBlockH,
-      padY: spec.padY,
-    })
+
+  const compileAttempt = (plan: FigurePlanV2, attempt: number): SemanticAttemptState | string => {
+    try {
+      return compileSemanticAttempt({
+        plan,
+        attempt,
+        specFor,
+        ...(input.measure ? { measure: input.measure } : {}),
+        domain,
+        // ONLY a DECLARED (contract) family may gate grammar composition; the
+        // legacy figureType fallback is a critic-scoring hint, never a gate
+        ...(family ? { family } : {}),
+        ...(forbiddenClaims.length > 0 ? { forbiddenClaims } : {}),
+        ...(typography ? { typographyPt: typography.node } : {}),
+      })
+    } catch (err) {
+      // consistency assertion violation: fail loudly with the assertion text
+      return err instanceof Error ? err.message : String(err)
+    }
   }
 
+  // SEMANTIC_PLAN — real parse/repair loop with SPECIFIC diagnostics
+  // (ORCH-P0-02). started/completed/failed are separate events; preparing a
+  // call is never recorded as a success.
+  emit('semantic.plan.started', true, undefined, { attemptId: 0 })
+  const planResult = await planSemanticFigure({
+    thesis: input.thesis,
+    semanticPlan: llm.semanticPlan,
+    onAttempt: (info) => {
+      emit(
+        'semantic.plan.failed',
+        false,
+        `attempt ${info.attempt} ${info.failureKind}: ${info.errors.join('; ')}`.slice(0, 500),
+        { attemptId: info.attempt - 1 },
+      )
+    },
+  })
+  if (!planResult.plan) {
+    const error = `${planResult.failureKind ?? 'FIGURE_PLAN_SCHEMA_ERROR'}: ${planResult.errors.join('; ') || 'FigurePlan v2 failed schema validation'}`
+    emit('figure.failed', false, error)
+    return {
+      ok: false,
+      trace,
+      ...(planResult.diagnostics.length > 0 ? { semanticDiagnostics: planResult.diagnostics } : {}),
+      error,
+    }
+  }
+  emit('semantic.plan.completed', true, `attempt ${planResult.attemptsUsed}`, { attemptId: 0 })
+
+  // P0.5: resolve the contract-scaled typography NOW (after parse, before any
+  // measurement). The renderer and publication audit consume this same object.
+  const typography = resolveFigureTypography({
+    plan: planResult.plan,
+    ...(input.contract ? { contract: input.contract } : {}),
+    canvasW: input.canvasW,
+    ...(input.nodeSpec ? { nodeSpecOverrides: input.nodeSpec } : {}),
+  })
+  // QA-P0-02 family fallback: map the legacy figureType when no contract named one
+  if (!family) {
+    familyFallback = familyFromFigureType(planResult.plan.figureType) as
+      | import('../contract/figure-contract.js').FigureFamily
+      | undefined
+  }
+
+  const compiled = compileAttempt(planResult.plan, 0)
+  if (typeof compiled === 'string') {
+    const error = `semantic attempt compilation failed: ${compiled}`
+    emit('figure.failed', false, error)
+    return { ok: false, trace, error }
+  }
+  let state: SemanticAttemptState = compiled
+  emit('text.optimized', true)
+  emit('measurement.completed', true, `${state.measured.length} nodes`)
+
+  // CAPABILITY_SELECT
+  const capability = capabilityProfile(input.capability ?? {})
+  const complexity = {
+    nodeCount: state.plan.nodes.length,
+    edgeCount: state.plan.edges.length,
+    hasFeedback: state.plan.edges.some((edge) => edge.relation === 'feedback'),
+    hasModeration: state.plan.edges.some((edge) => edge.relation === 'moderation'),
+  }
+  const autonomy = input.autonomyOverride ?? selectAutonomy(capability, complexity)
+  emit('capability.selected', true, autonomy)
+
   const maxRecompose = input.maxRecompose ?? 2
+  const maxSemanticReplans = input.maxSemanticReplans ?? 1
   let critique: string[] | undefined
   let best: CompositionCandidate | null = null
   let critic: CriticVerdict | undefined = undefined
   let candidates: CompositionCandidate[] = []
   let candidateIdx = 0
-  let attempt = 0
-  let routeRetried = false
-  const repairs: AppliedRepair[] = []
-  let routes: RoutedEdge[] = []
-  // last per-iteration audit counters feeding the delivery gate
+  let composeAttempt = 0
+  let semanticReplansUsed = 0
+  let scientificIssues: ScientificIssue[] = []
+  let lastSemanticDiagnostics = planResult.diagnostics
+  // P0.5 delivery-gate counters, recomputed each critic round
   let lastScientificHard = 0
   let lastPublicationHard = 0
   let lastContractViolations = 0
   let lastMissingEvidence = 0
+  const repairs: AppliedRepair[] = []
+  let routes: RoutedEdge[] = []
   let unrenderedRelations: RoutedEdge[] = []
-  let visualPlan: ReturnType<typeof normalizeVisualPlan> = { modules: [] }
+  // hard bound: the ladder always terminates (fuzz invariant)
+  const maxRounds = maxRecompose + maxSemanticReplans + 4
 
-  while (true) {
+  const failResult = (error: string): OrchestrationResult => {
+    return {
+      ok: false,
+      trace,
+      plan: state.plan,
+      autonomy,
+      measured: state.measured,
+      ...(best
+        ? {
+            best,
+            visualPlan: best.plan.visualPlan ?? { modules: [] },
+            domain,
+            unrenderedRelations,
+            routes,
+            critic,
+            ...(repairs.length > 0 ? { repairs: repairs as AppliedRepair[] } : {}),
+          }
+        : {}),
+      ...(lastSemanticDiagnostics.length > 0
+        ? { semanticDiagnostics: lastSemanticDiagnostics }
+        : {}),
+      semanticReplans: semanticReplansUsed,
+      error,
+    }
+  }
+
+  for (let round = 0; round < maxRounds; round++) {
     if (candidates.length === 0) {
-      emit('composition.started', true, attempt === 0 ? autonomy : `recompose#${attempt}`)
+      emit(
+        'composition.started',
+        true,
+        composeAttempt === 0 ? autonomy : `compose#${composeAttempt}`,
+        { attemptId: state.attempt },
+      )
+      // model-authored decomposition is OWNED by this attempt (ORCH-P0-04)
       let modelPlan: SpatialPlan | null = null
       if (autonomy !== 'A0' && llm.compose) {
         try {
           const raw = await llm.compose({
-            plan,
-            measured: measured.map((node, index) => ({
-              id: plan.nodes[index]?.id ?? node.title,
+            plan: state.plan,
+            measured: state.measured.map((node) => ({
+              id: node.id,
               w: node.bounds.preferredWidth,
               h: node.bounds.preferredHeight,
             })),
@@ -442,65 +512,60 @@ export async function orchestrateFigure(
           })
           const normalized = normalizeSpatialPlan(
             raw,
-            plan.nodes.map((node) => node.id),
+            state.plan.nodes.map((node) => node.id),
             { readingFlow: 'LR', visualRole: 'primary' },
           )
           const normalizedVisualPlan = normalizeVisualPlan(
             (raw as Record<string, unknown> | null)?.visualPlan,
-            plan,
+            state.plan,
           )
+          // the decomposition attaches ONLY to this attempt's model plan;
+          // when the spatial plan is unusable the decomposition dies with it
           modelPlan = normalized
             ? {
                 ...normalized,
                 visualPlan: normalizedVisualPlan,
               }
             : null
-          if (normalizedVisualPlan.modules.length > 0) visualPlan = normalizedVisualPlan
         } catch {
           modelPlan = null
         }
       }
-      candidates = generateCandidates(
-        autonomy,
-        measured,
-        edges,
-        signals,
-        input.canvasW,
-        input.canvasH,
-        modelPlan,
-        meta,
-      )
-      if (candidates.length === 0) {
-        emit('figure.failed', false, 'no composition candidates generated')
-        return {
-          ok: false,
-          trace,
-          error: 'no composition candidates generated',
-          plan,
+      try {
+        candidates = generateCandidates(
           autonomy,
-          measured,
-          ...(best
-            ? {
-                best,
-                visualPlan,
-                domain,
-                unrenderedRelations,
-                routes,
-                critic,
-                repairs: repairs as AppliedRepair[],
-              }
-            : {}),
+          state.measured,
+          state.edges,
+          state.signals,
+          input.canvasW,
+          input.canvasH,
+          modelPlan,
+          state.meta,
+          state.candidateContext,
+        )
+      } catch (err) {
+        if (err instanceof UnsupportedFigureFamilyError) {
+          emit('figure.failed', false, err.message)
+          return failResult(err.message)
         }
+        throw err
+      }
+      if (candidates.length === 0) {
+        const error = 'no composition candidates generated'
+        emit('figure.failed', false, error)
+        return failResult(error)
       }
       candidateIdx = 0
     }
     best = candidates[Math.min(candidateIdx, candidates.length - 1)]!
-    if (best.plan.visualPlan) visualPlan = best.plan.visualPlan
-    emit('composition.completed', true, best.source)
+    const candidateId = best.priorId ?? 'model'
+    emit('composition.completed', true, best.source, { candidateId })
 
     // Geometry legalizes the designer's composition but never repositions
     // boxes merely to make a primary connector straighter.
-    emit('layout.solved', true, `${best.solve.issues.length} issues`)
+    emit('layout.solved', true, `${best.solve.issues.length} issues`, { candidateId })
+    // every candidate owns a FRESH retry budget (ORCH-P0-05)
+    const budget: CandidateAttemptBudget = { routeFixes: 0 }
 
     const rectMap = new Map(best.solve.placements.map((placement) => [placement.id, placement]))
     const connectorPresentations = new Set([
@@ -511,16 +576,23 @@ export async function orchestrateFigure(
       'feedback-loop',
       'junction',
     ])
-    const routeInputs = edges.map((edge) => ({
-      key: edge.id ?? `${edge.from}->${edge.to}`,
-      semanticEdgeId: edge.id ?? `${edge.from}->${edge.to}`,
-      fromId: edge.from,
-      toId: edge.to,
-      role: edge.role,
-      relation: edge.relation,
-      presentation: (edge.presentation ?? 'arrow') as RelationPresentation,
-      priority: edgePriorityById.get(`${edge.from}\u0000${edge.to}`) ?? 'secondary',
-    }))
+    const routeInputs = state.edges.map((edge) => {
+      const pair = `${edge.from}\u0000${edge.to}`
+      const priority =
+        state.edgePriorityById.get(edge.id ?? '') ??
+        state.edgePriorityByPair.get(pair)?.[0] ??
+        'secondary'
+      return {
+        key: edge.id ?? `${edge.from}->${edge.to}`,
+        semanticEdgeId: edge.id ?? `${edge.from}->${edge.to}`,
+        fromId: edge.from,
+        toId: edge.to,
+        role: edge.role,
+        relation: edge.relation,
+        presentation: (edge.presentation ?? 'arrow') as RelationPresentation,
+        priority,
+      }
+    })
     // Relationship presentation is model-authored: connectors are routed only
     // when the declared representation is a connector, regardless of whether
     // the semantic relationship happened to be classified as primary.
@@ -535,18 +607,17 @@ export async function orchestrateFigure(
     // reads. Every drawn line must be irreplaceable, so above the density cap
     // only the highest-priority relations keep their line and the rest are
     // demoted to recorded spatial presentation — never silently dropped.
-    const densityCap = Math.max(3, Math.ceil(plan.nodes.length * 1.8))
+    const densityCap = Math.max(3, Math.ceil(state.plan.nodes.length * 1.8))
     let routeableInputs = connectorInputs
     if (connectorInputs.length > densityCap) {
       const rank: Record<string, number> = { primary: 0, feedback: 1, secondary: 2 }
       const sorted = [...connectorInputs].sort(
         (a, b) => (rank[a.priority] ?? 2) - (rank[b.priority] ?? 2) || a.key.localeCompare(b.key),
       )
-      // Directional relations (causal/inhibition/feedback/moderation primaries)
-      // are NEVER density-suppressed: without an explicit directional symbol the
-      // science is lost. Only secondary relations may be demoted to spatial
-      // presentation; if directional edges alone exceed the cap, we keep them
-      // all and let the delivery gate force a semantic replan instead.
+      // P0.5: directional relations (causal/inhibition/feedback/moderation
+      // primaries) are NEVER density-suppressed — without the explicit symbol
+      // the science is lost. Only secondaries may be demoted; if directional
+      // edges alone exceed the cap the delivery gate forces a replan instead.
       const directional = sorted.filter((edge) => (rank[edge.priority] ?? 2) < 2)
       const secondary = sorted.filter((edge) => (rank[edge.priority] ?? 2) >= 2)
       const secondaryKeep = Math.max(0, densityCap - directional.length)
@@ -566,20 +637,23 @@ export async function orchestrateFigure(
       routeableInputs,
       rectMap,
       { w: input.canvasW, h: input.canvasH },
-      direction,
+      state.direction,
     )
+    emit('critic.started', true, undefined, { candidateId })
     critic = criticVerdict({
       solve: best.solve,
-      edges,
+      edges: state.edges,
       canvasW: input.canvasW,
       canvasH: input.canvasH,
-      importance,
-      groupIds,
-      intent: { plan, spatial: best.plan },
+      importance: state.importance,
+      groupIds: state.groupIds,
+      intent: { plan: state.plan, spatial: best.plan },
       routed: routes,
       passThreshold: qualityThresholdFor(input.contract),
-      family,
-      typography: typographySignals,
+      family: (family ?? familyFallback ?? undefined) as
+        | import('../contract/figure-contract.js').FigureFamily
+        | undefined,
+      typography: buildTypographySignals(state),
       ...(input.contract
         ? {
             finalWidthMm:
@@ -589,28 +663,28 @@ export async function orchestrateFigure(
         : {}),
     })
     // Scientific audit (17.3): evidence coverage, connector realization,
-    // direction across ALL reading flows, contradiction/cycle policy, orphans,
-    // scoped duplicate labels, multi-signal dominance. Hard scientific
-    // failures escalate a PASS — the figure may look clean while silently
-    // dropping required science.
-    const scientificIssues: ScientificIssue[] = [
+    // causal direction, dominance. Hard scientific failures escalate a PASS —
+    // the figure may look clean while silently dropping required science.
+    // QA-P0-05: audit against the DECLARED reading flow (all six), the solved
+    // spatial plan and family; QA-P1-06/07 validators append structured
+    // domain/family checks.
+    const declaredFlow: ReadingFlow = resolveReadingFlow(best.plan, state.plan)
+    scientificIssues = [
       ...auditScientific({
-        plan,
+        plan: state.plan,
         placements: best.solve.placements,
         routes,
-        importance,
+        importance: state.importance,
         spatial: best.plan,
-        family,
+        ...((family ?? familyFallback) ? { family: (family ?? familyFallback)! } : {}),
         domain,
-        ...(plan.readingIntent?.preferredDirection
-          ? { direction: plan.readingIntent.preferredDirection }
-          : {}),
+        direction: declaredFlow,
       }),
-      // QA-P1-06/07: domain + family validators (structured, soft)
-      ...validateDomain(plan, domain),
-      ...validateFamily(plan, family),
+      ...validateDomain(state.plan, domain),
+      ...validateFamily(state.plan, (family ?? familyFallback ?? undefined) as string | undefined),
     ]
     const hardScientific = scientificIssues.filter((issue) => issue.severity === 'hard')
+    lastScientificHard = hardScientific.length
     if (hardScientific.length > 0 && critic.verdict === 'PASS') {
       const needsRoute = hardScientific.some((issue) => issue.repairClass === 'ROUTE_FIX')
       critic = {
@@ -625,28 +699,32 @@ export async function orchestrateFigure(
         gateIssues: [...critic.gateIssues, ...scientificIssues.map((issue) => issue.message)],
       }
     }
-    // P0.5: full Figure Contract audit over the final render intent.
-    const contractAuditResult = auditContract(best.solve.placements)
+    // P1: forbidden claims / visible-text violations block delivery outright.
+    // Recomputed for THIS attempt's plan on every replan (ORCH-P0-03).
+    // P0.5: full contract audit over the final render intent feeds the same
+    // gate; EVIDENCE_MISSING escalates to semantic replan like forbidden hits.
+    const contractAuditResult = auditContract(
+      state.plan,
+      best.plan.visualPlan,
+      best.solve.placements,
+    )
     lastContractViolations = contractAuditResult.violations
     lastMissingEvidence = contractAuditResult.missingEvidence
-    lastScientificHard = hardScientific.length
-    // P1: forbidden claims / visible-text violations block delivery outright.
-    const contractViolations = contractAuditResult.violations + forbiddenHits.length
+    const contractViolations = contractAuditResult.violations + state.forbiddenHits.length
     if (contractViolations > 0 || contractAuditResult.missingEvidence > 0) {
-      const messages = [
-        ...forbiddenHits.map((claim) => `forbidden claim: ${claim}`),
+      const message = [
+        ...state.forbiddenHits.map((claim) => `forbidden claim: ${claim}`),
         ...contractAuditResult.messages,
-      ]
-      const message = messages.join('; ')
+      ].join('; ')
       if (critic.verdict === 'PASS' || critic.verdict === 'LOCAL_LAYOUT_FIX') {
         critic = {
           ...critic,
           verdict: 'RECOMPOSE',
           reason: message,
-          gateIssues: [...critic.gateIssues, ...messages],
+          gateIssues: [...critic.gateIssues, ...message.split('; ')],
         }
       } else {
-        critic = { ...critic, gateIssues: [...critic.gateIssues, ...messages] }
+        critic = { ...critic, gateIssues: [...critic.gateIssues, ...message.split('; ')] }
       }
     }
     // P3: publication QA at final physical size (fonts scale forward, so this
@@ -656,12 +734,13 @@ export async function orchestrateFigure(
         contract: input.contract,
         canvasW: input.canvasW,
         canvasH: input.canvasH,
+        // P0.5 SSOT: the audit consumes the effective pt the renderer draws
         minFontPt: typography!.minEffectiveTextPt,
       })
       const pubHard = pubIssues.filter((issue) => issue.severity === 'hard')
       lastPublicationHard = pubHard.length
       if (pubHard.length > 0) {
-        repairs.push('TYPOGRAPHY_FIX' as AppliedRepair)
+        repairs.push('TYPOGRAPHY_FIX')
         const message = pubHard.map((issue) => issue.detail).join('; ')
         critic = {
           ...critic,
@@ -671,33 +750,35 @@ export async function orchestrateFigure(
         }
       }
     }
-    emit('critic.completed', true, critic.verdict)
+    emit('critic.completed', true, critic.verdict, { candidateId })
 
-    if (critic.verdict === 'ROUTE_FIX' && !routeRetried) {
+    if (critic.verdict === 'ROUTE_FIX' && budget.routeFixes < MAX_ROUTE_FIXES_PER_CANDIDATE) {
       // Geometry fix for connector geometry only: admit one extra corridor,
       // never touch the composition or suppress a declared relation.
-      routeRetried = true
+      budget.routeFixes++
       repairs.push('L2 ROUTE_FIX')
       const extraLanes = [median(best.solve.placements.map((p) => p.y + p.h / 2))]
       routes = routeEdgesWithObstacles(
         routeableInputs,
         rectMap,
         { w: input.canvasW, h: input.canvasH },
-        direction,
+        state.direction,
         extraLanes,
       )
       critic = criticVerdict({
         solve: best.solve,
-        edges,
+        edges: state.edges,
         canvasW: input.canvasW,
         canvasH: input.canvasH,
-        importance,
-        groupIds,
-        intent: { plan, spatial: best.plan },
+        importance: state.importance,
+        groupIds: state.groupIds,
+        intent: { plan: state.plan, spatial: best.plan },
         routed: routes,
         passThreshold: qualityThresholdFor(input.contract),
-        family,
-        typography: typographySignals,
+        family: (family ?? familyFallback ?? undefined) as
+          | import('../contract/figure-contract.js').FigureFamily
+          | undefined,
+        typography: buildTypographySignals(state),
         ...(input.contract
           ? {
               finalWidthMm:
@@ -706,8 +787,8 @@ export async function orchestrateFigure(
             }
           : {}),
       })
-      emit('route.repaired', true, critic.verdict)
-      emit('critic.completed', true, `${critic.verdict} (after L2)`)
+      emit('route.repaired', true, critic.verdict, { candidateId })
+      emit('critic.completed', true, `${critic.verdict} (after L2)`, { candidateId })
     }
 
     if (
@@ -731,14 +812,83 @@ export async function orchestrateFigure(
       break
     }
 
-    if (critic.verdict === 'RECOMPOSE' && attempt < maxRecompose) {
-      attempt++
-      const semanticFailure =
-        critic.hardGates.some((gate) => gate.scope === 'semantic' && !gate.pass) ||
-        (critic.decisions?.some((d) => d.scope === 'semantic') ?? false)
-      repairs.push(semanticFailure ? 'L6 SEMANTIC_REPLAN' : 'L5 RECOMPOSE (composition redesign)')
+    if (critic.verdict === 'RECOMPOSE') {
+      // forbidden claims are semantic failures of the PLAN: recomposing the
+      // same violating content cannot help — only a new plan (or an honest
+      // failure) can
+      const semantic = isSemanticFailure(critic) || state.forbiddenHits.length > 0
+      // L6 SEMANTIC_REPLAN (ORCH-P0-01): the FigurePlan itself is regenerated
+      // by the model and EVERY derived state object is rebuilt. A bounded
+      // budget keeps the ladder finite; when the budget is spent the ladder
+      // degrades to an honest composition redesign.
+      if (semantic && semanticReplansUsed < maxSemanticReplans) {
+        semanticReplansUsed++
+        emit('semantic.replan.started', true, `replan #${semanticReplansUsed}`, {
+          attemptId: semanticReplansUsed,
+        })
+        const feedback = compileSemanticReplanFeedback({
+          critic,
+          scientificIssues,
+          forbiddenHits: state.forbiddenHits,
+        })
+        const replan = await planSemanticFigure({
+          thesis: input.thesis,
+          semanticPlan: llm.semanticPlan,
+          critiqueFeedback: feedback,
+          onAttempt: (info) => {
+            lastSemanticDiagnostics = [
+              ...lastSemanticDiagnostics,
+              {
+                attempt: info.attempt,
+                kind: info.failureKind ?? 'FIGURE_PLAN_SCHEMA_ERROR',
+                errors: info.errors,
+              },
+            ]
+            emit(
+              'semantic.replan.failed',
+              false,
+              `attempt ${info.attempt} ${info.failureKind}: ${info.errors.join('; ')}`.slice(
+                0,
+                500,
+              ),
+              { attemptId: semanticReplansUsed },
+            )
+          },
+        })
+        if (replan.plan) {
+          const next = compileAttempt(replan.plan, semanticReplansUsed)
+          if (typeof next === 'string') {
+            emit('semantic.replan.failed', false, `compile: ${next}`, {
+              attemptId: semanticReplansUsed,
+            })
+          } else {
+            state = next
+            lastSemanticDiagnostics = [...lastSemanticDiagnostics, ...replan.diagnostics]
+            repairs.push('L6 SEMANTIC_REPLAN')
+            emit('semantic.replan.completed', true, `attempt ${semanticReplansUsed}`, {
+              attemptId: semanticReplansUsed,
+            })
+            // plan replaced → the candidate set, critique and budgets die with
+            // the old plan; the next round composes from the NEW state
+            candidates = []
+            candidateIdx = 0
+            critique = undefined
+            best = null
+            composeAttempt++
+            continue
+          }
+        } else {
+          lastSemanticDiagnostics = [...lastSemanticDiagnostics, ...replan.diagnostics]
+          repairs.push('L6 SEMANTIC_REPLAN (replan failed)')
+        }
+      } else if (semantic) {
+        repairs.push('L5 RECOMPOSE (semantic replan budget exhausted)')
+      } else {
+        repairs.push('L5 RECOMPOSE (composition redesign)')
+      }
       if (critic.scores.compositionQuality <= 3) repairs.push('CONTENT_REDUCE')
-      emit('recompose.started', true, `attempt ${attempt}`)
+      composeAttempt++
+      emit('recompose.started', true, `attempt ${composeAttempt}`)
       critique = critic.decisions?.length
         ? critic.decisions.map((d) => `${d.action}: ${d.message}`)
         : critic.gateIssues.length
@@ -752,26 +902,9 @@ export async function orchestrateFigure(
   }
 
   if (!best || !critic) {
-    emit('figure.failed', false, 'composition pipeline ended without a candidate')
-    return {
-      ok: false,
-      trace,
-      error: 'composition pipeline ended without a candidate',
-      plan,
-      autonomy,
-      ...(best
-        ? {
-            best,
-            visualPlan,
-            domain,
-            unrenderedRelations,
-            routes,
-            measured,
-            critic,
-            repairs: repairs as AppliedRepair[],
-          }
-        : {}),
-    }
+    const error = 'composition pipeline ended without a candidate'
+    emit('figure.failed', false, error)
+    return failResult(error)
   }
 
   // P0.5 Delivery Gate — the ONLY source of orchestration.ok. Repair budget
@@ -781,7 +914,7 @@ export async function orchestrateFigure(
     critic,
     scientificHardIssues: lastScientificHard,
     publicationHardIssues: lastPublicationHard,
-    contentContractViolations: lastContractViolations + forbiddenHits.length,
+    contentContractViolations: lastContractViolations + state.forbiddenHits.length,
     requiredEvidenceMissing: lastMissingEvidence,
     repairBudgetExhausted: true,
   })
@@ -789,37 +922,22 @@ export async function orchestrateFigure(
     const error = `delivery gate failed: ${delivery.detail} — ${critic.reason ?? critic.gateIssues.join('; ') ?? 'quality below threshold'}`
     emit('figure.failed', false, error)
     return {
-      ok: false,
-      trace,
-      plan,
-      autonomy,
-      measured,
-      best,
-      visualPlan,
-      domain,
-      unrenderedRelations,
-      candidates: candidates.map((candidate) => ({
-        source: candidate.source,
-        priorId: candidate.priorId,
-        score: Math.round(candidate.score * 10) / 10,
-        crossings: candidate.crossings,
-      })),
-      routes,
-      critic,
-      ...(repairs.length > 0 ? { repairs } : {}),
-      error,
+      ...failResult(error),
       delivery,
+      typography,
     }
   }
-  emit('figure.completed', true, critic.verdict)
+
+  emit('figure.completed', true, critic.verdict, { candidateId: best.priorId ?? 'model' })
   return {
     ok: delivery.pass,
     trace,
-    plan,
+    plan: state.plan,
     autonomy,
-    measured,
+    measured: state.measured,
     best,
-    visualPlan,
+    // the WINNER's decomposition only; an attempt without one ships empty
+    visualPlan: best.plan.visualPlan ?? { modules: [] },
     domain,
     unrenderedRelations,
     candidates: candidates.map((candidate) => ({
@@ -830,7 +948,9 @@ export async function orchestrateFigure(
     })),
     routes,
     critic,
-    ...(repairs.length > 0 ? { repairs } : {}),
+    ...(repairs.length > 0 ? { repairs: repairs as AppliedRepair[] } : {}),
+    semanticReplans: semanticReplansUsed,
+    ...(lastSemanticDiagnostics.length > 0 ? { semanticDiagnostics: lastSemanticDiagnostics } : {}),
     delivery,
     typography,
   }

@@ -134,7 +134,9 @@ describe('Yangtze cultural-communication regression', () => {
     const result = await orchestrateFigure(
       { thesis: planV2.thesis, canvasW: 1280, canvasH: 720 },
       { semanticPlan: async () => planV2 },
+      (event: { stage: string; detail?: string }) => console.log('EV ' + event.stage + ' :: ' + (event.detail ?? '')),
     )
+    console.log('NC ' + JSON.stringify((result as unknown as { candidates?: Array<{ priorId: string | null; score: number }> }).candidates?.map((c) => [c.priorId, c.score])))
     expect(result.ok).toBe(true)
     expect(result.critic?.verdict).not.toBe('RECOMPOSE')
     expect(result.best?.solve.issues).toEqual([])
