@@ -273,9 +273,6 @@ export function parseFigurePlanV2WithDiagnostics(raw: unknown): FigurePlanDiagno
     return { plan: null, errors }
   }
 
-  const titleTable = {
-    byRef: new Map<string, number[]>(nodes.map((node, index) => [node.id, [index]])),
-  }
   const edgeIds = new Set<string>(
     (Array.isArray(plan.edges) ? plan.edges : []).flatMap((edge) => {
       const id = text((edge as Record<string, unknown> | null)?.id)

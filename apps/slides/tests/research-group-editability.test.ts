@@ -16,7 +16,6 @@ import {
   updateConnectorsForGroupChildMoved,
   updateConnectorsForMoved,
   elementSpid,
-  type OpenedPptx,
   type Slide,
 } from '@genoffice/pptx-engine'
 import { runTxn } from '../src/main/ops/executor'
@@ -120,7 +119,7 @@ function findMeta<
 
 describe('composite module editability (native groups)', () => {
   it('moving the group moves children boxes and the bound connector follows', async () => {
-    const { opened, parent, unit, target } = await makeModuleWithConnector()
+    const { opened, parent, unit } = await makeModuleWithConnector()
     const r = runTxn(opened, {
       ops: [{ op: 'groupElements', target: { slide: 0 }, els: [parent.id, unit.id] }],
     })

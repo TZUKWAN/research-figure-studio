@@ -37,7 +37,7 @@ const FULL_METADATA = {
 async function makeDeck(): Promise<{ reopened: Awaited<ReturnType<typeof openPptx>> }> {
   const opened = await openPptx(await createBlankPptx())
   const slide = opened.deck.slides[0]!
-  const el = addElement(slide, {
+  const _el = addElement(slide, {
     kind: 'roundRect',
     offset: { x: 952500, y: 952500, cx: 1905000, cy: 952500 },
     paragraphs: [{ runs: [{ text: 'core' }] }],

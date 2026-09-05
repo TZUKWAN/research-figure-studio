@@ -1634,11 +1634,7 @@ export function App() {
   }, [])
 
   // ── Slide show tab (show-actions.ts): start show / presenter view / hide slide ──
-  const startSlideShow = useCallback(
-    (fromStart: boolean) => showActions.startSlideShow(ctxRef.current, fromStart),
-    [],
-  )
-  const exitSlideShow = useCallback(
+    const exitSlideShow = useCallback(
     (lastIndex: number) => showActions.exitSlideShow(ctxRef.current, lastIndex),
     [],
   )

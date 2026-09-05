@@ -150,7 +150,7 @@ export function solveGeometry(input: SolveInput): SolveResult {
         }
       }
     }
-    for (const [id, rect] of rects) {
+    for (const rect of rects.values()) {
       rect.x = Math.round(Math.min(Math.max(margin, rect.x), input.canvasW - margin - rect.w))
       rect.y = Math.round(Math.min(Math.max(margin, rect.y), input.canvasH - margin - rect.h))
     }

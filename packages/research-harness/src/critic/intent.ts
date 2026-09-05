@@ -17,7 +17,7 @@ export function auditIntent(
   plan: SpatialPlan,
   placements: SolvedPlacement[],
   canvasW: number,
-  canvasH: number,
+  _canvasH: number,
 ): IntentFailure[] {
   const failures: IntentFailure[] = []
   if (placements.length < 2) return failures

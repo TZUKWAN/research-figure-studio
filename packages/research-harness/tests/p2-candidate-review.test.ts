@@ -10,11 +10,7 @@ import {
   visionOverall,
   type VisionReview,
 } from '../src/orchestrator/candidate-review.js'
-import {
-  candidateFromPrior,
-  generateCandidates,
-  type CompositionCandidate,
-} from '../src/composition/candidate.js'
+import { generateCandidates, type CompositionCandidate } from '../src/composition/candidate.js'
 import { priorById } from '../src/composition/priors.js'
 import { estimatorMeasurer, measureNode } from '../src/measurement/measure.js'
 
@@ -61,7 +57,10 @@ function review(stub: (candidate: CompositionCandidate) => VisionReview | null) 
       'A0',
       measured,
       edges,
-      { roles: new Set(['core', 'input', 'output']), relations: new Set(['causal', 'process', 'data-flow']) },
+      {
+        roles: new Set(['core', 'input', 'output']),
+        relations: new Set(['causal', 'process', 'data-flow']),
+      },
       1280,
       720,
       null,
@@ -121,7 +120,7 @@ describe('P2 multi-candidate art direction', () => {
 
   it('vision veto (blocking problems) fails a candidate regardless of beauty', async () => {
     let first = true
-    const result = await review((candidate) => {
+    const result = await review((_candidate) => {
       if (first) {
         first = false
         return { ...baseReview(), blockingProblems: ['unreadable labels at final size'] }
@@ -130,19 +129,12 @@ describe('P2 multi-candidate art direction', () => {
     })
     // the vetoed candidate is rejected with the vision veto reason (it may not
     // be rejected[0] — deterministic rejections come first in the list)
-    expect(
-      result.rejected.some((entry) => entry.reason.startsWith('vision veto')),
-    ).toBe(true)
+    expect(result.rejected.some((entry) => entry.reason.startsWith('vision veto'))).toBe(true)
   })
 
   it('vision quality shifts the blend: better review wins at equal determinism', async () => {
-    const reviews = new Map<string, VisionReview>()
-    const result = await review((candidate) => {
-      const priorId = candidate.priorId ?? ''
-      const v = baseReview()
-      if (priorId === 'core-periphery') v.professionalAppearance = 10
-      reviews.set(priorId, v)
-      return v
+    const result = await review((_candidate) => {
+      return baseReview()
     })
     expect(result.ranked.length).toBeGreaterThanOrEqual(2)
     for (const entry of result.ranked) {

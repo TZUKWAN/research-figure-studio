@@ -299,7 +299,7 @@ describe('P0.5 render typography SSOT', () => {
       output: { context: 'paper-single-column' },
     } as never
     const t = resolveFigureTypography({ plan, contract, canvasW: 1280 })
-    const mmPerPt = 85 / 338.67
+    const _mmPerPt = 85 / 338.67
     const floor = 5.5
     expect(t.minEffectiveTextPt * (85 / 338.67)).toBeGreaterThanOrEqual(floor - 5e-4)
     for (const size of [

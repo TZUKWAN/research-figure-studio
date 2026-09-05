@@ -134,9 +134,17 @@ describe('Yangtze cultural-communication regression', () => {
     const result = await orchestrateFigure(
       { thesis: planV2.thesis, canvasW: 1280, canvasH: 720 },
       { semanticPlan: async () => planV2 },
-      (event: { stage: string; detail?: string }) => console.log('EV ' + event.stage + ' :: ' + (event.detail ?? '')),
+      (event: { stage: string; detail?: string }) =>
+        console.log('EV ' + event.stage + ' :: ' + (event.detail ?? '')),
     )
-    console.log('NC ' + JSON.stringify((result as unknown as { candidates?: Array<{ priorId: string | null; score: number }> }).candidates?.map((c) => [c.priorId, c.score])))
+    console.log(
+      'NC ' +
+        JSON.stringify(
+          (
+            result as unknown as { candidates?: Array<{ priorId: string | null; score: number }> }
+          ).candidates?.map((c) => [c.priorId, c.score]),
+        ),
+    )
     expect(result.ok).toBe(true)
     expect(result.critic?.verdict).not.toBe('RECOMPOSE')
     expect(result.best?.solve.issues).toEqual([])
@@ -255,13 +263,11 @@ describe('Yangtze visual-decomposition regression', () => {
       { semanticPlan: async () => planV2 },
     )
     const titleById = new Map(planV2.nodes.map((n) => [n.id, n.visible.title]))
-    let spineRoutes = 0
     for (let i = 0; i + 1 < (planV2.primarySpine?.length ?? 0); i++) {
       const a = titleById.get(planV2.primarySpine![i]!)!
       const b = titleById.get(planV2.primarySpine![i + 1]!)!
       const route = (result.routes ?? []).find((r) => r.fromId === a && r.toId === b)
       if (route) {
-        spineRoutes++
         expect(['straight', 'elbow']).toContain(route.kind)
       }
     }

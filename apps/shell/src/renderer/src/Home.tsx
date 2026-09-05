@@ -460,7 +460,7 @@ function SettingsEntry() {
 
 export function Home() {
   const i18n = useI18n()
-  const { t, lang } = i18n
+  const { t } = i18n
   // ── Paged list state (rows loaded for the current view + filter) ──
   const [entries, setEntries] = useState<RecentEntry[]>([])
   /** total count under the current view + filter (not just the loaded rows) */

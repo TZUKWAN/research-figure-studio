@@ -28,7 +28,7 @@ const VALID_PLAN = {
   globalIntent: { emphasis: ['a'], secondary: ['b'], optional: [] },
 }
 
-const measured = (plan: ReturnType<typeof parseFigurePlanV2>) =>
+const _measured = (plan: ReturnType<typeof parseFigurePlanV2>) =>
   (plan?.nodes ?? []).map((n) => ({ id: n.id, w: 140, h: 60 }))
 
 function makeLlm(overrides: {

@@ -11,7 +11,7 @@
  */
 import type { MeasuredNode } from '../measurement/measure.js'
 import { solveGeometry, type SolveResult, type UnitFitConstraint } from '../constraints/solver.js'
-import { routeEdges, edgeCrossingCount, connectorNodeIntersections } from '../routing/router.js'
+import { edgeCrossingCount, connectorNodeIntersections } from '../routing/router.js'
 import type { Rect } from '../routing/geometry.js'
 import {
   COMPOSITION_PRIORS,
@@ -84,16 +84,6 @@ function evaluateCandidate(
   })
   const rects = new Map<string, Rect>(
     solve.placements.map((placement) => [placement.id, placement]),
-  )
-  const routed = routeEdges(
-    inputs.edges.map((edge, index) => ({
-      key: `e${index}`,
-      fromId: edge.from,
-      toId: edge.to,
-      role: edge.role,
-      relation: edge.relation,
-    })),
-    rects,
   )
   const crossings = edgeCrossingCount(
     inputs.edges.map((edge, index) => ({
@@ -1159,12 +1149,12 @@ function pickMediationCause(
  * edge-qualification semantics readable.
  */
 function moderationGrammar(g: GrammarContext): GrammarLayout | null {
-  const { topo, sizes, prior, meta, edges } = g
+  const { topo, sizes, prior, edges } = g
   const hints = new Map<string, Hint>()
   const anchors = new Set<string>()
   const x = biasValue(prior, 'x', 0.12)
   const y = biasValue(prior, 'y', 0.84)
-  const moderatorX = biasValue(prior, 'moderator', 0.48)
+  const _moderatorX = biasValue(prior, 'moderator', 0.48)
   const moderationEdges = edges.filter(
     (edge) => edge.relation === 'moderation' && edge.role !== 'feedback',
   )

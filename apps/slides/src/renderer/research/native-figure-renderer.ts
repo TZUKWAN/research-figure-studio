@@ -37,7 +37,6 @@ import {
 import type { SemanticMetadata } from '@genoffice/pptx-engine'
 import type {
   ResearchNodeRecord,
-  ResearchRelationRecord,
 } from '@genoffice/pptx-engine/research-metadata'
 import { SEMANTIC_NODE_STYLES } from '@genoffice/research-harness'
 import {
@@ -57,7 +56,6 @@ import {
   moduleMetadata,
   relationRecords,
   slidePayload,
-  type FigureIdentity,
 } from './metadata'
 
 /** Orchestrator result slice this renderer needs (structural, for tests). */

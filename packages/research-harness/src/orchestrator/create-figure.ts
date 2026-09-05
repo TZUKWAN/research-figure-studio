@@ -32,7 +32,7 @@ import {
   publicationAudit,
   qualityThresholdFor,
 } from '../contract/figure-contract.js'
-import { domainPresentationDefault, resolveDomain } from '../contract/domain-profile.js'
+import { resolveDomain } from '../contract/domain-profile.js'
 import {
   compileSemanticAttempt,
   compileSemanticReplanFeedback,
@@ -138,7 +138,10 @@ export async function withStageBudget<T>(
   if (options.budgetMs === undefined) return run(options.signal)
   let timer: ReturnType<typeof setTimeout> | undefined
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new StageTimeoutError(stage, options.budgetMs!)), options.budgetMs)
+    timer = setTimeout(
+      () => reject(new StageTimeoutError(stage, options.budgetMs!)),
+      options.budgetMs,
+    )
   })
   try {
     return await Promise.race([run(options.signal), timeout])
@@ -254,17 +257,6 @@ export interface OrchestrationResult {
   error?: string
 }
 
-const DEFAULT_SPEC: Required<FigureNodeSpec> = {
-  titleSizePt: 13,
-  detailSizePt: 10.5,
-  padX: 10,
-  padY: 8,
-  minWidth: 96,
-  maxWidth: 300,
-  minHeight: 52,
-  maxHeight: 170,
-}
-
 function median(values: number[]): number {
   if (values.length === 0) return 0
   const sorted = [...values].sort((a, b) => a - b)
@@ -277,7 +269,6 @@ interface CandidateAttemptBudget {
 }
 
 const MAX_ROUTE_FIXES_PER_CANDIDATE = 1
-
 
 // RENDER-P0-01: per-module hard fit constraints derived from the model's
 // visual decomposition. The solver reserves the composite size; the renderer
@@ -521,8 +512,12 @@ export async function orchestrateFigure(
             if (err instanceof StageTimeoutError) {
               diagnose('MODEL_SEMANTIC_TIMEOUT', err.message, attempt)
             } else if (input.signal?.aborted) {
-              diagnose('MODEL_SEMANTIC_CANCELLED', 'run cancelled during semantic planning', attempt)
-              throw new Error('cancelled')
+              diagnose(
+                'MODEL_SEMANTIC_CANCELLED',
+                'run cancelled during semantic planning',
+                attempt,
+              )
+              throw new Error('cancelled', { cause: err })
             } else {
               diagnose(
                 'MODEL_SEMANTIC_PROVIDER_FAILED',
@@ -605,8 +600,7 @@ export async function orchestrateFigure(
   // QA-P0-02 family fallback: map the legacy figureType when no contract named one
   if (!family) {
     familyFallback = familyFromFigureType(planResult.plan.figureType) as
-      | import('../contract/figure-contract.js').FigureFamily
-      | undefined
+      import('../contract/figure-contract.js').FigureFamily | undefined
   }
 
   const compiled = compileAttempt(planResult.plan, 0)
@@ -639,7 +633,7 @@ export async function orchestrateFigure(
   let candidateIdx = 0
   let composeAttempt = 0
   let semanticReplansUsed = 0
-  let scientificIssues: ScientificIssue[] = []
+  let scientificIssues: ScientificIssue[]
   // AI-P0-08/09: deterministic-fallback bookkeeping
   let fallbackUsed = false
   let fallbackReason: string | undefined
@@ -689,338 +683,222 @@ export async function orchestrateFigure(
     for (let round = 0; round < maxRounds; round++) {
       throwIfAborted(input.signal)
       if (candidates.length === 0) {
-      emit(
-        'composition.started',
-        true,
-        composeAttempt === 0 ? autonomy : `compose#${composeAttempt}`,
-        { attemptId: state.attempt },
-      )
-      // model-authored decomposition is OWNED by this attempt (ORCH-P0-04)
-      let modelPlan: SpatialPlan | null = null
-      if (autonomy !== 'A0' && llm.compose) {
-        const composeStarted = Date.now()
-        let raw: unknown
-        let composeSettled = false
-        try {
-          raw = await withStageBudget(
-            'composition designer',
-            (signal) =>
-              llm.compose!({
-                plan: state.plan,
-                measured: state.measured.map((node) => ({
-                  id: node.id,
-                  w: node.bounds.preferredWidth,
-                  h: node.bounds.preferredHeight,
-                })),
-                canvas: { w: input.canvasW, h: input.canvasH },
-                autonomy,
-                ...(critique ? { critique } : {}),
-                signal,
-              }),
-            { signal: input.signal, budgetMs: input.stageBudgets?.compositionMs },
-          )
-          composeSettled = true
-        } catch (err) {
-          modelPlan = null
-          fallbackUsed = true
-          if (err instanceof StageTimeoutError) {
-            fallbackReason = err.message
-            diagnose('MODEL_COMPOSITION_TIMEOUT', err.message, state.attempt)
-          } else if (input.signal?.aborted) {
-            diagnose('MODEL_COMPOSITION_CANCELLED', 'run cancelled during composition', state.attempt)
-            throw new Error('cancelled')
-          } else {
-            fallbackReason = err instanceof Error ? err.message : String(err)
-            diagnose('MODEL_COMPOSITION_PROVIDER_FAILED', fallbackReason, state.attempt)
-          }
-        }
-        if (composeSettled) {
-          // parse vs schema classification (AI-P0-09): a string payload must
-          // parse as JSON before schema validation can even run
-          let parsed: unknown = raw
-          let parseFailed = false
-          if (typeof raw === 'string') {
-            try {
-              const fenced = /```(?:json)?\s*([\s\S]*?)```/.exec(raw)
-              const rawText = (fenced ? fenced[1]! : raw).trim()
-              const start = rawText.indexOf('{')
-              const end = rawText.lastIndexOf('}')
-              parsed = JSON.parse(start >= 0 && end > start ? rawText.slice(start, end + 1) : rawText)
-            } catch {
-              parseFailed = true
-            }
-          }
-          if (raw === null || raw === undefined) {
-            // designer declined to answer: silent deterministic fallback, no diagnostic
-          } else if (parseFailed) {
-            fallbackUsed = true
-            fallbackReason = 'composition designer returned unparseable output'
-            diagnose('MODEL_COMPOSITION_PARSE_FAILED', fallbackReason, state.attempt)
-          } else {
-            const normalized = normalizeSpatialPlan(
-              parsed,
-              state.plan.nodes.map((node) => node.id),
-              { readingFlow: 'LR', visualRole: 'primary' },
-            )
-            const normalizedVisualPlan = normalizeVisualPlan(
-              (parsed as Record<string, unknown> | null)?.visualPlan,
-              state.plan,
-            )
-            modelPlan = normalized
-              ? {
-                  ...normalized,
-                  visualPlan: normalizedVisualPlan,
-                }
-              : null
-            if (!normalized) {
-              fallbackUsed = true
-              fallbackReason = 'composition designer failed schema validation'
-              diagnose('MODEL_COMPOSITION_SCHEMA_FAILED', fallbackReason, state.attempt)
-            }
-          }
-          planningMetrics.push({
-            stage: 'composition',
-            inputChars: JSON.stringify(state.plan).length,
-            outputChars: raw === null || raw === undefined ? 0 : JSON.stringify(raw).length,
-            latencyMs: Date.now() - composeStarted,
-            retries: 0,
-          })
-        }
-      }
-      try {
-        candidates = generateCandidates(
-          autonomy,
-          state.measured,
-          state.edges,
-          state.signals,
-          input.canvasW,
-          input.canvasH,
-          modelPlan,
-          state.meta,
-          state.candidateContext,
+        emit(
+          'composition.started',
+          true,
+          composeAttempt === 0 ? autonomy : `compose#${composeAttempt}`,
+          { attemptId: state.attempt },
         )
-      } catch (err) {
-        if (err instanceof UnsupportedFigureFamilyError) {
-          emit('figure.failed', false, err.message)
-          return failResult(err.message)
-        }
-        throw err
-      }
-      if (candidates.length === 0) {
-        const error = 'no composition candidates generated'
-        emit('figure.failed', false, error)
-        return failResult(error)
-      }
-      candidateIdx = 0
-    }
-    best = candidates[Math.min(candidateIdx, candidates.length - 1)]!
-    const candidateId = best.priorId ?? 'model'
-    emit('composition.completed', true, best.source, { candidateId })
-
-    // Geometry legalizes the designer's composition but never repositions
-    // boxes merely to make a primary connector straighter.
-    emit('layout.solved', true, `${best.solve.issues.length} issues`, { candidateId })
-    // every candidate owns a FRESH retry budget (ORCH-P0-05)
-    const budget: CandidateAttemptBudget = { routeFixes: 0 }
-
-    const rectMap = new Map(best.solve.placements.map((placement) => [placement.id, placement]))
-    const connectorPresentations = new Set([
-      'arrow',
-      'line',
-      'dashed-arrow',
-      'inhibition',
-      'feedback-loop',
-      'junction',
-    ])
-    const routeInputs = state.edges.map((edge) => {
-      const pair = `${edge.from}\u0000${edge.to}`
-      const priority =
-        state.edgePriorityById.get(edge.id ?? '') ??
-        state.edgePriorityByPair.get(pair)?.[0] ??
-        'secondary'
-      return {
-        key: edge.id ?? `${edge.from}->${edge.to}`,
-        semanticEdgeId: edge.id ?? `${edge.from}->${edge.to}`,
-        fromId: edge.from,
-        toId: edge.to,
-        role: edge.role,
-        relation: edge.relation,
-        presentation: (edge.presentation ?? 'arrow') as RelationPresentation,
-        priority,
-      }
-    })
-    // Relationship presentation is model-authored: connectors are routed only
-    // when the declared representation is a connector, regardless of whether
-    // the semantic relationship happened to be classified as primary.
-    const connectorInputs = routeInputs.filter((edge) =>
-      connectorPresentations.has(edge.presentation),
-    )
-    unrenderedRelations = routeInputs
-      .filter((edge) => !connectorPresentations.has(edge.presentation))
-      .map((edge) => ({ ...edge, status: 'suppressed' as const, laneOffsetPx: 0 }))
-    // Density guard (acceptance finding RF-BUG-1): a planner flood of
-    // connectors turns the canvas into a hairball where no single relation
-    // reads. Every drawn line must be irreplaceable, so above the density cap
-    // only the highest-priority relations keep their line and the rest are
-    // demoted to recorded spatial presentation — never silently dropped.
-    const densityCap = Math.max(3, Math.ceil(state.plan.nodes.length * 1.8))
-    let routeableInputs = connectorInputs
-    if (connectorInputs.length > densityCap) {
-      const rank: Record<string, number> = { primary: 0, feedback: 1, secondary: 2 }
-      const sorted = [...connectorInputs].sort(
-        (a, b) => (rank[a.priority] ?? 2) - (rank[b.priority] ?? 2) || a.key.localeCompare(b.key),
-      )
-      // P0.5: directional relations (causal/inhibition/feedback/moderation
-      // primaries) are NEVER density-suppressed — without the explicit symbol
-      // the science is lost. Only secondaries may be demoted; if directional
-      // edges alone exceed the cap the delivery gate forces a replan instead.
-      const directional = sorted.filter((edge) => (rank[edge.priority] ?? 2) < 2)
-      const secondary = sorted.filter((edge) => (rank[edge.priority] ?? 2) >= 2)
-      const secondaryKeep = Math.max(0, densityCap - directional.length)
-      const kept = [...directional, ...secondary.slice(0, secondaryKeep)]
-      const demoted = secondary.slice(secondaryKeep)
-      unrenderedRelations.push(
-        ...demoted.map((edge) => ({
-          ...edge,
-          status: 'suppressed' as const,
-          laneOffsetPx: 0,
-          diagnostic: 'connector density cap: expressed spatially',
-        })),
-      )
-      routeableInputs = kept
-    }
-    routes = routeEdgesWithObstacles(
-      routeableInputs,
-      rectMap,
-      { w: input.canvasW, h: input.canvasH },
-      state.direction,
-    )
-    emit('critic.started', true, undefined, { candidateId })
-    critic = criticVerdict({
-      solve: best.solve,
-      edges: state.edges,
-      canvasW: input.canvasW,
-      canvasH: input.canvasH,
-      importance: state.importance,
-      groupIds: state.groupIds,
-      intent: { plan: state.plan, spatial: best.plan },
-      routed: routes,
-      passThreshold: qualityThresholdFor(input.contract),
-      family: (family ?? familyFallback ?? undefined) as
-        | import('../contract/figure-contract.js').FigureFamily
-        | undefined,
-      typography: buildTypographySignals(state),
-      ...(input.contract
-        ? {
-            finalWidthMm:
-              input.contract.output.finalWidthMm ??
-              OUTPUT_CONTEXT_DEFAULT_WIDTH_MM[input.contract.output.context],
+        // model-authored decomposition is OWNED by this attempt (ORCH-P0-04)
+        let modelPlan: SpatialPlan | null = null
+        if (autonomy !== 'A0' && llm.compose) {
+          const composeStarted = Date.now()
+          let raw: unknown
+          let composeSettled = false
+          try {
+            raw = await withStageBudget(
+              'composition designer',
+              (signal) =>
+                llm.compose!({
+                  plan: state.plan,
+                  measured: state.measured.map((node) => ({
+                    id: node.id,
+                    w: node.bounds.preferredWidth,
+                    h: node.bounds.preferredHeight,
+                  })),
+                  canvas: { w: input.canvasW, h: input.canvasH },
+                  autonomy,
+                  ...(critique ? { critique } : {}),
+                  signal,
+                }),
+              { signal: input.signal, budgetMs: input.stageBudgets?.compositionMs },
+            )
+            composeSettled = true
+          } catch (err) {
+            modelPlan = null
+            fallbackUsed = true
+            if (err instanceof StageTimeoutError) {
+              fallbackReason = err.message
+              diagnose('MODEL_COMPOSITION_TIMEOUT', err.message, state.attempt)
+            } else if (input.signal?.aborted) {
+              diagnose(
+                'MODEL_COMPOSITION_CANCELLED',
+                'run cancelled during composition',
+                state.attempt,
+              )
+              throw new Error('cancelled', { cause: err })
+            } else {
+              fallbackReason = err instanceof Error ? err.message : String(err)
+              diagnose('MODEL_COMPOSITION_PROVIDER_FAILED', fallbackReason, state.attempt)
+            }
           }
-        : {}),
-    })
-    // Scientific audit (17.3): evidence coverage, connector realization,
-    // causal direction, dominance. Hard scientific failures escalate a PASS —
-    // the figure may look clean while silently dropping required science.
-    // QA-P0-05: audit against the DECLARED reading flow (all six), the solved
-    // spatial plan and family; QA-P1-06/07 validators append structured
-    // domain/family checks.
-    const declaredFlow: ReadingFlow = resolveReadingFlow(best.plan, state.plan)
-    scientificIssues = [
-      ...auditScientific({
-        plan: state.plan,
-        placements: best.solve.placements,
-        routes,
-        importance: state.importance,
-        spatial: best.plan,
-        ...((family ?? familyFallback) ? { family: (family ?? familyFallback)! } : {}),
-        domain,
-        direction: declaredFlow,
-      }),
-      ...validateDomain(state.plan, domain),
-      ...validateFamily(state.plan, (family ?? familyFallback ?? undefined) as string | undefined),
-    ]
-    const hardScientific = scientificIssues.filter((issue) => issue.severity === 'hard')
-    lastScientificHard = hardScientific.length
-    if (hardScientific.length > 0 && critic.verdict === 'PASS') {
-      const needsRoute = hardScientific.some((issue) => issue.repairClass === 'ROUTE_FIX')
-      critic = {
-        ...critic,
-        verdict: needsRoute ? 'ROUTE_FIX' : 'RECOMPOSE',
-        reason: hardScientific.map((issue) => issue.message).join('; '),
-        gateIssues: [...critic.gateIssues, ...scientificIssues.map((issue) => issue.message)],
-      }
-    } else if (scientificIssues.length > 0) {
-      critic = {
-        ...critic,
-        gateIssues: [...critic.gateIssues, ...scientificIssues.map((issue) => issue.message)],
-      }
-    }
-    // P1: forbidden claims / visible-text violations block delivery outright.
-    // Recomputed for THIS attempt's plan on every replan (ORCH-P0-03).
-    // P0.5: full contract audit over the final render intent feeds the same
-    // gate; EVIDENCE_MISSING escalates to semantic replan like forbidden hits.
-    const contractAuditResult = auditContract(
-      state.plan,
-      best.plan.visualPlan,
-      best.solve.placements,
-    )
-    lastContractViolations = contractAuditResult.violations
-    lastMissingEvidence = contractAuditResult.missingEvidence
-    const contractViolations = contractAuditResult.violations + state.forbiddenHits.length
-    if (contractViolations > 0 || contractAuditResult.missingEvidence > 0) {
-      const message = [
-        ...state.forbiddenHits.map((claim) => `forbidden claim: ${claim}`),
-        ...contractAuditResult.messages,
-      ].join('; ')
-      if (critic.verdict === 'PASS' || critic.verdict === 'LOCAL_LAYOUT_FIX') {
-        critic = {
-          ...critic,
-          verdict: 'RECOMPOSE',
-          reason: message,
-          gateIssues: [...critic.gateIssues, ...message.split('; ')],
+          if (composeSettled) {
+            // parse vs schema classification (AI-P0-09): a string payload must
+            // parse as JSON before schema validation can even run
+            let parsed: unknown = raw
+            let parseFailed = false
+            if (typeof raw === 'string') {
+              try {
+                const fenced = /```(?:json)?\s*([\s\S]*?)```/.exec(raw)
+                const rawText = (fenced ? fenced[1]! : raw).trim()
+                const start = rawText.indexOf('{')
+                const end = rawText.lastIndexOf('}')
+                parsed = JSON.parse(
+                  start >= 0 && end > start ? rawText.slice(start, end + 1) : rawText,
+                )
+              } catch {
+                parseFailed = true
+              }
+            }
+            if (raw === null || raw === undefined) {
+              // designer declined to answer: silent deterministic fallback, no diagnostic
+            } else if (parseFailed) {
+              fallbackUsed = true
+              fallbackReason = 'composition designer returned unparseable output'
+              diagnose('MODEL_COMPOSITION_PARSE_FAILED', fallbackReason, state.attempt)
+            } else {
+              const normalized = normalizeSpatialPlan(
+                parsed,
+                state.plan.nodes.map((node) => node.id),
+                { readingFlow: 'LR', visualRole: 'primary' },
+              )
+              const normalizedVisualPlan = normalizeVisualPlan(
+                (parsed as Record<string, unknown> | null)?.visualPlan,
+                state.plan,
+              )
+              modelPlan = normalized
+                ? {
+                    ...normalized,
+                    visualPlan: normalizedVisualPlan,
+                  }
+                : null
+              if (!normalized) {
+                fallbackUsed = true
+                fallbackReason = 'composition designer failed schema validation'
+                diagnose('MODEL_COMPOSITION_SCHEMA_FAILED', fallbackReason, state.attempt)
+              }
+            }
+            planningMetrics.push({
+              stage: 'composition',
+              inputChars: JSON.stringify(state.plan).length,
+              outputChars: raw === null || raw === undefined ? 0 : JSON.stringify(raw).length,
+              latencyMs: Date.now() - composeStarted,
+              retries: 0,
+            })
+          }
         }
-      } else {
-        critic = { ...critic, gateIssues: [...critic.gateIssues, ...message.split('; ')] }
-      }
-    }
-    // P3: publication QA at final physical size (fonts scale forward, so this
-    // only fires when the plan itself forced text below the contract floor).
-    if (input.contract) {
-      const pubIssues = publicationAudit({
-        contract: input.contract,
-        canvasW: input.canvasW,
-        canvasH: input.canvasH,
-        // P0.5 SSOT: the audit consumes the effective pt the renderer draws
-        minFontPt: typography!.minEffectiveTextPt,
-      })
-      const pubHard = pubIssues.filter((issue) => issue.severity === 'hard')
-      lastPublicationHard = pubHard.length
-      if (pubHard.length > 0) {
-        repairs.push('TYPOGRAPHY_FIX')
-        const message = pubHard.map((issue) => issue.detail).join('; ')
-        critic = {
-          ...critic,
-          verdict: 'RECOMPOSE',
-          reason: message,
-          gateIssues: [...critic.gateIssues, message],
+        try {
+          candidates = generateCandidates(
+            autonomy,
+            state.measured,
+            state.edges,
+            state.signals,
+            input.canvasW,
+            input.canvasH,
+            modelPlan,
+            state.meta,
+            state.candidateContext,
+            // RENDER-P0-01: composite modules reserve their real unit-fit size at
+            // solve time, so the renderer can consume placements verbatim.
+            unitFitConstraints(modelPlan?.visualPlan ?? { modules: [] }, state.measured),
+          )
+        } catch (err) {
+          if (err instanceof UnsupportedFigureFamilyError) {
+            emit('figure.failed', false, err.message)
+            return failResult(err.message)
+          }
+          throw err
         }
+        if (candidates.length === 0) {
+          const error = 'no composition candidates generated'
+          emit('figure.failed', false, error)
+          return failResult(error)
+        }
+        candidateIdx = 0
       }
-    }
-    emit('critic.completed', true, critic.verdict, { candidateId })
+      best = candidates[Math.min(candidateIdx, candidates.length - 1)]!
+      const candidateId = best.priorId ?? 'model'
+      emit('composition.completed', true, best.source, { candidateId })
 
-    if (critic.verdict === 'ROUTE_FIX' && budget.routeFixes < MAX_ROUTE_FIXES_PER_CANDIDATE) {
-      // Geometry fix for connector geometry only: admit one extra corridor,
-      // never touch the composition or suppress a declared relation.
-      budget.routeFixes++
-      repairs.push('L2 ROUTE_FIX')
-      const extraLanes = [median(best.solve.placements.map((p) => p.y + p.h / 2))]
+      // Geometry legalizes the designer's composition but never repositions
+      // boxes merely to make a primary connector straighter.
+      emit('layout.solved', true, `${best.solve.issues.length} issues`, { candidateId })
+      // every candidate owns a FRESH retry budget (ORCH-P0-05)
+      const budget: CandidateAttemptBudget = { routeFixes: 0 }
+
+      const rectMap = new Map(best.solve.placements.map((placement) => [placement.id, placement]))
+      const connectorPresentations = new Set([
+        'arrow',
+        'line',
+        'dashed-arrow',
+        'inhibition',
+        'feedback-loop',
+        'junction',
+      ])
+      const routeInputs = state.edges.map((edge) => {
+        const pair = `${edge.from}\u0000${edge.to}`
+        const priority =
+          state.edgePriorityById.get(edge.id ?? '') ??
+          state.edgePriorityByPair.get(pair)?.[0] ??
+          'secondary'
+        return {
+          key: edge.id ?? `${edge.from}->${edge.to}`,
+          semanticEdgeId: edge.id ?? `${edge.from}->${edge.to}`,
+          fromId: edge.from,
+          toId: edge.to,
+          role: edge.role,
+          relation: edge.relation,
+          presentation: (edge.presentation ?? 'arrow') as RelationPresentation,
+          priority,
+        }
+      })
+      // Relationship presentation is model-authored: connectors are routed only
+      // when the declared representation is a connector, regardless of whether
+      // the semantic relationship happened to be classified as primary.
+      const connectorInputs = routeInputs.filter((edge) =>
+        connectorPresentations.has(edge.presentation),
+      )
+      unrenderedRelations = routeInputs
+        .filter((edge) => !connectorPresentations.has(edge.presentation))
+        .map((edge) => ({ ...edge, status: 'suppressed' as const, laneOffsetPx: 0 }))
+      // Density guard (acceptance finding RF-BUG-1): a planner flood of
+      // connectors turns the canvas into a hairball where no single relation
+      // reads. Every drawn line must be irreplaceable, so above the density cap
+      // only the highest-priority relations keep their line and the rest are
+      // demoted to recorded spatial presentation — never silently dropped.
+      const densityCap = Math.max(3, Math.ceil(state.plan.nodes.length * 1.8))
+      let routeableInputs = connectorInputs
+      if (connectorInputs.length > densityCap) {
+        const rank: Record<string, number> = { primary: 0, feedback: 1, secondary: 2 }
+        const sorted = [...connectorInputs].sort(
+          (a, b) => (rank[a.priority] ?? 2) - (rank[b.priority] ?? 2) || a.key.localeCompare(b.key),
+        )
+        // P0.5: directional relations (causal/inhibition/feedback/moderation
+        // primaries) are NEVER density-suppressed — without the explicit symbol
+        // the science is lost. Only secondaries may be demoted; if directional
+        // edges alone exceed the cap the delivery gate forces a replan instead.
+        const directional = sorted.filter((edge) => (rank[edge.priority] ?? 2) < 2)
+        const secondary = sorted.filter((edge) => (rank[edge.priority] ?? 2) >= 2)
+        const secondaryKeep = Math.max(0, densityCap - directional.length)
+        const kept = [...directional, ...secondary.slice(0, secondaryKeep)]
+        const demoted = secondary.slice(secondaryKeep)
+        unrenderedRelations.push(
+          ...demoted.map((edge) => ({
+            ...edge,
+            status: 'suppressed' as const,
+            laneOffsetPx: 0,
+            diagnostic: 'connector density cap: expressed spatially',
+          })),
+        )
+        routeableInputs = kept
+      }
       routes = routeEdgesWithObstacles(
         routeableInputs,
         rectMap,
         { w: input.canvasW, h: input.canvasH },
         state.direction,
-        extraLanes,
       )
+      emit('critic.started', true, undefined, { candidateId })
       critic = criticVerdict({
         solve: best.solve,
         edges: state.edges,
@@ -1032,8 +910,7 @@ export async function orchestrateFigure(
         routed: routes,
         passThreshold: qualityThresholdFor(input.contract),
         family: (family ?? familyFallback ?? undefined) as
-          | import('../contract/figure-contract.js').FigureFamily
-          | undefined,
+          import('../contract/figure-contract.js').FigureFamily | undefined,
         typography: buildTypographySignals(state),
         ...(input.contract
           ? {
@@ -1043,116 +920,243 @@ export async function orchestrateFigure(
             }
           : {}),
       })
-      emit('route.repaired', true, critic.verdict, { candidateId })
-      emit('critic.completed', true, `${critic.verdict} (after L2)`, { candidateId })
-    }
-
-    if (
-      (critic.verdict === 'LOCAL_LAYOUT_FIX' || critic.verdict === 'ROUTE_FIX') &&
-      candidateIdx + 1 < candidates.length &&
-      candidateIdx < 2 // bound L3 to one next-candidate step; further issues escalate
-    ) {
-      // L3: geometry is not salvageable at this rank — the next candidate is
-      // still cheaper than a whole recompose
-      repairs.push('L3 LOCAL_GEOMETRY_FIX')
-      candidateIdx++
-      emit('layout.repaired', true, `candidate rank ${candidateIdx + 1}`)
-      continue
-    }
-    // L3 budget exhausted: accept the best-ranked candidate we have and ship.
-    if (
-      (critic.verdict === 'LOCAL_LAYOUT_FIX' || critic.verdict === 'ROUTE_FIX') &&
-      candidateIdx >= 2
-    ) {
-      repairs.push('L3 LOCAL_GEOMETRY_FIX (budget exhausted)')
-      break
-    }
-
-    if (critic.verdict === 'RECOMPOSE') {
-      // forbidden claims are semantic failures of the PLAN: recomposing the
-      // same violating content cannot help — only a new plan (or an honest
-      // failure) can
-      const semantic = isSemanticFailure(critic) || state.forbiddenHits.length > 0
-      // L6 SEMANTIC_REPLAN (ORCH-P0-01): the FigurePlan itself is regenerated
-      // by the model and EVERY derived state object is rebuilt. A bounded
-      // budget keeps the ladder finite; when the budget is spent the ladder
-      // degrades to an honest composition redesign.
-      if (semantic && semanticReplansUsed < maxSemanticReplans) {
-        semanticReplansUsed++
-        emit('semantic.replan.started', true, `replan #${semanticReplansUsed}`, {
-          attemptId: semanticReplansUsed,
-        })
-        const feedback = compileSemanticReplanFeedback({
-          critic,
-          scientificIssues,
-          forbiddenHits: state.forbiddenHits,
-        })
-        const replan = await planSemanticFigure({
-          thesis: input.thesis,
-          semanticPlan: llm.semanticPlan,
-          critiqueFeedback: feedback,
-          onAttempt: (info) => {
-            lastSemanticDiagnostics = [
-              ...lastSemanticDiagnostics,
-              {
-                attempt: info.attempt,
-                kind: info.failureKind ?? 'FIGURE_PLAN_SCHEMA_ERROR',
-                errors: info.errors,
-              },
-            ]
-            emit(
-              'semantic.replan.failed',
-              false,
-              `attempt ${info.attempt} ${info.failureKind}: ${info.errors.join('; ')}`.slice(
-                0,
-                500,
-              ),
-              { attemptId: semanticReplansUsed },
-            )
-          },
-        })
-        if (replan.plan) {
-          const next = compileAttempt(replan.plan, semanticReplansUsed)
-          if (typeof next === 'string') {
-            emit('semantic.replan.failed', false, `compile: ${next}`, {
-              attemptId: semanticReplansUsed,
-            })
-          } else {
-            state = next
-            lastSemanticDiagnostics = [...lastSemanticDiagnostics, ...replan.diagnostics]
-            repairs.push('L6 SEMANTIC_REPLAN')
-            emit('semantic.replan.completed', true, `attempt ${semanticReplansUsed}`, {
-              attemptId: semanticReplansUsed,
-            })
-            // plan replaced → the candidate set, critique and budgets die with
-            // the old plan; the next round composes from the NEW state
-            candidates = []
-            candidateIdx = 0
-            critique = undefined
-            best = null
-            composeAttempt++
-            continue
+      // Scientific audit (17.3): evidence coverage, connector realization,
+      // causal direction, dominance. Hard scientific failures escalate a PASS —
+      // the figure may look clean while silently dropping required science.
+      // QA-P0-05: audit against the DECLARED reading flow (all six), the solved
+      // spatial plan and family; QA-P1-06/07 validators append structured
+      // domain/family checks.
+      const declaredFlow: ReadingFlow = resolveReadingFlow(best.plan, state.plan)
+      scientificIssues = [
+        ...auditScientific({
+          plan: state.plan,
+          placements: best.solve.placements,
+          routes,
+          importance: state.importance,
+          spatial: best.plan,
+          ...((family ?? familyFallback) ? { family: (family ?? familyFallback)! } : {}),
+          domain,
+          direction: declaredFlow,
+        }),
+        ...validateDomain(state.plan, domain),
+        ...validateFamily(
+          state.plan,
+          (family ?? familyFallback ?? undefined) as string | undefined,
+        ),
+      ]
+      const hardScientific = scientificIssues.filter((issue) => issue.severity === 'hard')
+      lastScientificHard = hardScientific.length
+      if (hardScientific.length > 0 && critic.verdict === 'PASS') {
+        const needsRoute = hardScientific.some((issue) => issue.repairClass === 'ROUTE_FIX')
+        critic = {
+          ...critic,
+          verdict: needsRoute ? 'ROUTE_FIX' : 'RECOMPOSE',
+          reason: hardScientific.map((issue) => issue.message).join('; '),
+          gateIssues: [...critic.gateIssues, ...scientificIssues.map((issue) => issue.message)],
+        }
+      } else if (scientificIssues.length > 0) {
+        critic = {
+          ...critic,
+          gateIssues: [...critic.gateIssues, ...scientificIssues.map((issue) => issue.message)],
+        }
+      }
+      // P1: forbidden claims / visible-text violations block delivery outright.
+      // Recomputed for THIS attempt's plan on every replan (ORCH-P0-03).
+      // P0.5: full contract audit over the final render intent feeds the same
+      // gate; EVIDENCE_MISSING escalates to semantic replan like forbidden hits.
+      const contractAuditResult = auditContract(
+        state.plan,
+        best.plan.visualPlan,
+        best.solve.placements,
+      )
+      lastContractViolations = contractAuditResult.violations
+      lastMissingEvidence = contractAuditResult.missingEvidence
+      const contractViolations = contractAuditResult.violations + state.forbiddenHits.length
+      if (contractViolations > 0 || contractAuditResult.missingEvidence > 0) {
+        const message = [
+          ...state.forbiddenHits.map((claim) => `forbidden claim: ${claim}`),
+          ...contractAuditResult.messages,
+        ].join('; ')
+        if (critic.verdict === 'PASS' || critic.verdict === 'LOCAL_LAYOUT_FIX') {
+          critic = {
+            ...critic,
+            verdict: 'RECOMPOSE',
+            reason: message,
+            gateIssues: [...critic.gateIssues, ...message.split('; ')],
           }
         } else {
-          lastSemanticDiagnostics = [...lastSemanticDiagnostics, ...replan.diagnostics]
-          repairs.push('L6 SEMANTIC_REPLAN (replan failed)')
+          critic = { ...critic, gateIssues: [...critic.gateIssues, ...message.split('; ')] }
         }
-      } else if (semantic) {
-        repairs.push('L5 RECOMPOSE (semantic replan budget exhausted)')
-      } else {
-        repairs.push('L5 RECOMPOSE (composition redesign)')
       }
-      if (critic.scores.compositionQuality <= 3) repairs.push('CONTENT_REDUCE')
-      composeAttempt++
-      emit('recompose.started', true, `attempt ${composeAttempt}`)
-      critique = critic.decisions?.length
-        ? critic.decisions.map((d) => `${d.action}: ${d.message}`)
-        : critic.gateIssues.length
-          ? critic.gateIssues
-          : [`overall ${critic.scores.overall}/10`]
-      candidates = []
-      continue
-    }
+      // P3: publication QA at final physical size (fonts scale forward, so this
+      // only fires when the plan itself forced text below the contract floor).
+      if (input.contract) {
+        const pubIssues = publicationAudit({
+          contract: input.contract,
+          canvasW: input.canvasW,
+          canvasH: input.canvasH,
+          // P0.5 SSOT: the audit consumes the effective pt the renderer draws
+          minFontPt: typography!.minEffectiveTextPt,
+        })
+        const pubHard = pubIssues.filter((issue) => issue.severity === 'hard')
+        lastPublicationHard = pubHard.length
+        if (pubHard.length > 0) {
+          repairs.push('TYPOGRAPHY_FIX')
+          const message = pubHard.map((issue) => issue.detail).join('; ')
+          critic = {
+            ...critic,
+            verdict: 'RECOMPOSE',
+            reason: message,
+            gateIssues: [...critic.gateIssues, message],
+          }
+        }
+      }
+      emit('critic.completed', true, critic.verdict, { candidateId })
+
+      if (critic.verdict === 'ROUTE_FIX' && budget.routeFixes < MAX_ROUTE_FIXES_PER_CANDIDATE) {
+        // Geometry fix for connector geometry only: admit one extra corridor,
+        // never touch the composition or suppress a declared relation.
+        budget.routeFixes++
+        repairs.push('L2 ROUTE_FIX')
+        const extraLanes = [median(best.solve.placements.map((p) => p.y + p.h / 2))]
+        routes = routeEdgesWithObstacles(
+          routeableInputs,
+          rectMap,
+          { w: input.canvasW, h: input.canvasH },
+          state.direction,
+          extraLanes,
+        )
+        critic = criticVerdict({
+          solve: best.solve,
+          edges: state.edges,
+          canvasW: input.canvasW,
+          canvasH: input.canvasH,
+          importance: state.importance,
+          groupIds: state.groupIds,
+          intent: { plan: state.plan, spatial: best.plan },
+          routed: routes,
+          passThreshold: qualityThresholdFor(input.contract),
+          family: (family ?? familyFallback ?? undefined) as
+            import('../contract/figure-contract.js').FigureFamily | undefined,
+          typography: buildTypographySignals(state),
+          ...(input.contract
+            ? {
+                finalWidthMm:
+                  input.contract.output.finalWidthMm ??
+                  OUTPUT_CONTEXT_DEFAULT_WIDTH_MM[input.contract.output.context],
+              }
+            : {}),
+        })
+        emit('route.repaired', true, critic.verdict, { candidateId })
+        emit('critic.completed', true, `${critic.verdict} (after L2)`, { candidateId })
+      }
+
+      if (
+        (critic.verdict === 'LOCAL_LAYOUT_FIX' || critic.verdict === 'ROUTE_FIX') &&
+        candidateIdx + 1 < candidates.length &&
+        candidateIdx < 2 // bound L3 to one next-candidate step; further issues escalate
+      ) {
+        // L3: geometry is not salvageable at this rank — the next candidate is
+        // still cheaper than a whole recompose
+        repairs.push('L3 LOCAL_GEOMETRY_FIX')
+        candidateIdx++
+        emit('layout.repaired', true, `candidate rank ${candidateIdx + 1}`)
+        continue
+      }
+      // L3 budget exhausted: accept the best-ranked candidate we have and ship.
+      if (
+        (critic.verdict === 'LOCAL_LAYOUT_FIX' || critic.verdict === 'ROUTE_FIX') &&
+        candidateIdx >= 2
+      ) {
+        repairs.push('L3 LOCAL_GEOMETRY_FIX (budget exhausted)')
+        break
+      }
+
+      if (critic.verdict === 'RECOMPOSE') {
+        // forbidden claims are semantic failures of the PLAN: recomposing the
+        // same violating content cannot help — only a new plan (or an honest
+        // failure) can
+        const semantic = isSemanticFailure(critic) || state.forbiddenHits.length > 0
+        // L6 SEMANTIC_REPLAN (ORCH-P0-01): the FigurePlan itself is regenerated
+        // by the model and EVERY derived state object is rebuilt. A bounded
+        // budget keeps the ladder finite; when the budget is spent the ladder
+        // degrades to an honest composition redesign.
+        if (semantic && semanticReplansUsed < maxSemanticReplans) {
+          semanticReplansUsed++
+          emit('semantic.replan.started', true, `replan #${semanticReplansUsed}`, {
+            attemptId: semanticReplansUsed,
+          })
+          const feedback = compileSemanticReplanFeedback({
+            critic,
+            scientificIssues,
+            forbiddenHits: state.forbiddenHits,
+          })
+          const replan = await planSemanticFigure({
+            thesis: input.thesis,
+            semanticPlan: llm.semanticPlan,
+            critiqueFeedback: feedback,
+            onAttempt: (info) => {
+              lastSemanticDiagnostics = [
+                ...lastSemanticDiagnostics,
+                {
+                  attempt: info.attempt,
+                  kind: info.failureKind ?? 'FIGURE_PLAN_SCHEMA_ERROR',
+                  errors: info.errors,
+                },
+              ]
+              emit(
+                'semantic.replan.failed',
+                false,
+                `attempt ${info.attempt} ${info.failureKind}: ${info.errors.join('; ')}`.slice(
+                  0,
+                  500,
+                ),
+                { attemptId: semanticReplansUsed },
+              )
+            },
+          })
+          if (replan.plan) {
+            const next = compileAttempt(replan.plan, semanticReplansUsed)
+            if (typeof next === 'string') {
+              emit('semantic.replan.failed', false, `compile: ${next}`, {
+                attemptId: semanticReplansUsed,
+              })
+            } else {
+              state = next
+              lastSemanticDiagnostics = [...lastSemanticDiagnostics, ...replan.diagnostics]
+              repairs.push('L6 SEMANTIC_REPLAN')
+              emit('semantic.replan.completed', true, `attempt ${semanticReplansUsed}`, {
+                attemptId: semanticReplansUsed,
+              })
+              // plan replaced → the candidate set, critique and budgets die with
+              // the old plan; the next round composes from the NEW state
+              candidates = []
+              candidateIdx = 0
+              critique = undefined
+              best = null
+              composeAttempt++
+              continue
+            }
+          } else {
+            lastSemanticDiagnostics = [...lastSemanticDiagnostics, ...replan.diagnostics]
+            repairs.push('L6 SEMANTIC_REPLAN (replan failed)')
+          }
+        } else if (semantic) {
+          repairs.push('L5 RECOMPOSE (semantic replan budget exhausted)')
+        } else {
+          repairs.push('L5 RECOMPOSE (composition redesign)')
+        }
+        if (critic.scores.compositionQuality <= 3) repairs.push('CONTENT_REDUCE')
+        composeAttempt++
+        emit('recompose.started', true, `attempt ${composeAttempt}`)
+        critique = critic.decisions?.length
+          ? critic.decisions.map((d) => `${d.action}: ${d.message}`)
+          : critic.gateIssues.length
+            ? critic.gateIssues
+            : [`overall ${critic.scores.overall}/10`]
+        candidates = []
+        continue
+      }
 
       break
     }

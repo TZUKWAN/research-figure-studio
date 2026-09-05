@@ -11,7 +11,7 @@ import React, {
   useState,
   type ReactNode,
 } from 'react'
-import type { AnimEffectKind, GradientFillSpec } from '../../shared/ipc'
+import type { GradientFillSpec } from '../../shared/ipc'
 import type { ChartStyleInfo } from '@genoffice/pptx-render'
 import {
   useDismissablePopover,
@@ -22,7 +22,6 @@ import {
 } from '@genoffice/ui'
 import { getRecentColors, pushRecentColor } from '../recent-colors'
 import { ICON_COLORS } from '../insert-presets'
-import { THEME_PRESETS, type SlideThemePreset } from '../themes'
 import { restoreEditSelection } from '../TextEditOverlay'
 import { armColorInput, toPickerHex } from '../color-input'
 import { TABLE_SHADING_COLORS } from './table-shading-colors'
@@ -93,20 +92,6 @@ const TAB_LABEL: Record<MainTab | ContextTab, StringKey> = {
   pictureFormat: 'ribbonTabPictureFormat',
   shapeFormat: 'ribbonTabShapeFormat',
 }
-
-// display names only — tp.name stays as written into theme*.xml
-const THEME_NAME: Record<string, StringKey> = {
-  office: 'ribbonThemeOffice',
-  ember: 'ribbonThemeEmber',
-  indigo: 'ribbonThemeIndigo',
-  forest: 'ribbonThemeForest',
-  cream: 'ribbonThemeCream',
-  rose: 'ribbonThemeRose',
-  graphite: 'ribbonThemeGraphite',
-  midnight: 'ribbonThemeMidnight',
-}
-const themeDisplayName = (tp: SlideThemePreset, t: (key: StringKey) => string): string =>
-  THEME_NAME[tp.id] ? t(THEME_NAME[tp.id]) : tp.name
 
 /** Translation target languages (for AI proofread/translate presets) */
 const TRANSLATE_TARGETS: StringKey[] = [
@@ -479,16 +464,6 @@ function TableToggleBtn({
       onClick={() => (on ? offClick() : onClick())}
     >
       {label}
-    </button>
-  )
-}
-
-function DisabledBig({ icon, label }: { icon: ReactNode; label: string }) {
-  const { t } = useI18n()
-  return (
-    <button className="rb-big" disabled data-tip={t('ribbonNotSupported', { name: label })}>
-      <span className="rb-big-icon">{icon}</span>
-      <span>{label}</span>
     </button>
   )
 }
@@ -900,8 +875,6 @@ export function Ribbon({
   onFormat,
   zoom,
   onZoom,
-  showThumbs,
-  onToggleThumbs,
   aiOpen,
   onToggleAi,
   onAiPreset,
@@ -909,8 +882,6 @@ export function Ribbon({
   onInsert,
   onPickShape,
   onInsertImage,
-  onFormatBackground,
-  onApplyTheme,
   onAddSlide,
   formatOpen,
   onToggleFormat,
@@ -937,41 +908,9 @@ export function Ribbon({
   onTextToggle,
   onElementTextColor,
   onFindReplace,
-  animByParagraph,
-  onToggleAnimByParagraph,
   onSlideSize,
   onParagraphFormat,
   onInsertTable,
-  transition,
-  onTransition,
-  selectedAnimEffect,
-  timingAnim,
-  onApplyAnimation,
-  onAnimHoverPreview,
-  onAnimHoverEnd,
-  onAddAnimation,
-  onApplyMotionPath,
-  onAnimTiming,
-  animPaneOpen,
-  onToggleAnimPane,
-  animCount,
-  onAnimPreview,
-  onPresenterView,
-  onCustomShow,
-  onRehearse,
-  currentHidden,
-  onToggleHidden,
-  inkTool,
-  onInkTool,
-  inkPen,
-  onInkPen,
-  inkHighlighter,
-  onInkHighlighter,
-  inkCount,
-  onInkClearAll,
-  viewMode,
-  onViewMode,
-  onSlideMaster,
   onZoomFit,
   showRuler,
   onToggleRuler,
@@ -979,12 +918,7 @@ export function Ribbon({
   onToggleGrid,
   showGuides,
   onToggleGuides,
-  showNotes,
-  onToggleNotes,
-  commentsOpen,
-  onToggleComments,
   onNewComment,
-  commentCount,
   onInsertIcon,
   onInsertChart,
   onInsertSmartArt,
@@ -1294,22 +1228,6 @@ export function Ribbon({
         onTextColor(hex)
       } else onElementTextColor(hex)
     }, 200)
-  }
-
-  // Hover preview for animation effects: fire after a short dwell so
-  // sweeping across the gallery doesn't spam previews; leaving cancels/stops.
-  const animHoverTimer = useRef<number | null>(null)
-  const animHoverStart = (effect: AnimEffectKind, motionPath?: string) => {
-    if (animHoverTimer.current) window.clearTimeout(animHoverTimer.current)
-    animHoverTimer.current = window.setTimeout(() => {
-      animHoverTimer.current = null
-      onAnimHoverPreview(effect, motionPath)
-    }, 350)
-  }
-  const animHoverStop = () => {
-    if (animHoverTimer.current) window.clearTimeout(animHoverTimer.current)
-    animHoverTimer.current = null
-    onAnimHoverEnd()
   }
 
   // Custom bullet color via the native picker: same debounce as font color

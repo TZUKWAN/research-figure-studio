@@ -132,7 +132,7 @@ function stageZoom(container: HTMLElement): number {
   return Number(m![1])
 }
 
-function clickByText(container: HTMLElement, selector: string, re: RegExp): void {
+function _clickByText(container: HTMLElement, selector: string, re: RegExp): void {
   const btn = [...container.querySelectorAll<HTMLButtonElement>(selector)].find((b) =>
     re.test(b.textContent ?? ''),
   )

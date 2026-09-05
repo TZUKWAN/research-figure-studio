@@ -13,7 +13,6 @@ import type {
   AiSettings,
   AiStreamChunk,
   AiStreamRequest,
-  GenSparkAccountStatus,
 } from '@genoffice/ai-provider'
 
 export type { SlideComment, SectionInfo } from '@genoffice/pptx-engine'

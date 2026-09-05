@@ -202,7 +202,7 @@ export async function executeCreateResearchFigure(deps: {
   const txn = figurePlanToTxnOps(renderPlan, { slideIndex: idx, scale })
   const actionId = beginAction('Create research figure (orchestrated)')
   throwIfAborted()
-  let result: Awaited<ReturnType<NonNullable<SlidesApiForFigure['applyTxn']>>> = null
+  let result: Awaited<ReturnType<NonNullable<SlidesApiForFigure['applyTxn']>>>
   try {
     result = await slidesApi.applyTxn({ ops: txn.ops, isolation: 'atomic' })
   } catch (err) {
@@ -248,7 +248,7 @@ export async function executeCreateResearchFigure(deps: {
     }
     walk(written.nodes as Parameters<typeof walk>[0])
   }
-  let verification = { ok: true, issues: [] as string[] }
+  let verification: { ok: boolean; issues: string[] }
   if (written) {
     verification = verifyFigureWrite(written, renderPlan, createdIdBySpecId, auditSlideLayout(written))
     if (!verification.ok && slidesApi.undo) {

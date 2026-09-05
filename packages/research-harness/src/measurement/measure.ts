@@ -70,7 +70,7 @@ export function estimatorMeasurer(): TextMeasurer {
       if (code >= 0x2e80) units += 1.0
       else if (ch === ' ') units += 0.3
       else if (/[0-9]/.test(ch)) units += 0.56
-      else if (/[.,:;!|()\[\]·—–\-"'`]/.test(ch)) units += 0.42
+      else if (/[.,:;!|()[\]·—–\-"'`]/.test(ch)) units += 0.42
       else units += 0.52
     }
     return units * em

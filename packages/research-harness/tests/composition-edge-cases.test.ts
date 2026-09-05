@@ -29,7 +29,7 @@ const SPEC = {
   maxHeight: 170,
 }
 
-function measure(ids: string[], importance: Record<string, number> = {}): MeasuredNode[] {
+function measure(ids: string[], _importance: Record<string, number> = {}): MeasuredNode[] {
   return ids.map((id) => ({
     ...measureNode({ id, title: id }, SPEC, measurer),
   }))

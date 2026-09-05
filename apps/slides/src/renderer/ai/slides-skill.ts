@@ -18,7 +18,6 @@ import {
   layoutHorizontalPipeline,
   layoutInputCoreOutput,
   layoutMicro,
-  normalizeVisualPlan,
   orchestrateFigure,
   parseSemanticEdges,
   ROLE_SHAPE,
@@ -2344,11 +2343,6 @@ const RESEARCH_REGION_ROLES = new Set<FigurePlan['regions'][number]['role']>([
   'feedback',
 ])
 
-const RESEARCH_EDGE_ROLES = new Set<FigurePlan['edges'][number]['role']>([
-  'main',
-  'feedback',
-  'annotation',
-])
 
 function parseResearchFigurePlan(input: Record<string, unknown>): FigurePlan | null {
   const figureType = input.figureType
@@ -4629,7 +4623,7 @@ async function executeTool(
           thesis,
           nodes: nodeRecords,
           relations: relationRecords(
-            plan.edges.map((edge, index) => ({
+            plan.edges.map((edge) => ({
               ...(edge.id ? { id: edge.id } : {}),
               from: edge.from,
               to: edge.to,

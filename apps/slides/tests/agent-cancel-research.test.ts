@@ -89,7 +89,7 @@ describe('agent cancel reaches the research pipeline (AI-P1-05)', () => {
       },
     )
     const runLlm = vi.fn()
-    const skill = createSlidesSkill(
+    const _skill = createSlidesSkill(
       makeAccess({ runLlm, runStructured: runStructured as DeckAccess['runStructured'] }),
       'research',
     )

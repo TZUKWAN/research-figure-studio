@@ -43,11 +43,6 @@ const THEME_OPTIONS = [
   { value: 'dark', labelKey: 'themeDark' },
 ] as const satisfies readonly { value: UiTheme; labelKey: StringKey }[]
 
-const CHANNEL_OPTIONS = [
-  { value: 'stable', labelKey: 'channelStable' },
-  { value: 'beta', labelKey: 'channelBeta' },
-] as const satisfies readonly { value: 'stable' | 'beta'; labelKey: StringKey }[]
-
 type SectionId = 'aiModel' | 'standards' | 'general'
 
 const SECTIONS: readonly { id: SectionId; labelKey: StringKey }[] = [
@@ -617,7 +612,7 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
   const [section, setSection] = useState<SectionId>('aiModel')
   const [theme, setTheme] = useState<UiTheme>('system')
   const [saveDir, setSaveDir] = useState('')
-  const [appVersion, setAppVersion] = useState('')
+  const [, setAppVersion] = useState('')
 
   useEffect(() => {
     let alive = true

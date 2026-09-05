@@ -13,7 +13,7 @@ import {
 
 const theme = getThemeById('academic-blue')!
 
-function baseInput(overrides?: Partial<FigureRenderInput>): FigureRenderInput {
+function baseInput(_overrides?: Partial<FigureRenderInput>): FigureRenderInput {
   return {
     plan: {
       nodes: [

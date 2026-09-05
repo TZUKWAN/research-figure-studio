@@ -222,7 +222,7 @@ function arrange(
     case 'grid': {
       // square-ish grid; auto columns
       const cols = Math.max(1, Math.ceil(Math.sqrt(units.length)))
-      const rows = Math.ceil(units.length / cols)
+      const _rows = Math.ceil(units.length / cols)
       const cellW = clamp((innerW - 4 * (cols - 1)) / cols, 50, innerW)
       const cellH = Math.max(
         minimumVisualUnitHeight,

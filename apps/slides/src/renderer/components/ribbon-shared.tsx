@@ -18,7 +18,7 @@ import type { InkPenSettings, InkTool } from '../ink'
 import type { ChartPresetDef, IconDef, SmartArtDef } from '../insert-presets'
 import type { SlideThemePreset } from '../themes'
 import type { ChartStyleInfo } from '@genoffice/pptx-render'
-import { useI18n, type StringKey } from '../i18n/locale'
+import { useI18n,  } from '../i18n/locale'
 
 export type InsertDropKey = 'icons'
 
