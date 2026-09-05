@@ -121,7 +121,7 @@
 
 ## 6. 测试结果（真实重跑）
 
-- `npm run test -w @genoffice/research-harness`：**16 files / 188 tests passed**（原 135 + 新增 53）
+- `npm run test -w @genoffice/research-harness`：**16 files / 189 tests passed**（原 135 + 新增 54，含 ORCH-P0-05 预算回归）
 - `npm run test -w @genoffice/slides`：**69 files passed / 1 skipped；662 passed / 8 skipped**（无退化）
 - `npm run typecheck -w @genoffice/research-harness`：EXIT=0
 - `npm run typecheck -w @genoffice/slides`：EXIT=0
