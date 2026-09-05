@@ -61,6 +61,8 @@ import type {
 import type { AddSmartArtOp, AgentToolCall, AgentToolDef, EditParagraph } from '../../shared/ipc'
 import { opVocabulary } from '../../shared/op-docs'
 import { auditSlideLayout, formatAudit } from './layout-audit'
+import { figureIdentity, relationRecords, slidePayload } from '../research/metadata'
+import type { ResearchNodeRecord } from '@genoffice/pptx-engine'
 import { runLayoutScript, type LayoutScriptElement, type SlideStylePatch } from './layout-script'
 import { t } from '../i18n/locale'
 
@@ -4602,6 +4604,58 @@ async function executeTool(
           access.applySlide(idx, boundSlide)
           boundCount++
         }
+        // RENDER-P0-10: the slide-level semantic payload rides the archive so
+        // AI re-editing (read_slide) and export parity can recover the graph.
+        const identity = figureIdentity({
+          ...(contract?.figureFamily ? { figureFamily: contract.figureFamily } : {}),
+          ...(orchestration.domain ? { domain: orchestration.domain } : {}),
+        })
+        const nodeRecords: ResearchNodeRecord[] = solve.placements.map((placement) => {
+          const node = nodeById.get(placement.id)
+          const module = visualPlan.modules.find((m) => m.moduleId === placement.id)
+          const kindOverride = orchestration.domain
+            ? DOMAIN_PROFILES[orchestration.domain].kindOverrides?.[node?.type ?? 'process']
+            : undefined
+          return {
+            id: placement.id,
+            title: node?.visible.title ?? placement.id,
+            type: node?.type ?? 'process',
+            primitiveKind: kindOverride ?? KIND_BY_TYPE[node?.type ?? 'process'] ?? 'process-node',
+            detailDisposition: module ? 'promoted-to-units' : 'render-in-parent',
+          }
+        })
+        const slideMetadata = slidePayload({
+          identity,
+          thesis,
+          nodes: nodeRecords,
+          relations: relationRecords(
+            plan.edges.map((edge, index) => ({
+              ...(edge.id ? { id: edge.id } : {}),
+              from: edge.from,
+              to: edge.to,
+              relation: edge.relation,
+              ...(edge.presentation ? { presentation: edge.presentation } : {}),
+              key: edge.id ?? `${edge.from}->${edge.to}`,
+            })),
+            orchestration.routes,
+            new Map(),
+          ),
+        })
+        const metadataTxn = await window.slidesApi.applyTxn({
+          ops: [
+            {
+              op: 'setSlideResearchMetadata',
+              target: { slide: idx },
+              payload: slideMetadata,
+            },
+          ],
+        })
+        if (!metadataTxn?.applied) throw new Error('Failed to write slide research metadata')
+        if (metadataTxn.slides?.[0]) {
+          latestSlide = metadataTxn.slides[0]!
+          access.applySlide(idx, latestSlide)
+        }
+
         const renderIssues = auditSlideLayout(latestSlide)
         if (renderIssues.length > 0) {
           throw new Error('Post-write layout audit failed: ' + renderIssues.join('; '))

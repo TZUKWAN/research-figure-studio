@@ -9,8 +9,8 @@
  */
 import type { AgentToolCall } from '../../shared/ipc'
 import {
-  RESEARCH_COMPOSITION_DESIGNER_PROMPT,
-  RESEARCH_SEMANTIC_PLANNER_PROMPT,
+  RESEARCH_COMPOSITION_DESIGNER_POLICY,
+  RESEARCH_SEMANTIC_PLANNER_POLICY,
 } from '../../shared/prompt-defaults'
 import {
   beginAction,
@@ -114,7 +114,7 @@ export async function executeCreateResearchFigure(deps: {
   const llm = {
     semanticPlan: async (_thesis: string, feedback?: string) => {
       const r = await access.runLlm!(
-        effectivePrompt('research.semantic-planner', RESEARCH_SEMANTIC_PLANNER_PROMPT),
+        effectivePrompt('research.semantic-planner', RESEARCH_SEMANTIC_PLANNER_POLICY),
         feedback
           ? plannerUser +
               '\n\nPrevious attempt rejected by schema validation: ' +
@@ -127,7 +127,7 @@ export async function executeCreateResearchFigure(deps: {
     },
     compose: async (ctx: unknown) => {
       const r = await access.runLlm!(
-        effectivePrompt('research.composition-designer', RESEARCH_COMPOSITION_DESIGNER_PROMPT),
+        effectivePrompt('research.composition-designer', RESEARCH_COMPOSITION_DESIGNER_POLICY),
         JSON.stringify(ctx),
       )
       if (!r.ok) return null
