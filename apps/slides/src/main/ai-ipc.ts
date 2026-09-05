@@ -19,9 +19,12 @@ import { join } from 'node:path'
 import {
   AiCreditsError,
   AiTimeoutError,
+  classifyAiError,
   isAiNetworkError,
+  assumedCapabilityProfile,
   chatForProvider,
   defaultAiSettings,
+  probeModelCapabilities,
   cloudToolsEnabled,
   resolveAiSettings,
   setRescueFetch,
@@ -31,6 +34,7 @@ import {
   type AiStreamChunk,
   type AiStreamRequest,
   type LegacyAiSettings,
+  type ModelCapabilityProfile,
 } from '@genoffice/ai-provider'
 import { fetchRemoteImage } from '@genoffice/electron-utils'
 import {
@@ -49,10 +53,16 @@ import {
   QC_GEOMETRY_SYSTEM_PROMPT,
   QC_VISUAL_SYSTEM_PROMPT,
   RESEARCH_AGENT_SYSTEM_PROMPT,
-  RESEARCH_COMPOSITION_DESIGNER_PROMPT,
-  RESEARCH_SEMANTIC_PLANNER_PROMPT,
+  RESEARCH_COMPOSITION_DESIGNER_POLICY,
+  RESEARCH_SEMANTIC_PLANNER_POLICY,
   PROMPT_DEFS,
+  type PromptDef,
 } from '../shared/prompt-defaults'
+import {
+  RESEARCH_PROMPT_POLICY_VERSION,
+  normalizeStoredOverrides,
+  type PromptOverrideRecord,
+} from '../shared/prompt-protocol'
 import type { AiRunFailure } from '../shared/ipc'
 import { EMU_PER_PX_96 } from '@genoffice/pptx-render'
 import { tm } from './i18n-main'
@@ -220,9 +230,16 @@ export function registerAiIpc(): void {
   })
 
   // ── Standards (Settings): user-editable AI drawing prompts ──
-  // Only prompt TEXT is editable here; layout rules, the Component Registry and
-  // QA thresholds stay code-owned. Overrides live in userData/prompt-overrides.json.
+  // Only prompt POLICY text is editable here; the machine protocol of the
+  // research pipeline prompts is generated (prompt-protocol.ts) and always
+  // re-appended, so an override can never delete it. Layout rules, the
+  // Component Registry and QA thresholds stay code-owned. Overrides live in
+  // userData/prompt-overrides.json as versioned records (legacy plain-string
+  // entries are migrated on read).
   const PROMPT_OVERRIDES_PATH = () => join(app.getPath('userData'), 'prompt-overrides.json')
+
+  const readPromptOverrides = (): Record<string, PromptOverrideRecord> =>
+    normalizeStoredOverrides(readJson<Record<string, unknown>>(PROMPT_OVERRIDES_PATH(), {}))
 
   ipcMain.handle('prompts:defaults', () => ({
     agent: {
@@ -230,32 +247,104 @@ export function registerAiIpc(): void {
       'agent.research': RESEARCH_AGENT_SYSTEM_PROMPT,
       'qc.visual': QC_VISUAL_SYSTEM_PROMPT,
       'qc.geometry': QC_GEOMETRY_SYSTEM_PROMPT,
-      'research.semantic-planner': RESEARCH_SEMANTIC_PLANNER_PROMPT,
-      'research.composition-designer': RESEARCH_COMPOSITION_DESIGNER_PROMPT,
+      // editable POLICY defaults; the machine protocol is generated at runtime
+      'research.semantic-planner': RESEARCH_SEMANTIC_PLANNER_POLICY,
+      'research.composition-designer': RESEARCH_COMPOSITION_DESIGNER_POLICY,
     },
     defs: PROMPT_DEFS,
   }))
 
-  ipcMain.handle('prompts:get-overrides', (): Record<string, string> =>
-    readJson<Record<string, string>>(PROMPT_OVERRIDES_PATH(), {}),
+  /** legacy-compatible view: plain id → content map (Shell Settings reads this) */
+  ipcMain.handle('prompts:get-overrides', (): Record<string, string> => {
+    const records = readPromptOverrides()
+    const out: Record<string, string> = {}
+    for (const [id, record] of Object.entries(records)) out[id] = record.content
+    return out
+  })
+
+  /** versioned view: lets the renderer know which overrides predate the current policy version */
+  ipcMain.handle('prompts:get-override-records', (): Record<string, PromptOverrideRecord> =>
+    readPromptOverrides(),
   )
+
+  ipcMain.handle('prompts:get-policy-version', (): number => RESEARCH_PROMPT_POLICY_VERSION)
 
   ipcMain.handle('prompts:set-override', (_event, id: unknown, text: unknown) => {
     if (typeof id !== 'string' || typeof text !== 'string') return false
-    if (!PROMPT_DEFS.some((d) => d.id === id)) return false
-    const overrides = readJson<Record<string, string>>(PROMPT_OVERRIDES_PATH(), {})
-    overrides[id] = text
-    writeJson(PROMPT_OVERRIDES_PATH(), overrides)
+    const def: PromptDef | undefined = PROMPT_DEFS.find((d) => d.id === id)
+    if (!def) return false
+    const records = readPromptOverrides()
+    const existing = records[id]
+    const now = new Date().toISOString()
+    records[id] = {
+      id,
+      policyVersion: RESEARCH_PROMPT_POLICY_VERSION,
+      content: text,
+      createdAt: existing?.createdAt || now,
+      updatedAt: now,
+    }
+    writeJson(PROMPT_OVERRIDES_PATH(), records)
     return true
   })
 
   ipcMain.handle('prompts:clear-override', (_event, id: unknown) => {
     if (typeof id !== 'string') return false
-    const overrides = readJson<Record<string, string>>(PROMPT_OVERRIDES_PATH(), {})
-    delete overrides[id]
-    writeJson(PROMPT_OVERRIDES_PATH(), overrides)
+    const records = readPromptOverrides()
+    delete records[id]
+    writeJson(PROMPT_OVERRIDES_PATH(), records)
     return true
   })
+
+  // ── Model capability profiles (AI-P0-06) ──
+  // Probed once per configured model; the research pipeline consults the
+  // profile instead of assuming "the model should support tools".
+  const CAPABILITY_PROFILES_PATH = () =>
+    join(app.getPath('userData'), 'ai-capability-profiles.json')
+
+  const capabilityProfileKey = (provider: string, model: string): string => `${provider}::${model}`
+
+  const readCapabilityProfiles = (): Record<string, ModelCapabilityProfile> =>
+    readJson<Record<string, ModelCapabilityProfile>>(CAPABILITY_PROFILES_PATH(), {})
+
+  ipcMain.handle(
+    'ai:get-capability-profile',
+    (_event, query: { provider: string; model: string }): ModelCapabilityProfile | null => {
+      const key = capabilityProfileKey(String(query?.provider ?? ''), String(query?.model ?? ''))
+      return readCapabilityProfiles()[key] ?? null
+    },
+  )
+
+  ipcMain.handle(
+    'ai:probe-capabilities',
+    async (
+      _event,
+      query: {
+        provider: string
+        config: { apiKey: string; model: string; baseUrl?: string }
+        vision: boolean
+      },
+    ): Promise<{ ok: boolean; profile?: ModelCapabilityProfile; error?: string }> => {
+      const provider = String(
+        query?.provider ?? '',
+      ) as import('@genoffice/ai-provider').AiProviderId
+      const config = query?.config
+      if (!provider || !config?.model) return { ok: false, error: 'missing provider/model' }
+      try {
+        const profileResult = await probeModelCapabilities(provider, config, query.vision === true)
+        const profiles = readCapabilityProfiles()
+        profiles[capabilityProfileKey(provider, config.model)] = profileResult
+        writeJson(CAPABILITY_PROFILES_PATH(), profiles)
+        return { ok: true, profile: profileResult }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    },
+  )
+
+  /** assumed (unprobed) profile shape for UIs that only need the conservative default */
+  ipcMain.handle('ai:assumed-capability-profile', (_event, vision: boolean) =>
+    assumedCapabilityProfile(vision === true),
+  )
 
   // Model discovery for custom OpenAI-compatible endpoints: GET {baseUrl}/models.
   // Returns model ids; when the listing carries metadata (OpenRouter-style
@@ -396,13 +485,25 @@ export function registerAiIpc(): void {
       send({ requestId, type: 'ping' })
     }
     try {
-      await streamForProvider(provider, config, system, messages, tools, maxTokens, {
-        signal: controller.signal,
-        onDelta: (text) => send({ requestId, type: 'delta', text }),
-        onReasoningDelta: (text) => send({ requestId, type: 'reasoning', text }),
-        onToolCall: (toolCall) => send({ requestId, type: 'tool-call', toolCall }),
-        onActivity: ping,
-      })
+      // jsonSchema (AI-P0-01): provider-native structured output enforcement
+      // with a per-protocol plain retry on rejection. The renderer still
+      // validates — the schema is a carrier, not a trust boundary.
+      await streamForProvider(
+        provider,
+        config,
+        system,
+        messages,
+        tools,
+        maxTokens,
+        {
+          signal: controller.signal,
+          onDelta: (text) => send({ requestId, type: 'delta', text }),
+          onReasoningDelta: (text) => send({ requestId, type: 'reasoning', text }),
+          onToolCall: (toolCall) => send({ requestId, type: 'tool-call', toolCall }),
+          onActivity: ping,
+        },
+        request.jsonSchema ? { jsonSchema: request.jsonSchema } : undefined,
+      )
       send({ requestId, type: 'done' })
     } catch (err) {
       if (controller.signal.aborted) {
@@ -421,6 +522,8 @@ export function registerAiIpc(): void {
               : isAiNetworkError(err)
                 ? { errorCode: 'network' as const }
                 : {}),
+          // unified taxonomy code (AI-P1-12): machine-readable beyond the localized message
+          aiErrorCode: classifyAiError(err),
         })
       }
     } finally {

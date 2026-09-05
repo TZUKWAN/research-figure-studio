@@ -81,6 +81,8 @@ describe('AgentLoop', () => {
       text: 'Hello, world',
       cancelled: false,
       turnLimit: false,
+      completion: 'complete',
+      invalidToolInputs: 0,
     })
     expect(loop.busy).toBe(false)
     // user message carries the skill context
@@ -135,7 +137,13 @@ describe('AgentLoop', () => {
     expect(executed).toHaveLength(1)
     // first mutation carries the pre-tool snapshot
     expect(onToolExecuted).toHaveBeenCalledWith(expect.objectContaining({ snapshotBefore: 'SNAP' }))
-    expect(onDone).toHaveBeenCalledWith({ text: 'All done', cancelled: false, turnLimit: false })
+    expect(onDone).toHaveBeenCalledWith({
+      text: 'All done',
+      cancelled: false,
+      turnLimit: false,
+      completion: 'complete',
+      invalidToolInputs: 0,
+    })
     // history: user / assistant+tools / tool results / assistant
     expect(loop.messages.map((m) => m.role)).toEqual(['user', 'assistant', 'tool', 'assistant'])
     const toolMsg = loop.messages[2] as Extract<AgentMessage, { role: 'tool' }>
@@ -259,6 +267,9 @@ describe('AgentLoop', () => {
       text: 'partial conclusion',
       cancelled: false,
       turnLimit: true,
+      completion: 'partial',
+      invalidToolInputs: 0,
+      unfinishedReason: 'turn-limit',
     })
   })
 
@@ -283,7 +294,14 @@ describe('AgentLoop', () => {
     await flush()
     expect(transport.cancels).toBe(1)
     expect(executed).toHaveLength(0)
-    expect(onDone).toHaveBeenCalledWith({ text: 'partial', cancelled: true, turnLimit: false })
+    expect(onDone).toHaveBeenCalledWith({
+      text: 'partial',
+      cancelled: true,
+      turnLimit: false,
+      completion: 'cancelled',
+      invalidToolInputs: 0,
+      unfinishedReason: 'cancelled',
+    })
     // assistant message stored without toolCalls (no results would follow)
     expect(loop.messages[1]).toEqual({ role: 'assistant', text: 'partial' })
   })
@@ -321,7 +339,14 @@ describe('AgentLoop', () => {
     // No further model request; the run finishes as cancelled
     expect(transport.requests).toHaveLength(1)
     expect(onDone).toHaveBeenCalledTimes(1)
-    expect(onDone).toHaveBeenCalledWith({ text: '', cancelled: true, turnLimit: false })
+    expect(onDone).toHaveBeenCalledWith({
+      text: '',
+      cancelled: true,
+      turnLimit: false,
+      completion: 'cancelled',
+      invalidToolInputs: 0,
+      unfinishedReason: 'cancelled',
+    })
     expect(loop.busy).toBe(false)
   })
 
@@ -394,7 +419,13 @@ describe('AgentLoop', () => {
     expect(loop.messages).toHaveLength(44)
     expect(loop.messages[0]).toMatchObject({ role: 'user' })
     expect(onError).not.toHaveBeenCalled()
-    expect(onDone).toHaveBeenCalledWith({ text: 'all done', cancelled: false, turnLimit: false })
+    expect(onDone).toHaveBeenCalledWith({
+      text: 'all done',
+      cancelled: false,
+      turnLimit: false,
+      completion: 'complete',
+      invalidToolInputs: 0,
+    })
   })
 
   it('boundary trim is abandoned when the window holds no user message (never empties history)', async () => {
@@ -548,6 +579,8 @@ describe('AgentLoop', () => {
         text: 'recovered answer',
         cancelled: false,
         turnLimit: false,
+        completion: 'complete',
+        invalidToolInputs: 0,
       })
     } finally {
       vi.useRealTimers()
@@ -605,7 +638,14 @@ describe('AgentLoop', () => {
       await vi.advanceTimersByTimeAsync(1_000)
       expect(transport.requests).toHaveLength(1)
       expect(onError).not.toHaveBeenCalled()
-      expect(onDone).toHaveBeenCalledWith({ text: '', cancelled: true, turnLimit: false })
+      expect(onDone).toHaveBeenCalledWith({
+        text: '',
+        cancelled: true,
+        turnLimit: false,
+        completion: 'cancelled',
+        invalidToolInputs: 0,
+        unfinishedReason: 'cancelled',
+      })
       expect(loop.busy).toBe(false)
     } finally {
       vi.useRealTimers()
@@ -673,6 +713,8 @@ describe('AgentLoop', () => {
       text: '',
       cancelled: false,
       turnLimit: false,
+      completion: 'complete',
+      invalidToolInputs: 0,
     })
     const afterFirst = loop.messages
     expect(afterFirst.map((m) => m.role)).toEqual(['user', 'assistant', 'tool', 'assistant'])
@@ -687,6 +729,8 @@ describe('AgentLoop', () => {
       text: 'second prompt ok',
       cancelled: false,
       turnLimit: false,
+      completion: 'complete',
+      invalidToolInputs: 0,
     })
     // Follow-up request carries the prior (now non-empty) terminal assistant
     expect(transport.requests[2]!.messageCount).toBeGreaterThanOrEqual(5)
@@ -783,7 +827,13 @@ describe('AgentLoop compaction', () => {
     await flush()
     loop.run('continue')
     await flush()
-    expect(onDone).toHaveBeenLastCalledWith({ text: 'answer', cancelled: false, turnLimit: false })
+    expect(onDone).toHaveBeenLastCalledWith({
+      text: 'answer',
+      cancelled: false,
+      turnLimit: false,
+      completion: 'complete',
+      invalidToolInputs: 0,
+    })
     // The mechanical digest kept the gist of the user instruction
     expect((loop.messages[0] as { text: string }).text).toContain('key instruction')
     expect((loop.messages[0] as { text: string }).text).toContain(
@@ -884,7 +934,13 @@ describe('AgentLoop compaction', () => {
     const toolMsg = loop.messages[2] as Extract<AgentMessage, { role: 'tool' }>
     expect(toolMsg.results[0].isError).toBe(true)
     expect(toolMsg.results[0].output).toBe('boom')
-    expect(onDone).toHaveBeenCalledWith({ text: 'OK', cancelled: false, turnLimit: false })
+    expect(onDone).toHaveBeenCalledWith({
+      text: 'OK',
+      cancelled: false,
+      turnLimit: false,
+      completion: 'complete',
+      invalidToolInputs: 0,
+    })
   })
 
   it('calls with inputError are not executed; an is_error result is fed back so the model can retry', async () => {
@@ -917,7 +973,13 @@ describe('AgentLoop compaction', () => {
     const toolMsg = loop.messages[2] as Extract<AgentMessage, { role: 'tool' }>
     expect(toolMsg.results[0].isError).toBe(true)
     expect(toolMsg.results[0].output).toContain('bad json')
-    expect(onDone).toHaveBeenCalledWith({ text: 'done', cancelled: false, turnLimit: false })
+    expect(onDone).toHaveBeenCalledWith({
+      text: 'done',
+      cancelled: false,
+      turnLimit: false,
+      completion: 'complete',
+      invalidToolInputs: 1,
+    })
   })
 
   it('a truncated tool call is fed back as "split the call", not as a JSON error', async () => {
@@ -954,7 +1016,13 @@ describe('AgentLoop compaction', () => {
     expect(toolMsg.results[0].output).toContain('smaller tool calls')
     expect(toolMsg.results[0].output).not.toContain('JSON failed to parse')
     // the follow-up turn completed normally, and a non-final max_tokens does not mark the result truncated
-    expect(onDone).toHaveBeenCalledWith({ text: 'done', cancelled: false, turnLimit: false })
+    expect(onDone).toHaveBeenCalledWith({
+      text: 'done',
+      cancelled: false,
+      turnLimit: false,
+      completion: 'complete',
+      invalidToolInputs: 1,
+    })
   })
 
   it('a max_tokens stop on the final text turn surfaces truncated: true in onDone', async () => {
@@ -973,6 +1041,9 @@ describe('AgentLoop compaction', () => {
       text: 'partial reply cut off mid-',
       cancelled: false,
       turnLimit: false,
+      completion: 'partial',
+      invalidToolInputs: 0,
+      unfinishedReason: 'max-tokens',
       truncated: true,
     })
   })
@@ -1003,7 +1074,13 @@ describe('AgentLoop compaction', () => {
     loop.run('x')
     for (let i = 0; i < 12; i++) await flush()
     expect(onError).not.toHaveBeenCalled()
-    expect(onDone).toHaveBeenCalledWith({ text: 'recovered', cancelled: false, turnLimit: false })
+    expect(onDone).toHaveBeenCalledWith({
+      text: 'recovered',
+      cancelled: false,
+      turnLimit: false,
+      completion: 'complete',
+      invalidToolInputs: 4,
+    })
   })
 
   it('terminates the run after consecutive input-parse failures hit the limit', async () => {

@@ -29,7 +29,15 @@ export { chatForProvider } from './chat'
 export { setRescueFetch } from './fetch'
 export { isAiNetworkError } from './network-error'
 export { AiCreditsError, sseLines, streamForProvider } from './stream'
-export type { StreamCallbacks } from './stream'
+export type { AiJsonSchemaHint, StreamCallbacks } from './stream'
+export type { CapabilityProbeKind, ModelCapabilityProfile } from './capability-probe'
+export {
+  assumedCapabilityProfile,
+  calibrationFromProfile,
+  probeModelCapabilities,
+} from './capability-probe'
+export { AiError, classifyAiError } from './error-codes'
+export type { AiErrorCode } from './error-codes'
 export {
   AI_CHAT_RESPONSE_TIMEOUT_MS,
   AI_CONNECT_TIMEOUT_MS,

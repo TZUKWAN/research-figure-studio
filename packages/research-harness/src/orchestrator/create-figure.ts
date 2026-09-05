@@ -41,6 +41,7 @@ import {
   type SemanticAttemptState,
 } from './semantic-attempt.js'
 import { familyStrategyFor, UnsupportedFigureFamilyError } from '../composition/family-strategy.js'
+import { downgradePresentation } from '../protocol/runtime-capabilities.js'
 import { auditFigureContract, type RenderedText } from '../contract/contract-audit.js'
 import { evaluateDeliveryGate } from '../delivery/delivery-gate.js'
 import { resolveFigureTypography } from '../render/typography.js'
@@ -54,7 +55,7 @@ import { resolveReadingFlow, type ReadingFlow } from '../critic/reading-flow.js'
 
 export interface OrchestratorLlm {
   /** semantic planner: research meaning ONLY (no coordinates/colors) */
-  semanticPlan: (thesis: string, feedback?: string) => Promise<unknown>
+  semanticPlan: (thesis: string, feedback?: string, signal?: AbortSignal) => Promise<unknown>
   /** composition designer: intent-level layout plus optional visual decomposition */
   compose?: (ctx: {
     plan: FigurePlanV2
@@ -62,6 +63,7 @@ export interface OrchestratorLlm {
     canvas: { w: number; h: number }
     autonomy: AutonomyLevel
     critique?: string[]
+    signal?: AbortSignal
   }) => Promise<unknown>
 }
 
@@ -77,12 +79,84 @@ export interface FigureNodeSpec {
   maxHeight?: number
 }
 
+/** Typed machine diagnostics for LLM-stage failures (AI-P0-08/09). */
+export type OrchestrationDiagnosticCode =
+  | 'MODEL_SEMANTIC_PROVIDER_FAILED'
+  | 'MODEL_SEMANTIC_PARSE_FAILED'
+  | 'MODEL_SEMANTIC_SCHEMA_FAILED'
+  | 'MODEL_SEMANTIC_TIMEOUT'
+  | 'MODEL_SEMANTIC_CANCELLED'
+  | 'MODEL_COMPOSITION_PROVIDER_FAILED'
+  | 'MODEL_COMPOSITION_PARSE_FAILED'
+  | 'MODEL_COMPOSITION_SCHEMA_FAILED'
+  | 'MODEL_COMPOSITION_TIMEOUT'
+  | 'MODEL_COMPOSITION_CANCELLED'
+  | 'MODEL_PRESENTATION_DOWNGRADED'
+
+export interface OrchestrationDiagnostic {
+  code: OrchestrationDiagnosticCode
+  message: string
+  /** attempt index the diagnostic belongs to (0 = first semantic/compose call) */
+  attempt: number
+}
+
+/** Per-stage wall-clock budgets (AI-P0-11). Undefined stage = no stage cap. */
+export interface StageBudgets {
+  /** semantic planner call, ms */
+  semanticMs?: number
+  /** each composition designer call, ms */
+  compositionMs?: number
+}
+
+/** Char/latency accounting for one structured planning call (AI-P1-08). */
+export interface PlanningMetric {
+  stage: 'semantic' | 'composition'
+  inputChars: number
+  outputChars: number
+  latencyMs: number
+  retries: number
+  providerMode?: string
+}
+
+export class StageTimeoutError extends Error {
+  constructor(stage: string, ms: number) {
+    super(`${stage} timed out after ${ms}ms`)
+    this.name = 'StageTimeoutError'
+  }
+}
+
+export function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw new Error('cancelled')
+}
+
+/** Run one stage against its budget and the run signal; rejects with StageTimeoutError on overrun. */
+export async function withStageBudget<T>(
+  stage: string,
+  run: (signal: AbortSignal | undefined) => Promise<T>,
+  options: { signal?: AbortSignal; budgetMs?: number },
+): Promise<T> {
+  if (options.budgetMs === undefined) return run(options.signal)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new StageTimeoutError(stage, options.budgetMs!)), options.budgetMs)
+  })
+  try {
+    return await Promise.race([run(options.signal), timeout])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 export interface OrchestrationInput {
   thesis: string
   canvasW: number
   canvasH: number
   capability?: CapabilityInput
   autonomyOverride?: AutonomyLevel
+  /** run cancellation (AI-P1-05): checked between stages and inside LLM calls */
+  signal?: AbortSignal
+  /** per-stage LLM budgets (AI-P0-11); stage-specific policy lives with the caller */
+  stageBudgets?: StageBudgets
   nodeSpec?: FigureNodeSpec
   measure?: typeof measureNode
   maxRecompose?: number
@@ -95,6 +169,7 @@ export interface OrchestrationInput {
 }
 
 export type OrchestrationStage =
+  | 'semantic.plan'
   | 'semantic.plan.started'
   | 'semantic.plan.completed'
   | 'semantic.plan.failed'
@@ -157,6 +232,14 @@ export interface OrchestrationResult {
   unrenderedRelations?: RoutedEdge[]
   /** ranked candidate summary (P2 art direction): the set the winner was chosen from */
   candidates?: Array<{ source: string; priorId: string | null; score: number; crossings: number }>
+  /** true when a model composition failed/timed out and a deterministic prior was used */
+  fallbackUsed?: boolean
+  /** machine reason for the deterministic fallback (see diagnostics) */
+  fallbackReason?: string
+  /** typed LLM-stage diagnostics (AI-P0-08/09) */
+  diagnostics?: OrchestrationDiagnostic[]
+  /** per-call planning accounting (AI-P1-08) */
+  planningMetrics?: PlanningMetric[]
   /** P0.5 delivery gate verdict — ok === delivery.pass, always */
   delivery?: import('../delivery/delivery-gate.js').DeliveryGateResult
   /** resolved render typography (P0.5 SSOT): what the renderer must draw */
@@ -403,25 +486,96 @@ export async function orchestrateFigure(
   // (ORCH-P0-02). started/completed/failed are separate events; preparing a
   // call is never recorded as a success.
   emit('semantic.plan.started', true, undefined, { attemptId: 0 })
-  const planResult = await planSemanticFigure({
-    thesis: input.thesis,
-    semanticPlan: llm.semanticPlan,
-    onAttempt: (info) => {
-      emit(
-        'semantic.plan.failed',
-        false,
-        `attempt ${info.attempt} ${info.failureKind}: ${info.errors.join('; ')}`.slice(0, 500),
-        { attemptId: info.attempt - 1 },
-      )
-    },
-  })
+  // coarse-stage alias for consumers of the original OrchestrationStage enum
+  emit('semantic.plan', true)
+  // AI-P0-08/09/11: typed diagnostics + budgets around every LLM call
+  const diagnostics: OrchestrationDiagnostic[] = []
+  const planningMetrics: PlanningMetric[] = []
+  let semanticAttempts = 0
+  const diagnose = (code: OrchestrationDiagnosticCode, message: string, attempt = 0) => {
+    diagnostics.push({ code, message, attempt })
+  }
+  let planResult: Awaited<ReturnType<typeof planSemanticFigure>>
+  try {
+    planResult = await planSemanticFigure({
+      thesis: input.thesis,
+      semanticPlan: (thesis, feedback) => {
+        const attempt = ++semanticAttempts
+        const started = Date.now()
+        return withStageBudget(
+          'semantic planner',
+          (signal) => llm.semanticPlan(thesis, feedback, signal),
+          { signal: input.signal, budgetMs: input.stageBudgets?.semanticMs },
+        ).then(
+          (raw) => {
+            planningMetrics.push({
+              stage: 'semantic',
+              inputChars: thesis.length,
+              outputChars: raw === null || raw === undefined ? 0 : JSON.stringify(raw).length,
+              latencyMs: Date.now() - started,
+              retries: attempt - 1,
+            })
+            return raw
+          },
+          (err: unknown) => {
+            if (err instanceof StageTimeoutError) {
+              diagnose('MODEL_SEMANTIC_TIMEOUT', err.message, attempt)
+            } else if (input.signal?.aborted) {
+              diagnose('MODEL_SEMANTIC_CANCELLED', 'run cancelled during semantic planning', attempt)
+              throw new Error('cancelled')
+            } else {
+              diagnose(
+                'MODEL_SEMANTIC_PROVIDER_FAILED',
+                err instanceof Error ? err.message : String(err),
+                attempt,
+              )
+            }
+            throw err
+          },
+        )
+      },
+      onAttempt: (info) => {
+        emit(
+          'semantic.plan.failed',
+          false,
+          `attempt ${info.attempt} ${info.failureKind}: ${info.errors.join('; ')}`.slice(0, 500),
+          { attemptId: info.attempt - 1 },
+        )
+      },
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (message === 'cancelled') {
+      emit('figure.failed', false, 'cancelled')
+      return { ok: false, trace, error: 'cancelled', diagnostics, planningMetrics }
+    }
+    emit('figure.failed', false, `semantic planner failed: ${message}`)
+    return {
+      ok: false,
+      trace,
+      error: `semantic planner failed: ${message}`,
+      diagnostics,
+      planningMetrics,
+    }
+  }
   if (!planResult.plan) {
+    diagnose(
+      planResult.failureKind === 'MODEL_OUTPUT_PARSE_ERROR'
+        ? 'MODEL_SEMANTIC_PARSE_FAILED'
+        : planResult.failureKind === 'PLANNER_TRANSPORT_ERROR'
+          ? 'MODEL_SEMANTIC_PROVIDER_FAILED'
+          : 'MODEL_SEMANTIC_SCHEMA_FAILED',
+      planResult.errors.join('; ') || 'FigurePlan v2 failed schema validation',
+      planResult.attemptsUsed,
+    )
     const error = `${planResult.failureKind ?? 'FIGURE_PLAN_SCHEMA_ERROR'}: ${planResult.errors.join('; ') || 'FigurePlan v2 failed schema validation'}`
     emit('figure.failed', false, error)
     return {
       ok: false,
       trace,
       ...(planResult.diagnostics.length > 0 ? { semanticDiagnostics: planResult.diagnostics } : {}),
+      diagnostics,
+      planningMetrics,
       error,
     }
   }
@@ -435,6 +589,19 @@ export async function orchestrateFigure(
     canvasW: input.canvasW,
     ...(input.nodeSpec ? { nodeSpecOverrides: input.nodeSpec } : {}),
   })
+  // Capability contract (AI-P0-05): a stale prompt may have let the model
+  // declare a presentation this renderer does not realize (e.g. `junction`);
+  // such edges are downgraded to the renderer-realizable default here.
+  const downgradedPresentations: string[] = []
+  for (const [index, edge] of planResult.plan.edges.entries()) {
+    if (!edge.presentation) continue
+    const downgrade = downgradePresentation(edge.presentation)
+    if (downgrade) {
+      downgradedPresentations.push(`edge ${edge.id ?? index}: ${downgrade.reason}`)
+      edge.presentation = downgrade.fallback
+    }
+  }
+  for (const reason of downgradedPresentations) diagnose('MODEL_PRESENTATION_DOWNGRADED', reason, 0)
   // QA-P0-02 family fallback: map the legacy figureType when no contract named one
   if (!family) {
     familyFallback = familyFromFigureType(planResult.plan.figureType) as
@@ -473,6 +640,9 @@ export async function orchestrateFigure(
   let composeAttempt = 0
   let semanticReplansUsed = 0
   let scientificIssues: ScientificIssue[] = []
+  // AI-P0-08/09: deterministic-fallback bookkeeping
+  let fallbackUsed = false
+  let fallbackReason: string | undefined
   let lastSemanticDiagnostics = planResult.diagnostics
   // P0.5 delivery-gate counters, recomputed each critic round
   let lastScientificHard = 0
@@ -506,13 +676,19 @@ export async function orchestrateFigure(
       ...(lastSemanticDiagnostics.length > 0
         ? { semanticDiagnostics: lastSemanticDiagnostics }
         : {}),
+      ...(fallbackUsed ? { fallbackUsed, fallbackReason } : {}),
+      ...(diagnostics.length > 0 ? { diagnostics } : {}),
+      ...(planningMetrics.length > 0 ? { planningMetrics } : {}),
       semanticReplans: semanticReplansUsed,
       error,
     }
   }
 
-  for (let round = 0; round < maxRounds; round++) {
-    if (candidates.length === 0) {
+  // AI-P1-05: cancellation between deterministic stages surfaces a typed result
+  try {
+    for (let round = 0; round < maxRounds; round++) {
+      throwIfAborted(input.signal)
+      if (candidates.length === 0) {
       emit(
         'composition.started',
         true,
@@ -522,37 +698,93 @@ export async function orchestrateFigure(
       // model-authored decomposition is OWNED by this attempt (ORCH-P0-04)
       let modelPlan: SpatialPlan | null = null
       if (autonomy !== 'A0' && llm.compose) {
+        const composeStarted = Date.now()
+        let raw: unknown
+        let composeSettled = false
         try {
-          const raw = await llm.compose({
-            plan: state.plan,
-            measured: state.measured.map((node) => ({
-              id: node.id,
-              w: node.bounds.preferredWidth,
-              h: node.bounds.preferredHeight,
-            })),
-            canvas: { w: input.canvasW, h: input.canvasH },
-            autonomy,
-            ...(critique ? { critique } : {}),
-          })
-          const normalized = normalizeSpatialPlan(
-            raw,
-            state.plan.nodes.map((node) => node.id),
-            { readingFlow: 'LR', visualRole: 'primary' },
+          raw = await withStageBudget(
+            'composition designer',
+            (signal) =>
+              llm.compose!({
+                plan: state.plan,
+                measured: state.measured.map((node) => ({
+                  id: node.id,
+                  w: node.bounds.preferredWidth,
+                  h: node.bounds.preferredHeight,
+                })),
+                canvas: { w: input.canvasW, h: input.canvasH },
+                autonomy,
+                ...(critique ? { critique } : {}),
+                signal,
+              }),
+            { signal: input.signal, budgetMs: input.stageBudgets?.compositionMs },
           )
-          const normalizedVisualPlan = normalizeVisualPlan(
-            (raw as Record<string, unknown> | null)?.visualPlan,
-            state.plan,
-          )
-          // the decomposition attaches ONLY to this attempt's model plan;
-          // when the spatial plan is unusable the decomposition dies with it
-          modelPlan = normalized
-            ? {
-                ...normalized,
-                visualPlan: normalizedVisualPlan,
-              }
-            : null
-        } catch {
+          composeSettled = true
+        } catch (err) {
           modelPlan = null
+          fallbackUsed = true
+          if (err instanceof StageTimeoutError) {
+            fallbackReason = err.message
+            diagnose('MODEL_COMPOSITION_TIMEOUT', err.message, state.attempt)
+          } else if (input.signal?.aborted) {
+            diagnose('MODEL_COMPOSITION_CANCELLED', 'run cancelled during composition', state.attempt)
+            throw new Error('cancelled')
+          } else {
+            fallbackReason = err instanceof Error ? err.message : String(err)
+            diagnose('MODEL_COMPOSITION_PROVIDER_FAILED', fallbackReason, state.attempt)
+          }
+        }
+        if (composeSettled) {
+          // parse vs schema classification (AI-P0-09): a string payload must
+          // parse as JSON before schema validation can even run
+          let parsed: unknown = raw
+          let parseFailed = false
+          if (typeof raw === 'string') {
+            try {
+              const fenced = /```(?:json)?\s*([\s\S]*?)```/.exec(raw)
+              const rawText = (fenced ? fenced[1]! : raw).trim()
+              const start = rawText.indexOf('{')
+              const end = rawText.lastIndexOf('}')
+              parsed = JSON.parse(start >= 0 && end > start ? rawText.slice(start, end + 1) : rawText)
+            } catch {
+              parseFailed = true
+            }
+          }
+          if (raw === null || raw === undefined) {
+            // designer declined to answer: silent deterministic fallback, no diagnostic
+          } else if (parseFailed) {
+            fallbackUsed = true
+            fallbackReason = 'composition designer returned unparseable output'
+            diagnose('MODEL_COMPOSITION_PARSE_FAILED', fallbackReason, state.attempt)
+          } else {
+            const normalized = normalizeSpatialPlan(
+              parsed,
+              state.plan.nodes.map((node) => node.id),
+              { readingFlow: 'LR', visualRole: 'primary' },
+            )
+            const normalizedVisualPlan = normalizeVisualPlan(
+              (parsed as Record<string, unknown> | null)?.visualPlan,
+              state.plan,
+            )
+            modelPlan = normalized
+              ? {
+                  ...normalized,
+                  visualPlan: normalizedVisualPlan,
+                }
+              : null
+            if (!normalized) {
+              fallbackUsed = true
+              fallbackReason = 'composition designer failed schema validation'
+              diagnose('MODEL_COMPOSITION_SCHEMA_FAILED', fallbackReason, state.attempt)
+            }
+          }
+          planningMetrics.push({
+            stage: 'composition',
+            inputChars: JSON.stringify(state.plan).length,
+            outputChars: raw === null || raw === undefined ? 0 : JSON.stringify(raw).length,
+            latencyMs: Date.now() - composeStarted,
+            retries: 0,
+          })
         }
       }
       try {
@@ -922,7 +1154,24 @@ export async function orchestrateFigure(
       continue
     }
 
-    break
+      break
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (message === 'cancelled') {
+      emit('figure.failed', false, 'cancelled')
+      return {
+        ok: false,
+        trace,
+        plan: state.plan,
+        autonomy,
+        measured: state.measured,
+        error: 'cancelled',
+        diagnostics,
+        planningMetrics,
+      }
+    }
+    throw err
   }
 
   if (!best || !critic) {
@@ -976,6 +1225,9 @@ export async function orchestrateFigure(
     ...(repairs.length > 0 ? { repairs: repairs as AppliedRepair[] } : {}),
     semanticReplans: semanticReplansUsed,
     ...(lastSemanticDiagnostics.length > 0 ? { semanticDiagnostics: lastSemanticDiagnostics } : {}),
+    ...(fallbackUsed ? { fallbackUsed, fallbackReason } : {}),
+    ...(diagnostics.length > 0 ? { diagnostics } : {}),
+    ...(planningMetrics.length > 0 ? { planningMetrics } : {}),
     delivery,
     typography,
   }

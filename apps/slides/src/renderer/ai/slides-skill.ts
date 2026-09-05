@@ -1,11 +1,18 @@
 import type { AgentSkill, ToolDisplay } from '@genoffice/agent-core'
 import {
+  requestStructured,
+  sanitizeAgentPayload,
+  type StructuredTransport,
+} from '@genoffice/agent-core'
+import { calibrationFromProfile, type ModelCapabilityProfile } from '@genoffice/ai-provider'
+import {
   anchorPoint,
   auditHorizontalPipeline,
   parseFigureContract,
   DOMAIN_PROFILES,
   auditInputCoreOutput,
   endpointTable,
+  figurePlanJsonSchema,
   getComponentSpec,
   SEMANTIC_NODE_STYLES,
   layoutHorizontalPipeline,
@@ -16,6 +23,7 @@ import {
   parseSemanticEdges,
   ROLE_SHAPE,
   shapePreset,
+  spatialPlanJsonSchema,
   type CapabilityInput,
   type Rect as RouteRect,
 } from '@genoffice/research-harness'
@@ -23,9 +31,13 @@ import type { FigurePlan } from '@genoffice/research-harness'
 import {
   AGENT_SYSTEM_PROMPT,
   RESEARCH_AGENT_SYSTEM_PROMPT,
-  RESEARCH_COMPOSITION_DESIGNER_PROMPT,
-  RESEARCH_SEMANTIC_PLANNER_PROMPT,
+  RESEARCH_COMPOSITION_DESIGNER_POLICY,
+  RESEARCH_SEMANTIC_PLANNER_POLICY,
 } from '../../shared/prompt-defaults'
+import {
+  composeCompositionDesignerPrompt,
+  composeSemanticPlannerPrompt,
+} from '../../shared/prompt-protocol'
 import { effectivePrompt } from './prompt-overrides'
 import {
   beginAction,
@@ -100,6 +112,13 @@ export type DeckProgressEvent =
       summary: string
       pages: PageProgressItem[]
     }
+  | {
+      /** research figure orchestration stages (AI-P1-02): real stage-level observability */
+      stage: 'figure'
+      label: string
+      status: 'running' | 'done' | 'error'
+      summary: string
+    }
   | { stage: 'done'; total: number; summary: string }
 
 /** Panel/skill access point to the currently open deck (refs provided by App, stay fresh across renders). */
@@ -156,8 +175,31 @@ export interface DeckAccess {
   searchImages?(query: string, maxResults: number): Promise<string[]>
   /** Whether cloud single-page generation is available (kill switch + gsk login state) */
   isCloudPageGenEnabled?(): Promise<boolean>
-  /** Creation Orchestrator: one raw schema-contract LLM call with the user's own model */
-  runLlm?(system: string, user: string): Promise<{ ok: boolean; text?: string; error?: string }>
+  /** Creation Orchestrator: one raw schema-contract LLM call with the user's own model.
+   *  signal: aborted when the user hits stop — in-flight research pipeline LLM calls stop promptly (AI-P1-05). */
+  runLlm?(
+    system: string,
+    user: string,
+    signal?: AbortSignal,
+  ): Promise<{ ok: boolean; text?: string; error?: string }>
+  /**
+   * Structured LLM call (AI-P0-01): passes the JSON schema to the transport
+   * (provider-native enforcement when the capability profile supports it) and
+   * returns the raw text for client-side extraction/validation.
+   */
+  runStructured?(options: {
+    system: string
+    user: string
+    jsonSchema?: { name: string; schema: Record<string, unknown> }
+    signal?: AbortSignal
+  }): Promise<{
+    ok: boolean
+    text?: string
+    error?: string
+    mode?: 'native-json' | 'tool-schema' | 'plain'
+  }>
+  /** Probed capability profile for the active provider/model (AI-P0-06); null when never probed. */
+  getCapabilityProfile?(): Promise<ModelCapabilityProfile | null>
   /** live predicate: gsk login && the Genspark-cloud-tools toggle; false hides generate_image / analyze_media */
   gskTools?(): boolean
   /**
@@ -2078,6 +2120,7 @@ export function createSlidesSkill(
     reset: () => {
       state.htmlGenerated = false
       state.lastFigurePlan = undefined
+      state.durableFigureState = undefined
       state.webSearched = undefined
       state.plannedPages = undefined
       state.plannedTitles = undefined
@@ -2085,7 +2128,27 @@ export function createSlidesSkill(
       state.lastStyleSkill = undefined
       state.lastTopic = undefined
     },
-    executeTool: (call, signal) => executeTool(access, call, state, signal, mode),
+    // Durable structured state (AI-P0-10): the AgentLoop injects this into the
+    // system prompt on EVERY turn, so context compaction summarizing old chat
+    // messages can never distort the research facts the figure stands on.
+    durableContext: () => {
+      const s = state.durableFigureState
+      if (!s) return ''
+      return [
+        '<durable-figure-state>',
+        `thesis: ${s.thesis}`,
+        ...(s.contractCentralClaim ? [`contract claim: ${s.contractCentralClaim}`] : []),
+        ...(s.planSummary
+          ? [
+              `plan: ${s.planSummary.expressionMode} ${s.planSummary.figureType}, ${s.planSummary.nodeCount} nodes / ${s.planSummary.edgeCount} edges (page ${s.slideIndex + 1})`,
+            ]
+          : []),
+        ...s.userConstraints.map((c) => `constraint: ${c}`),
+        '</durable-figure-state>',
+      ].join('\n')
+    },
+    executeTool: (call, signal, onProgress) =>
+      executeTool(access, call, state, signal, mode, onProgress),
   }
 }
 
@@ -2094,6 +2157,11 @@ interface SkillState {
   mode: SlidesSkillMode
   /** Most recent validated research FigurePlan, injected into subsequent turns. */
   lastFigurePlan?: FigurePlan
+  /**
+   * Durable figure facts (AI-P0-10): injected via durableContext() into the
+   * system prompt every turn — independent of (compactable) message history.
+   */
+  durableFigureState?: DurableFigureState
   /** A web_search ran in this conversation — unlocks dataSource:'search' in the figure gate */
   webSearched?: boolean
   /** Number of pages most recently planned by plan_deck, used by the presentation progress checklist */
@@ -2106,6 +2174,19 @@ interface SkillState {
   lastStyleSkill?: string
   /** Topic of the most recent generate_deck (used by save_style_template) */
   lastTopic?: string
+}
+
+interface DurableFigureState {
+  thesis: string
+  slideIndex: number
+  contractCentralClaim?: string
+  planSummary?: {
+    figureType: string
+    nodeCount: number
+    edgeCount: number
+    expressionMode: string
+  }
+  userConstraints: string[]
 }
 
 /**
@@ -2542,6 +2623,7 @@ async function executeTool(
   state?: SkillState,
   signal?: AbortSignal,
   mode: SlidesSkillMode = state?.mode ?? 'presentation',
+  onProgress?: (progress: { stage: string; message: string }) => void,
 ) {
   if (mode === 'research' && RESEARCH_MODE_EXCLUDED_TOOLS.has(call.name)) {
     return fail(
@@ -4030,33 +4112,85 @@ async function executeTool(
       const thesis = String(call.input.thesis ?? '').trim()
       if (!thesis) return fail(t('aiFailNewElement'), 'thesis is required')
       const notes = String(call.input.notes ?? '').trim()
-      const parseJson = (text: string): unknown => {
-        const fenced = /```(?:json)?\\s*([\\s\\S]*?)```/.exec(text)
-        const raw = (fenced ? fenced[1]! : text).trim()
-        const start = raw.indexOf('{')
-        const end = raw.lastIndexOf('}')
-        return JSON.parse(start >= 0 && end > start ? raw.slice(start, end + 1) : raw)
-      }
+      // AI-P1-10: user/document material is untrusted DATA. It travels inside a
+      // <source-material> boundary the immutable protocol declares as
+      // never-instruction, and is sanitized so pasted credentials never reach
+      // the model provider verbatim.
+      const sourceMaterial = notes
+        ? `<source-material>\n${sanitizeAgentPayload(notes)}\n</source-material>`
+        : ''
       const plannerUser = [
         'Canvas: ' + slide.widthPx + 'x' + slide.heightPx + 'px (px, origin top-left)',
-        'Request: ' + thesis,
-        notes ? 'Material notes:\\n' + notes : '',
+        'Request: ' + sanitizeAgentPayload(thesis),
+        sourceMaterial ? 'Material notes:\n' + sourceMaterial : '',
       ]
         .filter(Boolean)
-        .join('\\n')
+        .join('\n')
+      // Capability-aware protocol selection (AI-P0-06/14): native schema
+      // enforcement only when the probe proved it; weak structured support
+      // degrades the autonomy ladder to the deterministic path instead of
+      // hoping a prompt keeps the model on the contract.
+      const capabilityProfile = access.getCapabilityProfile
+        ? await access.getCapabilityProfile().catch(() => null)
+        : null
+      const probedJson =
+        capabilityProfile?.confidence === 'probed' && capabilityProfile.structuredJson
+      const structuredTransport =
+        (schemaName: string, schema: Record<string, unknown>): StructuredTransport =>
+        async ({ system, user, signal, jsonSchema: schemaFromRequest }) => {
+          // Native enforcement is gated on the PROBE result (AI-P0-06): an
+          // unprobed gateway gets the plain request + client-side bounded
+          // repair, never a blind response_format that could 400.
+          const carrier = probedJson
+            ? (schemaFromRequest ?? { name: schemaName, schema })
+            : undefined
+          if (access.runStructured) {
+            const r = await access.runStructured({
+              system,
+              user,
+              ...(carrier ? { jsonSchema: carrier } : {}),
+              ...(signal ? { signal } : {}),
+            })
+            return {
+              ok: r.ok,
+              text: r.text,
+              error: r.error,
+              mode: carrier ? 'native-json' : 'plain',
+            }
+          }
+          const r = await access.runLlm!(system, user, signal)
+          return {
+            ok: r.ok,
+            text: r.text,
+            error: r.error,
+            mode: carrier ? 'native-json' : 'plain',
+          }
+        }
+      const plannerSystem = composeSemanticPlannerPrompt(
+        effectivePrompt('research.semantic-planner', RESEARCH_SEMANTIC_PLANNER_POLICY),
+      )
+      const plannerSchema = figurePlanJsonSchema()
       const llm = {
-        semanticPlan: async (_thesis: string, feedback?: string) => {
-          const r = await access.runLlm!(
-            effectivePrompt('research.semantic-planner', RESEARCH_SEMANTIC_PLANNER_PROMPT),
-            feedback
-              ? plannerUser +
-                  '\\n\\nPrevious attempt rejected by schema validation: ' +
-                  feedback +
-                  '\\nFix the issues and output the JSON object again.'
-              : plannerUser,
+        semanticPlan: async (thesisArg: string, feedback?: string, signal?: AbortSignal) => {
+          const result = await requestStructured(
+            structuredTransport('research_figure_plan', plannerSchema),
+            {
+              schemaId: 'research.semantic-planner',
+              jsonSchema: { name: 'research_figure_plan', schema: plannerSchema },
+              system: plannerSystem,
+              user: plannerUser,
+              validate: (value) => (value !== null && typeof value === 'object' ? value : null),
+            },
+            {
+              maxRepairs: 1,
+              ...(signal ? { signal } : {}),
+            },
           )
-          if (!r.ok) throw new Error(r.error ?? 'planner call failed')
-          return parseJson(r.text ?? '')
+          if (!result.ok) {
+            const detail = result.diagnostics.map((d) => `${d.code}: ${d.message}`).join('; ')
+            throw new Error(`planner structured output failed: ${detail}`)
+          }
+          return result.value
         },
         compose: async (ctx: {
           plan: unknown
@@ -4064,17 +4198,32 @@ async function executeTool(
           canvas: { w: number; h: number }
           autonomy: string
           critique?: string[]
+          signal?: AbortSignal
         }) => {
-          const r = await access.runLlm!(
-            effectivePrompt('research.composition-designer', RESEARCH_COMPOSITION_DESIGNER_PROMPT),
-            JSON.stringify(ctx),
+          const designerSystem = composeCompositionDesignerPrompt(
+            effectivePrompt('research.composition-designer', RESEARCH_COMPOSITION_DESIGNER_POLICY),
           )
-          if (!r.ok) return null
-          try {
-            return parseJson(r.text ?? '')
-          } catch {
-            return null
+          const result = await requestStructured(
+            structuredTransport('research_spatial_plan', spatialPlanJsonSchema()),
+            {
+              schemaId: 'research.composition-designer',
+              jsonSchema: { name: 'research_spatial_plan', schema: spatialPlanJsonSchema() },
+              system: designerSystem,
+              user: JSON.stringify(ctx),
+              validate: (value) => (value !== null && typeof value === 'object' ? value : null),
+            },
+            {
+              maxRepairs: 1,
+              ...(ctx.signal ? { signal: ctx.signal } : {}),
+            },
+          )
+          if (!result.ok) {
+            const detail = result.diagnostics.map((d) => `${d.code}: ${d.message}`).join('; ')
+            // A provider/parse failure is diagnosed by the orchestrator — but it
+            // must be VISIBLE, never a silent null fallback (AI-P0-08).
+            throw new Error(`composition structured output failed: ${detail}`)
           }
+          return result.value
         },
       }
       // P0.5 contract bridge: the structured contract field is authoritative;
@@ -4099,15 +4248,62 @@ async function executeTool(
           ),
         },
       })
+      // AI-P1-14: autonomy calibration comes from the real capability profile;
+      // the tool's explicit calibration argument stays authoritative for
+      // deterministic tests and benchmark overrides.
+      const profileCalibration = calibrationFromProfile(capabilityProfile)
+      const capabilityInput: CapabilityInput = {
+        ...(call.input.capability as CapabilityInput | undefined),
+        ...((call.input.capability as CapabilityInput | undefined)?.calibration
+          ? {}
+          : { calibration: profileCalibration }),
+      }
+      // Stage budgets (AI-P0-11): generous (deep thinking on large canvases is
+      // legitimate), but a hung stage fails with a typed diagnostic instead of
+      // stalling the whole agent turn.
+      const STAGE_BUDGET_MS = 180_000
+      const STAGE_LABELS: Record<string, string> = {
+        'semantic.plan': '语义规划 / semantic planning',
+        'text.optimized': '文字压缩 / text optimization',
+        'measurement.completed': '尺寸测量 / measurement',
+        'capability.selected': '能力分级 / capability selection',
+        'composition.started': '构图候选 / composition candidates',
+        'composition.completed': '构图完成 / composition completed',
+        'layout.solved': '几何合法化 / layout solving',
+        'route.repaired': '连线修复 / connector repair',
+        'layout.repaired': '布局修复 / layout repair',
+        'critic.completed': '质量审计 / quality audit',
+        'recompose.started': '重新构图 / recomposition',
+        'figure.completed': '完成 / completed',
+      }
       const orchestration = await orchestrateFigure(
         {
           thesis,
           canvasW: slide.widthPx,
           canvasH: slide.heightPx,
-          capability: call.input.capability as CapabilityInput | undefined,
+          capability: capabilityInput,
           ...(contract ? { contract } : {}),
+          ...(signal ? { signal } : {}),
+          stageBudgets: { semanticMs: STAGE_BUDGET_MS, compositionMs: STAGE_BUDGET_MS },
+          // Probed weak tool-calling → keep the model out of the composition loop.
+          ...(capabilityProfile?.confidence === 'probed' && !capabilityProfile.toolCalling
+            ? { allowModelComposition: false }
+            : {}),
         },
         llm,
+        (event) => {
+          const label = STAGE_LABELS[event.stage] ?? event.stage
+          // Loop-level progress (AI-P1-02): mid-execution stage summaries for
+          // the agent-activity UI; no chain-of-thought, only stage statuses.
+          onProgress?.({ stage: event.stage, message: label })
+          // In-chat progress card via the deck progress pathway.
+          access.onProgress?.({
+            stage: 'figure',
+            label,
+            status: event.ok ? 'running' : 'error',
+            summary: event.detail ?? '',
+          })
+        },
       )
       if (
         !orchestration.ok ||
@@ -4117,13 +4313,31 @@ async function executeTool(
         !orchestration.critic ||
         orchestration.critic.verdict === 'RECOMPOSE'
       ) {
+        // Machine-readable failure: typed diagnostics + fallback reason travel
+        // with the error so the agent (and post-mortem logs) can tell a broken
+        // planner from a weak composer (AI-P0-08/12).
+        const diagnostics = orchestration.diagnostics
+          ?.map((d) => `${d.code}(${d.message})`)
+          .slice(0, 4)
+          .join('; ')
         const reason =
           orchestration.error ??
           'composition ' +
             (orchestration.critic?.verdict ?? 'failed') +
             ': ' +
             (orchestration.critic?.gateIssues.join('; ') || 'critic below threshold')
-        return fail(t('aiFailNewElement'), reason)
+        return fail(
+          t('aiFailNewElement'),
+          [
+            reason,
+            orchestration.fallbackUsed
+              ? `fallbackUsed: ${orchestration.fallbackReason ?? 'unknown'}`
+              : '',
+            diagnostics ? `diagnostics: ${diagnostics}` : '',
+          ]
+            .filter(Boolean)
+            .join(' | '),
+        )
       }
       const plan = orchestration.plan
       const solve = orchestration.best.solve
@@ -4402,6 +4616,23 @@ async function executeTool(
             orchestration.routes.length +
             ' connectors bound',
         )
+        // Durable figure state (AI-P0-10): structured facts survive independent
+        // of the conversational history, so context compaction can never
+        // rewrite the thesis/plan the canvas was built from.
+        if (state) {
+          state.durableFigureState = {
+            thesis,
+            slideIndex: idx,
+            ...(contract ? { contractCentralClaim: contract.centralClaim } : {}),
+            planSummary: {
+              figureType: plan.figureType,
+              nodeCount: plan.nodes.length,
+              edgeCount: plan.edges.length,
+              expressionMode: plan.narrative?.expressionMode ?? 'freeform',
+            },
+            userConstraints: [],
+          }
+        }
         return {
           output:
             'Created an orchestrated research figure on page ' +
@@ -4423,7 +4654,12 @@ async function executeTool(
             orchestration.best.crossings +
             ', intent drift ' +
             Math.round(orchestration.best.solve.intentDriftPx) +
-            'px). Element ids: ' +
+            'px)' +
+            // Fallback is allowed but must never be silent (AI-P0-08).
+            (orchestration.fallbackUsed
+              ? `. Model composition failed and the deterministic prior was used (fallbackReason: ${orchestration.fallbackReason ?? 'unknown'}); report this to the user.`
+              : '') +
+            '. Element ids: ' +
             [...elementIdByNodeId.values()].join(', ') +
             '.',
           mutated: true,

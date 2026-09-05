@@ -72,6 +72,17 @@ export interface ToolExecution {
   display?: ToolDisplay
 }
 
+/**
+ * Mid-execution progress for a long-running tool (AI-P1-02): status/action
+ * summaries only — never chain-of-thought, never raw LLM payloads.
+ */
+export interface ToolProgress {
+  /** stable stage key (e.g. 'semantic.plan') */
+  stage: string
+  /** short human-readable status line safe to show in the activity UI */
+  message: string
+}
+
 // ---- run phase (drives the in-progress status line in chat UIs) ----
 
 export type AgentPhaseKind =

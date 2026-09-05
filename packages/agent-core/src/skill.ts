@@ -1,4 +1,4 @@
-import type { AgentToolCall, AgentToolDef, ToolExecution } from './types'
+import type { AgentToolCall, AgentToolDef, ToolExecution, ToolProgress } from './types'
 
 /** One tool call actually executed during a run, as seen by verifyResponse. */
 export interface ExecutedToolCall {
@@ -26,8 +26,20 @@ export interface AgentSkill {
    * signal: aborted when the user hits stop. Long-running tools (e.g.
    * generate_deck with internal LLM calls) should check signal.aborted in
    * their loops and stop promptly.
+   * onProgress: optional mid-execution status emitter for long tools
+   * (stage summaries only — see ToolProgress).
    */
-  executeTool(call: AgentToolCall, signal?: AbortSignal): ToolExecution | Promise<ToolExecution>
+  executeTool(
+    call: AgentToolCall,
+    signal?: AbortSignal,
+    onProgress?: (progress: ToolProgress) => void,
+  ): ToolExecution | Promise<ToolExecution>
+  /**
+   * Structured state that must survive context compaction (AI-P0-10): the
+   * loop injects it into the system prompt on EVERY turn, independent of the
+   * (summable, lossy) message history. Return the durable block or ''.
+   */
+  durableContext?(): string
   /** Clear state that belongs to the current conversation when it is reset. */
   reset?(): void
   /**
@@ -71,12 +83,12 @@ export function composeSkills(id: string, intro: string, skills: AgentSkill[]): 
         .map((s) => s.buildContext?.() ?? '')
         .filter(Boolean)
         .join('\n\n'),
-    executeTool: (call, signal) => {
+    executeTool: (call, signal, onProgress) => {
       const skill = ownerOf(call.name)
       if (!skill) {
         return { output: `Unknown tool: ${call.name}`, isError: true, summary: call.name }
       }
-      return skill.executeTool(call, signal)
+      return skill.executeTool(call, signal, onProgress)
     },
     reset: () => {
       for (const skill of skills) skill.reset?.()
