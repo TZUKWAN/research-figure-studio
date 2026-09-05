@@ -15,8 +15,7 @@
  * and the layout audit must pass — if not, the transaction is undone, so the
  * visible canvas never keeps a figure the plan did not vouch for.
  */
-import { auditSlideLayout } from '../ai/layout-audit'
-import type { FigureRenderPlan, NativeElementSpec } from './native-figure-renderer'
+import type { FigureRenderPlan } from './native-figure-renderer'
 import type { ConnectorBindingSpec } from './native-figure-renderer'
 
 /** canvas px (RenderSlide space) → EMU */
