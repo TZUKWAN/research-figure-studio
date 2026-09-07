@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { createSlidesSkill, type DeckAccess } from '../src/renderer/ai/slides-skill'
 import type { RenderSlide } from '@genoffice/pptx-render'
 
@@ -29,6 +29,15 @@ function makeAccess(overrides: {
     ...(overrides.runStructured ? { runStructured: overrides.runStructured } : {}),
   } as unknown as DeckAccess
 }
+
+// The production tool writes through ONE atomic applyTxn; the cancel tests
+// abort before the transaction, so an unapplied stub is enough to pass the
+// production-surface guard.
+beforeAll(() => {
+  ;(window as unknown as Record<string, unknown>).slidesApi = {
+    applyTxn: vi.fn(async () => ({ applied: false, failures: [] })),
+  }
+})
 
 describe('agent cancel reaches the research pipeline (AI-P1-05)', () => {
   it('an already-aborted signal never issues the planner LLM call', async () => {

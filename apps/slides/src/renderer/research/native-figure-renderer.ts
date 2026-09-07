@@ -29,15 +29,9 @@ import {
   type RoutedEdge,
   type SemanticNodeType,
 } from '@genoffice/research-harness'
-import {
-  connectorColor,
-  resolveComponentColors,
-  type ThemeRoles,
-} from '@genoffice/theme-engine'
+import { connectorColor, resolveComponentColors, type ThemeRoles } from '@genoffice/theme-engine'
 import type { SemanticMetadata } from '@genoffice/pptx-engine'
-import type {
-  ResearchNodeRecord,
-} from '@genoffice/pptx-engine/research-metadata'
+import type { ResearchNodeRecord } from '@genoffice/pptx-engine/research-metadata'
 import { SEMANTIC_NODE_STYLES } from '@genoffice/research-harness'
 import {
   compileComponentRenderSpec,
@@ -83,8 +77,17 @@ export interface FigureRenderInput {
   canvasW: number
   canvasH: number
   theme: ThemeRoles
-  /** contract typography scale (1 when no contract) */
+  /** contract typography scale (1 when no contract) — fallback when no resolved typography */
   fontScale?: number
+  /**
+   * P0.5 typography SSOT: the orchestrator's contract-resolved pt sizes are
+   * the single authority when present; the renderer never re-derives sizes.
+   * Structural view of ResolvedFigureTypography (renderer stays decoupled).
+   */
+  typography?: {
+    node: Record<string, { titlePt: number; detailPt: number }>
+    micro: { primaryPt: number; secondaryPt: number; annotationPt: number }
+  }
   thesis: string
 }
 
@@ -97,6 +100,25 @@ export const Z_TIERS = {
   leafNode: 3,
   annotation: 4,
 } as const
+
+/** §24: length of the native inhibition bar at the target end (px). */
+export const INHIBITION_BAR_LEN_PX = 12
+
+function anchorPointOf(
+  rect: { x: number; y: number; w: number; h: number },
+  side: 'top' | 'left' | 'bottom' | 'right',
+): { x: number; y: number } {
+  switch (side) {
+    case 'top':
+      return { x: rect.x + rect.w / 2, y: rect.y }
+    case 'bottom':
+      return { x: rect.x + rect.w / 2, y: rect.y + rect.h }
+    case 'left':
+      return { x: rect.x, y: rect.y + rect.h / 2 }
+    default:
+      return { x: rect.x + rect.w, y: rect.y + rect.h / 2 }
+  }
+}
 
 export interface NativeElementSpec {
   /** plan-local stable id — "$<specId>" in txn ops references the created element */
@@ -150,6 +172,16 @@ export function buildFigureRenderPlan(input: FigureRenderInput): FigureRenderPla
   const defects: FigureDefect[] = []
   const identity = figureIdentity({ figureFamily: undefined, domain: input.domain })
   const fontScale = input.fontScale ?? 1
+  // P0.5 typography SSOT: resolved sizes win; style×scale is the fallback.
+  const titlePtOf = (nodeId: string, fallbackPt: number): number =>
+    input.typography?.node[nodeId]?.titlePt ?? fallbackPt
+  const detailPtOf = (nodeId: string, fallbackPt: number): number =>
+    input.typography?.node[nodeId]?.detailPt ?? fallbackPt
+  const microPrimaryPt = input.typography?.micro.primaryPt ?? Math.round(10.5 * fontScale * 10) / 10
+  const microSecondaryPt =
+    input.typography?.micro.secondaryPt ?? Math.round(9.5 * fontScale * 10) / 10
+  const microAnnotationPt =
+    input.typography?.micro.annotationPt ?? Math.round(9.5 * fontScale * 10) / 10
   const nodeById = new Map(input.plan.nodes.map((node) => [node.id, node]))
   const moduleByNodeId = new Map(
     input.visualPlan.modules.map((module) => [module.moduleId, module]),
@@ -157,7 +189,10 @@ export function buildFigureRenderPlan(input: FigureRenderInput): FigureRenderPla
   // Domain-override resolution reads the authoritative DOMAIN_PROFILES table;
   // micro units inherit the module's resolved kind (P0-06).
   const domainOverrides =
-    (input.domain && (DOMAIN_PROFILES as Record<string, { kindOverrides?: Record<string, string> }>)[input.domain]?.kindOverrides) || {}
+    (input.domain &&
+      (DOMAIN_PROFILES as Record<string, { kindOverrides?: Record<string, string> }>)[input.domain]
+        ?.kindOverrides) ||
+    {}
   const kindOf = (node: { type: string }): string => {
     const fallback: Record<string, string> = {
       'data-source': 'data-source',
@@ -213,12 +248,14 @@ export function buildFigureRenderPlan(input: FigureRenderInput): FigureRenderPla
     const specId = `module:${placement.id}`
     specIdByNodeId.set(placement.id, specId)
     // P0-04: the registry + semantic style compile HERE; the element below is
-    // a pure consumer of the compiled spec.
+    // a pure consumer of the compiled spec. Typography SSOT: the orchestrator's
+    // contract-resolved pt sizes are the authority when present.
     const compiled: ComponentRenderSpec = compileComponentRenderSpec({
       kind,
       style: {
-        titleSizePt: Math.round(style.titleSizePt * fontScale * 10) / 10,
-        detailSizePt: Math.round(style.detailSizePt * fontScale * 10) / 10,
+        titleSizePt: Math.round(titlePtOf(placement.id, style.titleSizePt * fontScale) * 10) / 10,
+        detailSizePt:
+          Math.round(detailPtOf(placement.id, style.detailSizePt * fontScale) * 10) / 10,
         padX: style.padX,
         padY: style.padY,
       },
@@ -306,13 +343,9 @@ export function buildFigureRenderPlan(input: FigureRenderInput): FigureRenderPla
     if (!module) continue
     const node = nodeById.get(placement.id)!
     const kind = kindOf(node)
-    const style = SEMANTIC_NODE_STYLES[node.type]
     const colors = resolveComponentColors(kind, input.theme)
     const microMap = new Map([
-      [
-        placement.id,
-        { x: placement.x, y: placement.y, w: placement.w, h: placement.h },
-      ],
+      [placement.id, { x: placement.x, y: placement.y, w: placement.w, h: placement.h }],
     ])
     const micro = layoutMicro([module], microMap)
     const microIds: string[] = []
@@ -321,8 +354,7 @@ export function buildFigureRenderPlan(input: FigureRenderInput): FigureRenderPla
       // fit constraint was derived from. No last-second Math.max clamp here.
       const specId = `unit:${placement.id}#${u.id}`
       microIds.push(specId)
-      const spec = getComponentSpec(kind)
-      const unitShapePreset = shapePresetFor(u, spec.preset)
+      const unitShapePreset = shapePresetFor(u, getComponentSpec(kind).preset)
       const element: NativeElementSpec = {
         specId,
         zTier: Z_TIERS.compositeNode,
@@ -337,12 +369,31 @@ export function buildFigureRenderPlan(input: FigureRenderInput): FigureRenderPla
               {
                 text: u.label,
                 bold: u.role === 'output' || u.role === 'substep',
-                fontSize: Math.round((u.role === 'annotation' ? 9.5 : style.detailSizePt) * fontScale * 10) / 10,
+                fontSize:
+                  u.role === 'annotation'
+                    ? microAnnotationPt
+                    : u.role === 'substep' || u.role === 'output'
+                      ? microPrimaryPt
+                      : microSecondaryPt,
                 color: colors.text,
               },
             ],
             align: 'center',
           },
+          ...(u.detail
+            ? [
+                {
+                  runs: [
+                    {
+                      text: u.detail,
+                      fontSize: microSecondaryPt,
+                      color: colors.subtitle ?? colors.text,
+                    },
+                  ],
+                  align: 'center' as const,
+                },
+              ]
+            : []),
         ],
         fillColor: colors.fill,
         stroke: { color: colors.stroke, widthPt: MICRO_UNIT_STROKE_PT },
@@ -361,9 +412,7 @@ export function buildFigureRenderPlan(input: FigureRenderInput): FigureRenderPla
   }
 
   // ── pass 3: connectors between FINAL module rects (P0-03) ──
-  const rectById = new Map(
-    input.solve.placements.map((placement) => [placement.id, placement]),
-  )
+  const rectById = new Map(input.solve.placements.map((placement) => [placement.id, placement]))
   const bindings: ConnectorBindingSpec[] = []
   const seenConnectorSpecIds = new Set<string>()
   for (const route of input.routes) {
@@ -382,8 +431,14 @@ export function buildFigureRenderPlan(input: FigureRenderInput): FigureRenderPla
     const fromNode = nodeById.get(route.fromId)
     const toNode = nodeById.get(route.toId)
     const style = connectorStyleFor(route.presentation)
-    const startSide = validateAnchorSide(route.start.side, getComponentSpec(kindOf(fromNode ?? { type: 'process' })).anchors)
-    const endSide = validateAnchorSide(route.end.side, getComponentSpec(kindOf(toNode ?? { type: 'process' })).anchors)
+    const startSide = validateAnchorSide(
+      route.start.side,
+      getComponentSpec(kindOf(fromNode ?? { type: 'process' })).anchors,
+    )
+    const endSide = validateAnchorSide(
+      route.end.side,
+      getComponentSpec(kindOf(toNode ?? { type: 'process' })).anchors,
+    )
     if (startSide.remapped || endSide.remapped) {
       defects.push({
         severity: 'soft',
@@ -409,7 +464,11 @@ export function buildFigureRenderPlan(input: FigureRenderInput): FigureRenderPla
       h: 0,
       paragraphs: [],
       fillColor: 'none',
-      stroke: { color: connectorColor(input.theme), widthPt: style.widthPt, ...(style.dash ? { dash: style.dash } : {}) },
+      stroke: {
+        color: connectorColor(input.theme),
+        widthPt: style.widthPt,
+        ...(style.dash ? { dash: style.dash } : {}),
+      },
       insetsPx: { l: 0, t: 0, r: 0, b: 0 },
       semanticMetadata: connectorMetadata({
         ...identity,
@@ -422,10 +481,64 @@ export function buildFigureRenderPlan(input: FigureRenderInput): FigureRenderPla
     bindings.push({
       specId,
       semanticEdgeId: route.semanticEdgeId ?? route.key,
-      start: { targetSpecId: specIdByNodeId.get(route.fromId)!, idx: startSide.side === 'top' ? 0 : startSide.side === 'left' ? 1 : startSide.side === 'bottom' ? 2 : 3 },
-      end: { targetSpecId: specIdByNodeId.get(route.toId)!, idx: endSide.side === 'top' ? 0 : endSide.side === 'left' ? 1 : endSide.side === 'bottom' ? 2 : 3 },
+      start: {
+        targetSpecId: specIdByNodeId.get(route.fromId)!,
+        idx:
+          startSide.side === 'top'
+            ? 0
+            : startSide.side === 'left'
+              ? 1
+              : startSide.side === 'bottom'
+                ? 2
+                : 3,
+      },
+      end: {
+        targetSpecId: specIdByNodeId.get(route.toId)!,
+        idx:
+          endSide.side === 'top'
+            ? 0
+            : endSide.side === 'left'
+              ? 1
+              : endSide.side === 'bottom'
+                ? 2
+                : 3,
+      },
       ...(route.routeY !== undefined ? { routeYPx: route.routeY } : {}),
     })
+    // §24 inhibition semantics: a flat-ended inhibition is realised as a
+    // native short perpendicular bar at the TARGET end, bound to the
+    // connector via semanticEdgeId (editable, never rasterized).
+    if (route.presentation === 'inhibition') {
+      const anchor = anchorPointOf(to, endSide.side)
+      const horizontal = endSide.side === 'left' || endSide.side === 'right'
+      const barLen = INHIBITION_BAR_LEN_PX
+      const bar: NativeElementSpec = {
+        specId: `${specId}:bar`,
+        zTier: Z_TIERS.connector,
+        kind: 'line',
+        x: horizontal ? anchor.x - barLen / 2 : anchor.x,
+        y: horizontal ? anchor.y : anchor.y - barLen / 2,
+        w: horizontal ? barLen : 1,
+        h: horizontal ? 1 : barLen,
+        paragraphs: [],
+        fillColor: 'none',
+        stroke: { color: connectorColor(input.theme), widthPt: 2 },
+        insetsPx: { l: 0, t: 0, r: 0, b: 0 },
+        semanticMetadata: {
+          role: 'inhibition-bar',
+          themeFill: 'none',
+          themeStroke: 'connector',
+          themeText: 'none',
+          componentType: 'research-inhibition-bar',
+          researchMetadataVersion: 2,
+          semanticEdgeId: route.semanticEdgeId ?? route.key,
+          figureRunId: identity.figureRunId,
+          figureFamily: identity.figureFamily,
+          domain: identity.domain,
+        },
+      }
+      passes.push({ tier: Z_TIERS.connector, emit: () => elements.push(bar) })
+    }
   }
 
   // Deterministic z-order: tier ascending, plan order within a tier.
@@ -472,10 +585,7 @@ export function buildFigureRenderPlan(input: FigureRenderInput): FigureRenderPla
   }
 }
 
-function shapePresetFor(
-  unit: { role: string; shape?: string },
-  fallback: string,
-): string {
+function shapePresetFor(unit: { role: string; shape?: string }, fallback: string): string {
   const ROLE_SHAPE: Record<string, string> = {
     keyword: 'roundRect',
     substep: 'rect',

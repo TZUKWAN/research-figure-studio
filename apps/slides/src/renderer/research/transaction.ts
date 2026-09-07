@@ -61,7 +61,12 @@ export function figurePlanToTxnOps(
       op: 'addElement',
       target: slideTarget,
       kind: element.kind,
-      offset: { x: toEmu(element.x), y: toEmu(element.y), cx: toEmu(element.w), cy: toEmu(element.h) },
+      offset: {
+        x: toEmu(element.x),
+        y: toEmu(element.y),
+        cx: toEmu(element.w),
+        cy: toEmu(element.h),
+      },
       ...(element.paragraphs.length > 0 ? { paragraphs: element.paragraphs } : {}),
       ...(element.kind === 'line' || element.kind === 'lineArrow' || element.kind === 'lineBent'
         ? {
@@ -176,12 +181,7 @@ export function verifyFigureWrite(
   }
   const bySignature = new Map<string, MetaNode>()
   const signature = (meta: Record<string, unknown>): string =>
-    [
-      'componentType',
-      'semanticNodeId',
-      'visualUnitId',
-      'semanticEdgeId',
-    ]
+    ['componentType', 'semanticNodeId', 'visualUnitId', 'semanticEdgeId']
       .map((key) => `${meta[key] ?? ''}`)
       .join('|')
   const index = (nodes: unknown[], ox = 0, oy = 0) => {
@@ -202,7 +202,9 @@ export function verifyFigureWrite(
 
   for (const element of plan.elements) {
     if (isConnectorKind(element.kind)) continue
-    const node = bySignature.get(signature(element.semanticMetadata as unknown as Record<string, unknown>))
+    const node = bySignature.get(
+      signature(element.semanticMetadata as unknown as Record<string, unknown>),
+    )
     if (!node) {
       issues.push(`element ${element.specId} missing from the rebuilt slide`)
       continue

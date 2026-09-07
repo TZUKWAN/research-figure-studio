@@ -102,7 +102,9 @@ export function connectorStyleFor(presentation: string | undefined): {
   widthPt: number
   dash?: 'dash' | 'sysDash' | 'sysDot'
 } {
-  return CONNECTOR_PRESENTATION_STYLES[presentation ?? 'arrow'] ?? CONNECTOR_PRESENTATION_STYLES.arrow!
+  return (
+    CONNECTOR_PRESENTATION_STYLES[presentation ?? 'arrow'] ?? CONNECTOR_PRESENTATION_STYLES.arrow!
+  )
 }
 
 /**
@@ -113,7 +115,11 @@ export function connectorStyleFor(presentation: string | undefined): {
 export const MICRO_UNIT_STROKE_PT = 0.75
 
 /** px → roundRect corner-radius adjust value (1/1000 % of min(w,h)). */
-export function roundRectAdjust(radiusPx: number, w: number, h: number): Record<string, number> | undefined {
+export function roundRectAdjust(
+  radiusPx: number,
+  w: number,
+  h: number,
+): Record<string, number> | undefined {
   if (radiusPx <= 0 || w <= 0 || h <= 0) return undefined
   const adj = Math.min(50000, Math.round((radiusPx / Math.min(w, h)) * 100000))
   return adj > 0 ? { adj } : undefined

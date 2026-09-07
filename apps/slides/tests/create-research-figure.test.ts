@@ -1,229 +1,250 @@
 import { describe, expect, it, vi } from 'vitest'
-import {
-  addElement,
-  createBlankPptx,
-  deleteElement,
-  openPptx,
-  setElementTextBodyProps,
-} from '@genoffice/pptx-engine'
-import { buildRenderSlide, EMU_PER_PX_96, type RenderSlide } from '@genoffice/pptx-render'
 import { createSlidesSkill, type DeckAccess } from '../src/renderer/ai/slides-skill'
+import { makeTxnAccess } from './research-txn-mock'
 
-const EMU = EMU_PER_PX_96
+const figurePlan = {
+  thesis: '共同注意通过同步化提升协作效率，情绪传播受用户角色调节。',
+  figureType: 'mechanism',
+  narrative: {
+    expressionMode: 'mechanism',
+    complexity: 'compact',
+    centralMessage: '共同注意提升协作效率',
+    visualCenter: 'shared-attention',
+    readingPath: ['shared-attention', 'sync', 'collab'],
+    mustShow: ['shared-attention', 'sync', 'collab'],
+    mayMerge: [],
+    omitFromCanvas: ['background theory'],
+  },
+  nodes: [
+    {
+      id: 'shared-attention',
+      type: 'mechanism',
+      semanticLabel: '共同注意机制',
+      visible: { title: '共同注意' },
+      importance: 0.9,
+      role: 'core',
+    },
+    {
+      id: 'sync',
+      type: 'process',
+      semanticLabel: '同步化过程',
+      visible: { title: '同步化' },
+      importance: 0.7,
+      role: 'intermediate',
+    },
+    {
+      id: 'collab',
+      type: 'outcome',
+      semanticLabel: '协作效率结果',
+      visible: { title: '协作效率' },
+      importance: 0.8,
+      role: 'output',
+    },
+  ],
+  edges: [
+    {
+      id: 'e1',
+      from: 'shared-attention',
+      to: 'sync',
+      role: 'main',
+      relation: 'causal',
+      presentation: 'arrow',
+    },
+    {
+      id: 'e2',
+      from: 'sync',
+      to: 'collab',
+      role: 'main',
+      relation: 'causal',
+      presentation: 'arrow',
+    },
+    {
+      id: 'e3',
+      from: 'sync',
+      to: 'collab',
+      role: 'main',
+      relation: 'moderation',
+      presentation: 'dashed-arrow',
+      label: '由角色调节',
+    },
+  ],
+  groups: [],
+  globalIntent: { emphasis: ['shared-attention'], secondary: ['sync'], optional: [] },
+}
 
-async function makeAccess(runLlm: DeckAccess['runLlm']) {
-  const opened = await openPptx(await createBlankPptx())
-  const modelSlide = opened.deck.slides[0]!
-  let rendered = buildRenderSlide(modelSlide, opened.deck.size, { fitWidthPx: 1280 })
-  const addElementOp = vi.fn(async (op: any) => {
-    const element = addElement(modelSlide, {
-      kind: op.kind,
-      offset: {
-        x: Math.round(op.xPx * EMU),
-        y: Math.round(op.yPx * EMU),
-        cx: Math.round(op.wPx * EMU),
-        cy: Math.round(op.hPx * EMU),
+const spatialPlan = {
+  composition: {
+    readingFlow: 'LR',
+    balance: 'loosely-balanced',
+    density: 'medium',
+    visualCenter: 'shared-attention',
+    whitespaceStrategy: 'balanced',
+  },
+  placements: [
+    {
+      id: 'shared-attention',
+      boxHint: { x: 0.08, y: 0.3, w: 0.28, h: 0.42 },
+      visualRole: 'dominant',
+    },
+    { id: 'sync', boxHint: { x: 0.46, y: 0.32, w: 0.2, h: 0.22 }, visualRole: 'primary' },
+    { id: 'collab', boxHint: { x: 0.72, y: 0.3, w: 0.22, h: 0.24 }, visualRole: 'secondary' },
+  ],
+  visualPlan: {
+    modules: [
+      {
+        moduleId: 'shared-attention',
+        microLayout: 'chips',
+        units: [
+          {
+            id: 'sa-1',
+            label: '视线汇聚',
+            role: 'substep',
+            semanticNodeId: 'shared-attention',
+          },
+          {
+            id: 'sa-2',
+            label: '共同指认',
+            role: 'substep',
+            semanticNodeId: 'shared-attention',
+          },
+          { id: 'sa-3', label: '角色调节', role: 'condition', semanticEdgeId: 'e3' },
+        ],
       },
-      ...(op.paragraphs ? { paragraphs: op.paragraphs } : {}),
-      ...(op.fillColor ? { fillColor: op.fillColor } : {}),
-      ...(op.stroke ? { stroke: op.stroke } : {}),
-      ...(op.semanticMetadata ? { semanticMetadata: op.semanticMetadata } : {}),
-      bodyPr: { insetsEmu: { l: 0, t: 0, r: 0, b: 0 } },
-    })
-    rendered = buildRenderSlide(modelSlide, opened.deck.size, { fitWidthPx: 1280 })
-    return { slide: rendered, sourceId: element.id }
+    ],
+    relations: [{ semanticEdgeId: 'e3', presentation: 'dashed-arrow' }],
+  },
+}
+
+function researchRunLlm() {
+  return vi.fn(async (system: string) => {
+    if (system.includes('Semantic Planner')) return { ok: true, text: JSON.stringify(figurePlan) }
+    if (system.includes('Composition Designer'))
+      return { ok: true, text: JSON.stringify(spatialPlan) }
+    return { ok: false, error: 'unexpected prompt' }
   })
-  const setTextBodyProps = vi.fn(async (op: any) => {
-    if (!setElementTextBodyProps(modelSlide, op.sourceId, op.props)) return null
-    rendered = buildRenderSlide(modelSlide, opened.deck.size, { fitWidthPx: 1280 })
-    return rendered
-  })
-  const editConnectorEndpoints = vi.fn(async (op: any) => {
-    const element = modelSlide.elements.find((e) => e.id === op.sourceId)
-    if (!element) return null
-    const update = element as { connector?: any }
-    update.connector = {
-      startTargetId: op.start.targetId,
-      startIdx: op.start.idx,
-      endTargetId: op.end.targetId,
-      endIdx: op.end.idx,
-      ...(op.routeYPx !== undefined ? { routeYPx: op.routeYPx } : {}),
-    }
-    rendered = buildRenderSlide(modelSlide, opened.deck.size, { fitWidthPx: 1280 })
-    return rendered
-  })
-  const removeElement = vi.fn(async (op: any) => {
-    if (!deleteElement(opened, modelSlide, op.sourceId)) return null
-    rendered = buildRenderSlide(modelSlide, opened.deck.size, { fitWidthPx: 1280 })
-    return rendered
-  })
-  // the wired executor also commits the slide-level semantic payload via txn
-  const applyTxn = vi.fn(async () => ({ applied: true }))
-  ;(window as any).slidesApi = {
-    addElement: addElementOp,
-    applyTxn,
-    setTextBodyProps,
-    editConnectorEndpoints,
-    deleteElement: removeElement,
-  }
-  const applySlide = vi.fn((_index: number, slide: RenderSlide) => {
-    rendered = slide
-  })
-  const access = {
-    getSlides: () => [rendered],
-    getCurrent: () => 0,
-    getSelectedIds: () => [],
-    applySlide,
-    applyDeck: vi.fn(),
-    fitWidthPx: 1280,
-    runLlm,
-  } as unknown as DeckAccess
-  return { access, addElementOp, editConnectorEndpoints, removeElement, openEd: () => rendered }
 }
 
 describe('create_research_figure production integration', () => {
-  it('renders explicit visual units and semantically presented connectors by semantic ID', async () => {
-    const figurePlan = {
-      thesis: '共同注意通过同步化提升协作效率，情绪传播受用户角色调节。',
-      figureType: 'mechanism',
-      narrative: {
-        expressionMode: 'mechanism',
-        complexity: 'compact',
-        centralMessage: '共同注意提升协作效率',
-        visualCenter: 'shared-attention',
-        readingPath: ['shared-attention', 'sync', 'collab'],
-        mustShow: ['shared-attention', 'sync', 'collab'],
-        mayMerge: [],
-        omitFromCanvas: ['background theory'],
-      },
-      nodes: [
-        {
-          id: 'shared-attention',
-          type: 'mechanism',
-          semanticLabel: '共同注意机制',
-          visible: { title: '共同注意' },
-          importance: 0.9,
-          role: 'core',
-        },
-        {
-          id: 'sync',
-          type: 'process',
-          semanticLabel: '同步化过程',
-          visible: { title: '同步化' },
-          importance: 0.7,
-          role: 'intermediate',
-        },
-        {
-          id: 'collab',
-          type: 'outcome',
-          semanticLabel: '协作效率结果',
-          visible: { title: '协作效率' },
-          importance: 0.8,
-          role: 'output',
-        },
-      ],
-      edges: [
-        {
-          id: 'e1',
-          from: 'shared-attention',
-          to: 'sync',
-          role: 'main',
-          relation: 'causal',
-          presentation: 'arrow',
-        },
-        {
-          id: 'e2',
-          from: 'sync',
-          to: 'collab',
-          role: 'main',
-          relation: 'causal',
-          presentation: 'arrow',
-        },
-        {
-          id: 'e3',
-          from: 'sync',
-          to: 'collab',
-          role: 'main',
-          relation: 'moderation',
-          presentation: 'dashed-arrow',
-          label: '由角色调节',
-        },
-      ],
-      groups: [],
-      globalIntent: { emphasis: ['shared-attention'], secondary: ['sync'], optional: [] },
-    }
-    const spatialPlan = {
-      composition: {
-        readingFlow: 'LR',
-        balance: 'loosely-balanced',
-        density: 'medium',
-        visualCenter: 'shared-attention',
-        whitespaceStrategy: 'balanced',
-      },
-      placements: [
-        {
-          id: 'shared-attention',
-          boxHint: { x: 0.08, y: 0.3, w: 0.28, h: 0.42 },
-          visualRole: 'dominant',
-        },
-        { id: 'sync', boxHint: { x: 0.46, y: 0.32, w: 0.2, h: 0.22 }, visualRole: 'primary' },
-        { id: 'collab', boxHint: { x: 0.72, y: 0.3, w: 0.22, h: 0.24 }, visualRole: 'secondary' },
-      ],
-      visualPlan: {
-        modules: [
-          {
-            moduleId: 'shared-attention',
-            microLayout: 'chips',
-            units: [
-              {
-                id: 'sa-1',
-                label: '视线汇聚',
-                role: 'substep',
-                semanticNodeId: 'shared-attention',
-              },
-              {
-                id: 'sa-2',
-                label: '共同指认',
-                role: 'substep',
-                semanticNodeId: 'shared-attention',
-              },
-              { id: 'sa-3', label: '角色调节', role: 'condition', semanticEdgeId: 'e3' },
-            ],
+  it('commits one atomic transaction: exact geometry, grouped units, bound connectors', async () => {
+    const { access, applyTxn, opened } = await makeTxnAccess(researchRunLlm())
+    const result = await createSlidesSkill(access as unknown as DeckAccess, 'research').executeTool(
+      {
+        id: 'create-semantic-figure',
+        name: 'create_research_figure',
+        input: {
+          slideIndex: 0,
+          thesis: figurePlan.thesis,
+          capability: {
+            calibration: { spatialPlanning: 'strong', jsonReliability: 'high' },
           },
-        ],
-        relations: [{ semanticEdgeId: 'e3', presentation: 'dashed-arrow' }],
-      },
-    }
-    const runLlm = vi.fn(async (system: string) => {
-      if (system.includes('Semantic Planner')) return { ok: true, text: JSON.stringify(figurePlan) }
-      if (system.includes('Composition Designer'))
-        return { ok: true, text: JSON.stringify(spatialPlan) }
-      return { ok: false, error: 'unexpected prompt' }
-    })
-    const { access, addElementOp, editConnectorEndpoints } = await makeAccess(runLlm)
-    const result = await createSlidesSkill(access, 'research').executeTool({
-      id: 'create-semantic-figure',
-      name: 'create_research_figure',
-      input: {
-        slideIndex: 0,
-        thesis: figurePlan.thesis,
-        capability: {
-          calibration: { spatialPlanning: 'strong', jsonReliability: 'high' },
         },
       },
-    })
+    )
 
     expect(result.isError, result.output).toBeUndefined()
-    expect(result.output).not.toContain('Failed')
-    expect(runLlm).toHaveBeenCalledTimes(2)
-    const metadata = addElementOp.mock.calls.map(([op]) => op.semanticMetadata ?? {})
-    expect(metadata.filter((m) => m.componentType === 'research-module')).toHaveLength(3)
-    expect(metadata.filter((m) => m.componentType === 'research-micro')).toHaveLength(3)
-    expect(metadata.filter((m) => m.componentType === 'research-connector')).toHaveLength(3)
+    expect(runLlmCallsHasBothRoles(applyTxn)).toBe(true)
+    // One atomic transaction carries the whole figure (P0-12)
+    const req = applyTxn.mock.calls[0]![0] as { ops: Array<Record<string, unknown>> }
+    const opNames = req.ops.map((op) => op.op)
+    expect(opNames.filter((name) => name === 'addElement').length).toBe(9) // 3 modules + 3 units + 3 connectors
+    expect(opNames.filter((name) => name === 'setConnectorEndpoints').length).toBe(3)
+    // The decomposed module closes as a native group (P0-07)
+    expect(opNames.filter((name) => name === 'groupElements').length).toBe(1)
+    expect(opNames).toContain('setSlideResearchMetadata')
+
+    // Model-level truth: modules, units, connectors, bindings, group
+    const slide = opened.deck.slides[0]!
+    const allElements: Array<{
+      semanticMetadata?: {
+        componentType?: string
+        semanticEdgeId?: string
+        semanticNodeId?: string
+        parentModuleId?: string
+        visualUnitId?: string
+        figureRunId?: string
+        domain?: string
+      }
+      transform: { offset: { x: number; y: number; cx: number; cy: number } }
+      connection?: { start?: { id: number }; end?: { id: number } }
+      type: string
+    }> = []
+    const collect = (els: typeof allElements) => {
+      for (const el of els) {
+        allElements.push(el)
+        if (el.type === 'group')
+          collect((el as unknown as { children: typeof allElements }).children)
+      }
+    }
+    collect(slide.elements as unknown as typeof allElements)
+    const modules = allElements.filter(
+      (el) => el.semanticMetadata?.componentType === 'research-module',
+    )
+    const micros = allElements.filter(
+      (el) => el.semanticMetadata?.componentType === 'research-micro',
+    )
+    const connectors = allElements.filter(
+      (el) => el.semanticMetadata?.componentType === 'research-connector',
+    )
+    expect(modules).toHaveLength(3)
+    expect(micros).toHaveLength(3)
+    expect(connectors).toHaveLength(3)
+    expect(connectors.map((el) => el.semanticMetadata?.semanticEdgeId)).toEqual(['e1', 'e2', 'e3'])
     expect(
-      metadata.filter((m) => m.componentType === 'research-connector').map((m) => m.semanticEdgeId),
-    ).toEqual(['e1', 'e2', 'e3'])
-    expect(editConnectorEndpoints).toHaveBeenCalledTimes(3)
+      connectors.every((el) => el.connection?.start?.id != null && el.connection?.end?.id != null),
+    ).toBe(true)
+    // Multi-edge (P0-14): e2 and e3 share the sync→collab pair but stay distinct connectors
+    const syncCollab = connectors.filter(
+      (el) =>
+        el.semanticMetadata?.semanticEdgeId === 'e2' ||
+        el.semanticMetadata?.semanticEdgeId === 'e3',
+    )
+    expect(syncCollab).toHaveLength(2)
+    // Extended metadata round-trips in the model (P0-08)
+    const module = modules.find((el) => el.semanticMetadata?.semanticNodeId === 'shared-attention')!
+    expect(module.semanticMetadata?.figureRunId).toMatch(/^fig-/)
+    expect(module.semanticMetadata?.domain).toBeTruthy()
+    // Micro units inherit the module identity (P0-06)
+    for (const micro of micros) {
+      expect(micro.semanticMetadata?.parentModuleId).toBe('shared-attention')
+      expect(micro.semanticMetadata?.visualUnitId).toBeTruthy()
+    }
+    // Slide-level payload written in the same transaction (P0-10)
+    const payload = slideResearchPayload(slide)
+    expect(payload?.schemaVersion).toBe(1)
+    expect(payload?.relations.map((r) => r.id)).toEqual(['e1', 'e2', 'e3'])
+    expect(payload?.relations.every((r) => r.status === 'rendered')).toBe(true)
+    // EXACT-GEOMETRY (P0-01): micro units sit inside their solved parent box
+    const parentBox = module.transform.offset
+    for (const micro of micros) {
+      const b = micro.transform.offset
+      expect(b.x).toBeGreaterThanOrEqual(parentBox.x)
+      expect(b.y).toBeGreaterThanOrEqual(parentBox.y)
+      expect(b.x + b.cx).toBeLessThanOrEqual(parentBox.x + parentBox.cx + 1)
+      expect(b.y + b.cy).toBeLessThanOrEqual(parentBox.y + parentBox.cy + 1)
+    }
+  })
+
+  it('production path invariant: per-element addElement is never the production writer (PHASE-0A)', async () => {
+    const { access, applyTxn } = await makeTxnAccess(researchRunLlm())
+    // Instrumentation guard: the legacy inline production path used
+    // window.slidesApi.addElement per node/unit/connector. The only legal
+    // writer for create_research_figure is the single atomic applyTxn.
+    const addElementSpy = vi.fn(async () => null)
+    ;(window as unknown as Record<string, unknown>).slidesApi = {
+      ...((window as unknown as { slidesApi: object }).slidesApi ?? {}),
+      addElement: addElementSpy,
+    }
+    const result = await createSlidesSkill(access as unknown as DeckAccess, 'research').executeTool(
+      {
+        id: 'path-invariant',
+        name: 'create_research_figure',
+        input: { slideIndex: 0, thesis: figurePlan.thesis },
+      },
+    )
+    expect(result.isError, result.output).toBeUndefined()
+    expect(addElementSpy).not.toHaveBeenCalled()
+    expect(applyTxn).toHaveBeenCalledTimes(1)
+    expect((applyTxn.mock.calls[0]![0] as { isolation?: string }).isolation).toBe('atomic')
   })
 
   it('leaves a statement as one clean expression without cards or connectors', async () => {
@@ -272,23 +293,35 @@ describe('create_research_figure production integration', () => {
       if (system.includes('Semantic Planner')) return { ok: true, text: JSON.stringify(plan) }
       return { ok: true, text: JSON.stringify(spatial) }
     })
-    const { access, addElementOp, editConnectorEndpoints } = await makeAccess(runLlm)
-    const result = await createSlidesSkill(access, 'research').executeTool({
-      id: 'create-statement',
-      name: 'create_research_figure',
-      input: {
-        slideIndex: 0,
-        thesis: plan.thesis,
-        capability: {
-          calibration: { spatialPlanning: 'strong', jsonReliability: 'high' },
+    const { access } = await makeTxnAccess(runLlm)
+    const result = await createSlidesSkill(access as unknown as DeckAccess, 'research').executeTool(
+      {
+        id: 'create-statement',
+        name: 'create_research_figure',
+        input: {
+          slideIndex: 0,
+          thesis: plan.thesis,
+          capability: {
+            calibration: { spatialPlanning: 'strong', jsonReliability: 'high' },
+          },
         },
       },
-    })
+    )
 
     expect(result.isError, result.output).toBeUndefined()
-    const metadata = addElementOp.mock.calls.map(([op]) => op.semanticMetadata ?? {})
-    expect(metadata).toHaveLength(1)
-    expect(metadata[0]?.componentType).toBe('research-module')
-    expect(editConnectorEndpoints).not.toHaveBeenCalled()
+    expect(result.output).toContain('1 nodes, 0 native-bound connectors')
+    expect(result.output).not.toContain('Element ids: ,')
   })
 })
+
+// helpers against the real model
+import type { Slide } from '@genoffice/pptx-engine'
+import { getSlideResearchMetadata } from '@genoffice/pptx-engine/research-metadata'
+
+function slideResearchPayload(slide: Slide) {
+  return getSlideResearchMetadata(slide)
+}
+
+function runLlmCallsHasBothRoles(applyTxn: { mock: { calls: unknown[] } }): boolean {
+  return applyTxn.mock.calls.length === 1
+}

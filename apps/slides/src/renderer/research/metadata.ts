@@ -17,7 +17,11 @@ import { RESEARCH_METADATA_VERSION } from '@genoffice/pptx-engine/identity'
 import { componentThemeTokens } from '@genoffice/theme-engine'
 import type { RoutedEdge } from '@genoffice/research-harness'
 
-function themeTokensFor(kind: string): { themeFill: string; themeStroke: string; themeText: string } {
+function themeTokensFor(kind: string): {
+  themeFill: string
+  themeStroke: string
+  themeText: string
+} {
   const tokens = componentThemeTokens(kind)
   return { themeFill: tokens.fill, themeStroke: tokens.stroke, themeText: tokens.text }
 }
@@ -28,10 +32,7 @@ export interface FigureIdentity {
   domain: string
 }
 
-export function figureIdentity(parts: {
-  figureFamily?: string
-  domain?: string
-}): FigureIdentity {
+export function figureIdentity(parts: { figureFamily?: string; domain?: string }): FigureIdentity {
   return {
     figureRunId: `fig-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
     figureFamily: parts.figureFamily || 'unspecified',
@@ -48,7 +49,9 @@ interface BaseMetadataArgs extends FigureIdentity {
 }
 
 /** A parent module shape (macro node / container). */
-export function moduleMetadata(args: BaseMetadataArgs & { primitiveKind: string }): SemanticMetadata {
+export function moduleMetadata(
+  args: BaseMetadataArgs & { primitiveKind: string },
+): SemanticMetadata {
   return {
     role: args.primitiveKind,
     ...themeTokensFor(args.primitiveKind),
@@ -151,7 +154,10 @@ export function relationRecords(
         relation: edge.relation,
         presentation,
         status: 'suppressed' as const,
-        reason: route?.status === 'unroutable' ? (route.diagnostic ?? 'unroutable') : 'connector not bound',
+        reason:
+          route?.status === 'unroutable'
+            ? (route.diagnostic ?? 'unroutable')
+            : 'connector not bound',
       }
     }
     return {
