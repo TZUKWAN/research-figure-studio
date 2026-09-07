@@ -643,12 +643,148 @@ export async function orchestrateFigure(
   let lastPublicationHard = 0
   let lastContractViolations = 0
   let lastMissingEvidence = 0
+  // P0-5: true only when a repair budget actually ran out while not yet PASS
+  let ladderExhausted = false
   const repairs: AppliedRepair[] = []
   let routes: RoutedEdge[] = []
   let unrenderedRelations: RoutedEdge[] = []
-  // hard bound: the ladder always terminates (fuzz invariant)
-  const maxRounds = maxRecompose + maxSemanticReplans + 4
+  // hard bound: the ladder always terminates (fuzz invariant). Sized so the
+  // full ladder can reach its honest exhaustion marker: per recompose round
+  // up to 2 L3 candidate steps, plus route-fix replays and the final round.
+  const maxRounds = 2 * (maxRecompose + maxSemanticReplans) + 6
 
+  // ── P0-4 (production closure): ONE candidate-state evaluation ──
+  // Metric critic + scientific audit + contract audit + publication audit are
+  // computed TOGETHER from the CURRENT candidate/routes. Every state change —
+  // initial solve, ROUTE_FIX, candidate swap, composition redesign, semantic
+  // replan — re-runs this whole function; stale hard-issue counters can never
+  // reach the delivery gate.
+  interface CandidateEvaluation {
+    critic: CriticVerdict
+    scientificIssues: ScientificIssue[]
+    scientificHard: number
+    contractViolations: number
+    missingEvidence: number
+    publicationHard: number
+  }
+  const evaluateCandidateState = (args: {
+    best: CompositionCandidate
+    routes: RoutedEdge[]
+    candidateId: string
+  }): CandidateEvaluation => {
+    const { best: candidate, routes: candidateRoutes, candidateId: cid } = args
+    emit('critic.started', true, undefined, { candidateId: cid })
+    const metricCritic = criticVerdict({
+      solve: candidate.solve,
+      edges: state.edges,
+      canvasW: input.canvasW,
+      canvasH: input.canvasH,
+      importance: state.importance,
+      groupIds: state.groupIds,
+      intent: { plan: state.plan, spatial: candidate.plan },
+      routed: candidateRoutes,
+      passThreshold: qualityThresholdFor(input.contract),
+      family: (family ?? familyFallback ?? undefined) as
+        import('../contract/figure-contract.js').FigureFamily | undefined,
+      typography: buildTypographySignals(state),
+      ...(input.contract
+        ? {
+            finalWidthMm:
+              input.contract.output.finalWidthMm ??
+              OUTPUT_CONTEXT_DEFAULT_WIDTH_MM[input.contract.output.context],
+          }
+        : {}),
+    })
+    // Scientific audit (17.3): evidence coverage, connector realization, causal
+    // direction, dominance — against the DECLARED reading flow (all six), the
+    // solved spatial plan and family; domain/family validators append checks.
+    const declaredFlow: ReadingFlow = resolveReadingFlow(candidate.plan, state.plan)
+    const issues: ScientificIssue[] = [
+      ...auditScientific({
+        plan: state.plan,
+        placements: candidate.solve.placements,
+        routes: candidateRoutes,
+        importance: state.importance,
+        spatial: candidate.plan,
+        ...((family ?? familyFallback) ? { family: (family ?? familyFallback)! } : {}),
+        domain,
+        direction: declaredFlow,
+      }),
+      ...validateDomain(state.plan, domain),
+      ...validateFamily(state.plan, (family ?? familyFallback ?? undefined) as string | undefined),
+    ]
+    const hardIssues = issues.filter((issue) => issue.severity === 'hard')
+    let verdict = metricCritic
+    if (hardIssues.length > 0 && verdict.verdict === 'PASS') {
+      const needsRoute = hardIssues.some((issue) => issue.repairClass === 'ROUTE_FIX')
+      verdict = {
+        ...verdict,
+        verdict: needsRoute ? 'ROUTE_FIX' : 'RECOMPOSE',
+        reason: hardIssues.map((issue) => issue.message).join('; '),
+        gateIssues: [...verdict.gateIssues, ...issues.map((issue) => issue.message)],
+      }
+    } else if (issues.length > 0) {
+      verdict = {
+        ...verdict,
+        gateIssues: [...verdict.gateIssues, ...issues.map((issue) => issue.message)],
+      }
+    }
+    // P1: forbidden claims / visible-text violations block delivery outright.
+    // P0.5: full contract audit over the final render intent feeds the same
+    // gate; EVIDENCE_MISSING escalates to semantic replan like forbidden hits.
+    const contractAudit = auditContract(
+      state.plan,
+      candidate.plan.visualPlan,
+      candidate.solve.placements,
+    )
+    const contractViolations = contractAudit.violations + state.forbiddenHits.length
+    if (contractViolations > 0 || contractAudit.missingEvidence > 0) {
+      const message = [
+        ...state.forbiddenHits.map((claim) => `forbidden claim: ${claim}`),
+        ...contractAudit.messages,
+      ].join('; ')
+      if (verdict.verdict === 'PASS' || verdict.verdict === 'LOCAL_LAYOUT_FIX') {
+        verdict = {
+          ...verdict,
+          verdict: 'RECOMPOSE',
+          reason: message,
+          gateIssues: [...verdict.gateIssues, ...message.split('; ')],
+        }
+      } else {
+        verdict = { ...verdict, gateIssues: [...verdict.gateIssues, ...message.split('; ')] }
+      }
+    }
+    // P3: publication QA at final physical size.
+    let publicationHard = 0
+    if (input.contract) {
+      const pubIssues = publicationAudit({
+        contract: input.contract,
+        canvasW: input.canvasW,
+        canvasH: input.canvasH,
+        minFontPt: typography!.minEffectiveTextPt,
+      })
+      const hardPub = pubIssues.filter((issue) => issue.severity === 'hard')
+      publicationHard = hardPub.length
+      if (hardPub.length > 0) {
+        repairs.push('TYPOGRAPHY_FIX')
+        const message = hardPub.map((issue) => issue.detail).join('; ')
+        verdict = {
+          ...verdict,
+          verdict: 'RECOMPOSE',
+          reason: message,
+          gateIssues: [...verdict.gateIssues, message],
+        }
+      }
+    }
+    return {
+      critic: verdict,
+      scientificIssues: issues,
+      scientificHard: hardIssues.length,
+      contractViolations,
+      missingEvidence: contractAudit.missingEvidence,
+      publicationHard,
+    }
+  }
   const failResult = (error: string): OrchestrationResult => {
     return {
       ok: false,
@@ -898,119 +1034,13 @@ export async function orchestrateFigure(
         { w: input.canvasW, h: input.canvasH },
         state.direction,
       )
-      emit('critic.started', true, undefined, { candidateId })
-      critic = criticVerdict({
-        solve: best.solve,
-        edges: state.edges,
-        canvasW: input.canvasW,
-        canvasH: input.canvasH,
-        importance: state.importance,
-        groupIds: state.groupIds,
-        intent: { plan: state.plan, spatial: best.plan },
-        routed: routes,
-        passThreshold: qualityThresholdFor(input.contract),
-        family: (family ?? familyFallback ?? undefined) as
-          import('../contract/figure-contract.js').FigureFamily | undefined,
-        typography: buildTypographySignals(state),
-        ...(input.contract
-          ? {
-              finalWidthMm:
-                input.contract.output.finalWidthMm ??
-                OUTPUT_CONTEXT_DEFAULT_WIDTH_MM[input.contract.output.context],
-            }
-          : {}),
-      })
-      // Scientific audit (17.3): evidence coverage, connector realization,
-      // causal direction, dominance. Hard scientific failures escalate a PASS —
-      // the figure may look clean while silently dropping required science.
-      // QA-P0-05: audit against the DECLARED reading flow (all six), the solved
-      // spatial plan and family; QA-P1-06/07 validators append structured
-      // domain/family checks.
-      const declaredFlow: ReadingFlow = resolveReadingFlow(best.plan, state.plan)
-      scientificIssues = [
-        ...auditScientific({
-          plan: state.plan,
-          placements: best.solve.placements,
-          routes,
-          importance: state.importance,
-          spatial: best.plan,
-          ...((family ?? familyFallback) ? { family: (family ?? familyFallback)! } : {}),
-          domain,
-          direction: declaredFlow,
-        }),
-        ...validateDomain(state.plan, domain),
-        ...validateFamily(
-          state.plan,
-          (family ?? familyFallback ?? undefined) as string | undefined,
-        ),
-      ]
-      const hardScientific = scientificIssues.filter((issue) => issue.severity === 'hard')
-      lastScientificHard = hardScientific.length
-      if (hardScientific.length > 0 && critic.verdict === 'PASS') {
-        const needsRoute = hardScientific.some((issue) => issue.repairClass === 'ROUTE_FIX')
-        critic = {
-          ...critic,
-          verdict: needsRoute ? 'ROUTE_FIX' : 'RECOMPOSE',
-          reason: hardScientific.map((issue) => issue.message).join('; '),
-          gateIssues: [...critic.gateIssues, ...scientificIssues.map((issue) => issue.message)],
-        }
-      } else if (scientificIssues.length > 0) {
-        critic = {
-          ...critic,
-          gateIssues: [...critic.gateIssues, ...scientificIssues.map((issue) => issue.message)],
-        }
-      }
-      // P1: forbidden claims / visible-text violations block delivery outright.
-      // Recomputed for THIS attempt's plan on every replan (ORCH-P0-03).
-      // P0.5: full contract audit over the final render intent feeds the same
-      // gate; EVIDENCE_MISSING escalates to semantic replan like forbidden hits.
-      const contractAuditResult = auditContract(
-        state.plan,
-        best.plan.visualPlan,
-        best.solve.placements,
-      )
-      lastContractViolations = contractAuditResult.violations
-      lastMissingEvidence = contractAuditResult.missingEvidence
-      const contractViolations = contractAuditResult.violations + state.forbiddenHits.length
-      if (contractViolations > 0 || contractAuditResult.missingEvidence > 0) {
-        const message = [
-          ...state.forbiddenHits.map((claim) => `forbidden claim: ${claim}`),
-          ...contractAuditResult.messages,
-        ].join('; ')
-        if (critic.verdict === 'PASS' || critic.verdict === 'LOCAL_LAYOUT_FIX') {
-          critic = {
-            ...critic,
-            verdict: 'RECOMPOSE',
-            reason: message,
-            gateIssues: [...critic.gateIssues, ...message.split('; ')],
-          }
-        } else {
-          critic = { ...critic, gateIssues: [...critic.gateIssues, ...message.split('; ')] }
-        }
-      }
-      // P3: publication QA at final physical size (fonts scale forward, so this
-      // only fires when the plan itself forced text below the contract floor).
-      if (input.contract) {
-        const pubIssues = publicationAudit({
-          contract: input.contract,
-          canvasW: input.canvasW,
-          canvasH: input.canvasH,
-          // P0.5 SSOT: the audit consumes the effective pt the renderer draws
-          minFontPt: typography!.minEffectiveTextPt,
-        })
-        const pubHard = pubIssues.filter((issue) => issue.severity === 'hard')
-        lastPublicationHard = pubHard.length
-        if (pubHard.length > 0) {
-          repairs.push('TYPOGRAPHY_FIX')
-          const message = pubHard.map((issue) => issue.detail).join('; ')
-          critic = {
-            ...critic,
-            verdict: 'RECOMPOSE',
-            reason: message,
-            gateIssues: [...critic.gateIssues, message],
-          }
-        }
-      }
+      const evaluation = evaluateCandidateState({ best, routes, candidateId })
+      critic = evaluation.critic
+      scientificIssues = evaluation.scientificIssues
+      lastScientificHard = evaluation.scientificHard
+      lastPublicationHard = evaluation.publicationHard
+      lastContractViolations = evaluation.contractViolations
+      lastMissingEvidence = evaluation.missingEvidence
       emit('critic.completed', true, critic.verdict, { candidateId })
 
       if (critic.verdict === 'ROUTE_FIX' && budget.routeFixes < MAX_ROUTE_FIXES_PER_CANDIDATE) {
@@ -1026,27 +1056,16 @@ export async function orchestrateFigure(
           state.direction,
           extraLanes,
         )
-        critic = criticVerdict({
-          solve: best.solve,
-          edges: state.edges,
-          canvasW: input.canvasW,
-          canvasH: input.canvasH,
-          importance: state.importance,
-          groupIds: state.groupIds,
-          intent: { plan: state.plan, spatial: best.plan },
-          routed: routes,
-          passThreshold: qualityThresholdFor(input.contract),
-          family: (family ?? familyFallback ?? undefined) as
-            import('../contract/figure-contract.js').FigureFamily | undefined,
-          typography: buildTypographySignals(state),
-          ...(input.contract
-            ? {
-                finalWidthMm:
-                  input.contract.output.finalWidthMm ??
-                  OUTPUT_CONTEXT_DEFAULT_WIDTH_MM[input.contract.output.context],
-              }
-            : {}),
-        })
+        // P0-4/P0-5: the repair CHANGED candidate state — the FULL QA suite
+        // (metric + scientific + contract + publication) re-runs; a stale
+        // hard-issue counter must never reach the delivery gate.
+        const afterRouteFix = evaluateCandidateState({ best, routes, candidateId })
+        critic = afterRouteFix.critic
+        scientificIssues = afterRouteFix.scientificIssues
+        lastScientificHard = afterRouteFix.scientificHard
+        lastPublicationHard = afterRouteFix.publicationHard
+        lastContractViolations = afterRouteFix.contractViolations
+        lastMissingEvidence = afterRouteFix.missingEvidence
         emit('route.repaired', true, critic.verdict, { candidateId })
         emit('critic.completed', true, `${critic.verdict} (after L2)`, { candidateId })
       }
@@ -1063,12 +1082,27 @@ export async function orchestrateFigure(
         emit('layout.repaired', true, `candidate rank ${candidateIdx + 1}`)
         continue
       }
-      // L3 budget exhausted: accept the best-ranked candidate we have and ship.
+      // P0-5: L3 budget exhaustion means LOCAL repair failed — it escalates to
+      // L4 COMPOSITION_REDESIGN while recompose budget remains, and only an
+      // exhausted LADDER breaks (to an honest delivery failure, never accept).
       if (
         (critic.verdict === 'LOCAL_LAYOUT_FIX' || critic.verdict === 'ROUTE_FIX') &&
         candidateIdx >= 2
       ) {
+        if (composeAttempt < maxRecompose) {
+          repairs.push('L4 COMPOSITION_REDESIGN')
+          composeAttempt++
+          emit('recompose.started', true, `attempt ${composeAttempt} (L4 escalation)`)
+          critique = critic.decisions?.length
+            ? critic.decisions.map((d) => `${d.action}: ${d.message}`)
+            : critic.gateIssues.length
+              ? critic.gateIssues
+              : [`overall ${critic.scores.overall}/10`]
+          candidates = []
+          continue
+        }
         repairs.push('L3 LOCAL_GEOMETRY_FIX (budget exhausted)')
+        ladderExhausted = true
         break
       }
 
@@ -1143,6 +1177,7 @@ export async function orchestrateFigure(
           }
         } else if (semantic) {
           repairs.push('L5 RECOMPOSE (semantic replan budget exhausted)')
+          if (composeAttempt >= maxRecompose) ladderExhausted = true
         } else {
           repairs.push('L5 RECOMPOSE (composition redesign)')
         }
@@ -1193,7 +1228,8 @@ export async function orchestrateFigure(
     publicationHardIssues: lastPublicationHard,
     contentContractViolations: lastContractViolations + state.forbiddenHits.length,
     requiredEvidenceMissing: lastMissingEvidence,
-    repairBudgetExhausted: true,
+    // truthfully computed from the ladder: a PASS verdict never sets this
+    repairBudgetExhausted: ladderExhausted || critic.verdict !== 'PASS',
   })
   if (!delivery.pass) {
     const error = `delivery gate failed: ${delivery.detail} — ${critic.reason ?? critic.gateIssues.join('; ') ?? 'quality below threshold'}`

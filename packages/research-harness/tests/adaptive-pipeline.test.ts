@@ -489,16 +489,15 @@ describe('creation orchestrator', () => {
       (event) => events.push(event.stage),
     )
     expect(result.critic?.verdict).toBe('LOCAL_LAYOUT_FIX')
-    // P0.5 delivery gate: budget exhaustion is NEVER acceptance. The ladder
-    // walked all candidates (invariant kept), but the figure must NOT ship
-    // with a non-PASS verdict — ok is now false with explicit gate reasons.
+    // P0.5 delivery gate + P0-5 ladder: budget exhaustion is NEVER acceptance.
+    // L3 exhaustion ESCALATES to L4 COMPOSITION_REDESIGN while recompose
+    // budget remains; only the exhausted ladder breaks to an honest failure.
     expect(result.ok).toBe(false)
     expect(result.repairs).toContain('L3 LOCAL_GEOMETRY_FIX')
+    expect(result.repairs).toContain('L4 COMPOSITION_REDESIGN')
     expect(result.repairs).toContain('L3 LOCAL_GEOMETRY_FIX (budget exhausted)')
-    expect(result.repairs).not.toContain('L5 RECOMPOSE')
     expect(result.delivery?.reasons).toContain('REPAIR_BUDGET_EXHAUSTED')
     expect(result.delivery?.reasons).toContain('GEOMETRY_HARD_FAIL')
-    expect(events.filter((stage) => stage === 'layout.repaired')).toHaveLength(2)
   })
 
   it('recomposes on a structural intent failure, then settles on a clean prior', async () => {

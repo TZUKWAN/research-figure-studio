@@ -302,6 +302,15 @@ describe('rendered baseline (deterministic pre-render fingerprints)', () => {
       ? JSON.parse(readFileSync(BASELINE_PATH, 'utf8'))
       : {}
 
+    if (process.env.BASELINE_DEBUG) {
+      for (const fixture of FIXTURES) {
+        const current = await fingerprint(fixture.id, fixture.build)
+        process.stdout.write(
+          `${fixture.id}: verdict=${current.verdict} crossings=${current.crossings}
+`,
+        )
+      }
+    }
     if (update) {
       for (const fixture of FIXTURES) {
         baseline[fixture.id] = await fingerprint(fixture.id, fixture.build)
