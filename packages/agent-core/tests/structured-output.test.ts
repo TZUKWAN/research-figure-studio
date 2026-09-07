@@ -131,4 +131,69 @@ describe('requestStructured', () => {
     expect(called).toBe(0)
     expect(result.ok).toBe(false)
   })
+
+  // ── P0 (production closure): TRUNCATED_JSON is never a success ──
+  it('retries a truncated payload and accepts the complete resend (attempt=2)', async () => {
+    const truncated =
+      '{"thesis":"A causes B","nodes":[{"id":"a"},{"id":"b" edges":[{"id":"e1","from":"a'
+    const requests: string[] = []
+    const result = await requestStructured(
+      async (options) => {
+        requests.push(options.user)
+        return { ok: true, text: requests.length === 1 ? truncated : '{"thesis":"A causes B"}' }
+      },
+      {
+        schemaId: 'test',
+        system: 's',
+        user: 'produce the plan',
+        validate: (v) => (typeof v === 'object' && v !== null ? v : null),
+      },
+      { maxRepairs: 1 },
+    )
+    expect(result.ok).toBe(true)
+    expect(result.value).toEqual({ thesis: 'A causes B' })
+    expect(result.attempts).toBe(2)
+    expect(requests[1]).toContain('TRUNCATED_JSON')
+  })
+
+  it('never accepts a truncated payload even when it parses after repair', async () => {
+    let calls = 0
+    const result = await requestStructured(
+      async () => {
+        calls++
+        // every attempt is truncated; bracket completion still yields a value
+        return { ok: true, text: '{"thesis":"cut","edges":[{"id":"e1"' }
+      },
+      {
+        schemaId: 'test',
+        system: 's',
+        user: 'u',
+        validate: (v) => (typeof v === 'object' && v !== null ? v : null),
+      },
+      { maxRepairs: 2 },
+    )
+    expect(result.ok).toBe(false)
+    expect(calls).toBe(3) // initial + 2 repairs, then fail
+    expect(result.diagnostics.some((d) => d.code === 'TRUNCATED_JSON')).toBe(true)
+  })
+
+  it('a truncated payload with no repair budget fails with TRUNCATED_JSON', async () => {
+    let calls = 0
+    const result = await requestStructured(
+      async () => {
+        calls++
+        return { ok: true, text: '{"evidence":[{"id":"ev1","claim":"unfinis' }
+      },
+      {
+        schemaId: 'test',
+        system: 's',
+        user: 'u',
+        validate: (v) => (typeof v === 'object' && v !== null ? v : null),
+      },
+      { maxRepairs: 0 },
+    )
+    expect(result.ok).toBe(false)
+    expect(calls).toBe(1)
+    expect(result.diagnostics.at(-1)?.code).toBe('TRUNCATED_JSON')
+  })
 })

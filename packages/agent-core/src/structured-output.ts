@@ -223,6 +223,17 @@ export async function requestStructured<T>(
       continue
     }
     const { value, diagnostic } = extractJsonObject(text)
+    // P0 (production closure): a syntactically repairable truncated payload is
+    // NOT a complete semantic plan — provenance/evidence/edges may have been
+    // cut off. Truncation retries within the repair budget and NEVER returns
+    // ok=true; with no budget left it fails with the typed diagnostic.
+    if (diagnostic?.code === 'TRUNCATED_JSON') {
+      diagnostics.push(diagnostic)
+      if (attempt >= maxRepairs) break
+      feedback =
+        'Your previous reply was cut off mid-object (TRUNCATED_JSON). Resend the COMPLETE JSON object — every field, edge, ref and closing brace. Output ONLY the JSON object.'
+      continue
+    }
     if (value === undefined) {
       diagnostics.push(diagnostic ?? { code: 'NO_JSON_OBJECT', message: 'no JSON object found' })
       if (attempt >= maxRepairs) break

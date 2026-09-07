@@ -141,7 +141,47 @@ function strings(value: unknown): string[] {
   return Array.isArray(value) ? value.map(text).filter(Boolean) : []
 }
 
-function parseNarrative(raw: unknown, ids: Set<string>, thesis: string): NarrativePlan | undefined {
+/**
+ * P0 (production closure): reference-typed fields must never be silently
+ * dropped. A dangling id is a SCHEMA ERROR with the exact field and id, fed
+ * to the bounded repair loop — format normalization is repair, but dropping
+ * a mustShow/readingPath/timeOrder reference silently destroys research
+ * semantics.
+ */
+function requireNodeRefs(
+  field: string,
+  ids: string[],
+  known: Set<string>,
+  errors: string[],
+): string[] {
+  const kept: string[] = []
+  for (const id of ids) {
+    if (known.has(id)) kept.push(id)
+    else errors.push(`${field} references missing node "${id}"`)
+  }
+  return kept
+}
+
+function requireGroupRefs(
+  field: string,
+  ids: string[],
+  known: Set<string>,
+  errors: string[],
+): string[] {
+  const kept: string[] = []
+  for (const id of ids) {
+    if (known.has(id)) kept.push(id)
+    else errors.push(`${field} references missing group "${id}"`)
+  }
+  return kept
+}
+
+function parseNarrative(
+  raw: unknown,
+  ids: Set<string>,
+  thesis: string,
+  errors: string[],
+): NarrativePlan | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined
   const narrative = raw as Record<string, unknown>
   const expressionMode = text(narrative.expressionMode)
@@ -150,22 +190,39 @@ function parseNarrative(raw: unknown, ids: Set<string>, thesis: string): Narrati
   const validComplexity = NARRATIVE_COMPLEXITY_SET.has(complexity) ? complexity : 'compact'
   const centralMessage = text(narrative.centralMessage) || thesis
   const visualCenter = text(narrative.visualCenter)
+  if (visualCenter && !ids.has(visualCenter)) {
+    errors.push(`narrative.visualCenter references missing node "${visualCenter}"`)
+  }
+  const readingPath = requireNodeRefs(
+    'narrative.readingPath',
+    strings(narrative.readingPath),
+    ids,
+    errors,
+  )
+  const mustShow = requireNodeRefs('narrative.mustShow', strings(narrative.mustShow), ids, errors)
+  const mayMerge: string[][] = []
+  if (Array.isArray(narrative.mayMerge)) {
+    for (const [index, group] of (narrative.mayMerge as unknown[]).entries()) {
+      const members = requireNodeRefs(`narrative.mayMerge[${index}]`, strings(group), ids, errors)
+      if (members.length > 1) mayMerge.push(members)
+    }
+  }
+  const evidenceMustShow = requireNodeRefs(
+    'narrative.evidenceMustShow',
+    strings(narrative.evidenceMustShow),
+    ids,
+    errors,
+  )
   return {
     expressionMode: expressionMode as ExpressionMode,
     complexity: validComplexity as NarrativeComplexity,
     centralMessage,
     ...(visualCenter && ids.has(visualCenter) ? { visualCenter } : {}),
-    ...(strings(narrative.readingPath).length > 0
-      ? { readingPath: strings(narrative.readingPath).filter((id) => ids.has(id)) }
-      : {}),
-    mustShow: strings(narrative.mustShow).filter((id) => ids.has(id)),
-    mayMerge: Array.isArray(narrative.mayMerge)
-      ? (narrative.mayMerge as unknown[])
-          .map((group) => strings(group).filter((id) => ids.has(id)))
-          .filter((group) => group.length > 1)
-      : [],
+    ...(readingPath.length > 0 ? { readingPath } : {}),
+    mustShow,
+    mayMerge,
     omitFromCanvas: strings(narrative.omitFromCanvas),
-    evidenceMustShow: strings(narrative.evidenceMustShow).filter((id) => ids.has(id)),
+    ...(evidenceMustShow.length > 0 ? { evidenceMustShow } : {}),
     offCanvasReasoning: strings(narrative.offCanvasReasoning),
   }
 }
@@ -294,11 +351,8 @@ export function parseFigurePlanV2WithDiagnostics(raw: unknown): FigurePlanDiagno
   for (const rawGroup of rawGroups) {
     const group = (rawGroup ?? {}) as Record<string, unknown>
     const gid = text(group.id)
-    const memberIds = Array.isArray(group.memberIds)
-      ? (group.memberIds as unknown[]).filter(
-          (member): member is string => typeof member === 'string' && ids.has(member),
-        )
-      : []
+    const declaredMembers = strings(group.memberIds)
+    const memberIds = requireNodeRefs(`group "${gid}" memberIds`, declaredMembers, ids, errors)
     if (!gid || memberIds.length === 0) continue
     if (groupIds.has(gid)) {
       errors.push(`duplicate group id "${gid}"`)
@@ -308,19 +362,26 @@ export function parseFigurePlanV2WithDiagnostics(raw: unknown): FigurePlanDiagno
     groups.push({ id: gid, ...(text(group.label) ? { label: text(group.label) } : {}), memberIds })
   }
 
-  const intent = (plan.globalIntent ?? {}) as Record<string, unknown>
-  const stringList = (value: unknown): string[] =>
-    Array.isArray(value)
-      ? (value as unknown[]).filter((v): v is string => typeof v === 'string')
-      : []
+  const narrative = parseNarrative(plan.narrative, ids, thesis, errors)
 
-  const narrative = parseNarrative(plan.narrative, ids, thesis)
-
-  const timeOrder = strings(plan.timeOrder).filter((id) => ids.has(id))
+  const timeOrder = requireNodeRefs('timeOrder', strings(plan.timeOrder), ids, errors)
 
   const rawMatrix = (plan.matrix ?? {}) as Record<string, unknown>
-  const rowGroupIds = strings(rawMatrix.rowGroupIds).filter((id) => groupIds.has(id))
-  const columnGroupIds = strings(rawMatrix.columnGroupIds).filter((id) => groupIds.has(id))
+  const rowGroupIds = requireGroupRefs(
+    'matrix.rowGroupIds',
+    strings(rawMatrix.rowGroupIds),
+    groupIds,
+    errors,
+  )
+  const columnGroupIds = requireGroupRefs(
+    'matrix.columnGroupIds',
+    strings(rawMatrix.columnGroupIds),
+    groupIds,
+    errors,
+  )
+  const hasMatrixSpec =
+    (Array.isArray(rawMatrix.rowGroupIds) && strings(rawMatrix.rowGroupIds).length > 0) ||
+    (Array.isArray(rawMatrix.columnGroupIds) && strings(rawMatrix.columnGroupIds).length > 0)
   const matrix: MatrixSpec | undefined =
     rowGroupIds.length > 0 && columnGroupIds.length > 0
       ? {
@@ -328,8 +389,50 @@ export function parseFigurePlanV2WithDiagnostics(raw: unknown): FigurePlanDiagno
           columnGroupIds,
           ...(text(rawMatrix.cellRelation) ? { cellRelation: text(rawMatrix.cellRelation) } : {}),
         }
-      : undefined
+      : hasMatrixSpec
+        ? (() => {
+            // A declared matrix whose axes did not resolve is a structural
+            // failure, never a silent downgrade to a non-matrix plan.
+            errors.push(
+              'matrix declared but one axis resolved empty (check matrix.rowGroupIds/columnGroupIds against groups)',
+            )
+            return undefined
+          })()
+        : undefined
 
+  if (errors.length > 0) return { plan: null, errors }
+
+  const intent = (plan.globalIntent ?? {}) as Record<string, unknown>
+  const stringList = (value: unknown): string[] =>
+    Array.isArray(value)
+      ? (value as unknown[]).filter((v): v is string => typeof v === 'string')
+      : []
+
+  const emphasis = requireNodeRefs(
+    'globalIntent.emphasis',
+    stringList(intent.emphasis),
+    ids,
+    errors,
+  )
+  const secondary = requireNodeRefs(
+    'globalIntent.secondary',
+    stringList(intent.secondary),
+    ids,
+    errors,
+  )
+  const optional = requireNodeRefs(
+    'globalIntent.optional',
+    stringList(intent.optional),
+    ids,
+    errors,
+  )
+  const primarySpine = requireNodeRefs('primarySpine', strings(plan.primarySpine), ids, errors)
+  // node.groupId is a group reference collected AFTER groups parse
+  for (const node of nodes) {
+    if (node.groupId && !groupIds.has(node.groupId)) {
+      errors.push(`node "${node.id}": groupId references missing group "${node.groupId}"`)
+    }
+  }
   if (errors.length > 0) return { plan: null, errors }
 
   return {
@@ -341,17 +444,11 @@ export function parseFigurePlanV2WithDiagnostics(raw: unknown): FigurePlanDiagno
       edges,
       groups,
       globalIntent: {
-        emphasis: stringList(intent.emphasis).filter((item) => ids.has(item)),
-        secondary: stringList(intent.secondary).filter((item) => ids.has(item)),
-        optional: stringList(intent.optional).filter((item) => ids.has(item)),
+        emphasis,
+        secondary,
+        optional,
       },
-      ...(Array.isArray(plan.primarySpine)
-        ? {
-            primarySpine: (plan.primarySpine as unknown[]).filter(
-              (id): id is string => typeof id === 'string' && ids.has(id),
-            ),
-          }
-        : {}),
+      ...(primarySpine.length > 0 ? { primarySpine } : {}),
       ...(typeof plan.readingIntent === 'object' && plan.readingIntent !== null
         ? {
             readingIntent: {
