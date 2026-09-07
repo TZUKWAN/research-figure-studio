@@ -145,7 +145,11 @@ export function parseFigureContract(raw: unknown): FigureContract | null {
     typeof output.finalHeightMm === 'number' && output.finalHeightMm > 0
       ? output.finalHeightMm
       : undefined
-  const evidence = (value: unknown): EvidenceRequirement[] =>
+  // P0-7: the SECTION the caller placed the entry in decides the default —
+  // evidenceMustShow entries default required, evidenceOptional entries default
+  // optional; a caller never has to repeat `required: false` in the optional
+  // list (an explicit `required` flag still wins).
+  const evidence = (value: unknown, defaultRequired: boolean): EvidenceRequirement[] =>
     Array.isArray(value)
       ? (value as unknown[]).flatMap((item) => {
           const e = (item ?? {}) as Record<string, unknown>
@@ -156,7 +160,7 @@ export function parseFigureContract(raw: unknown): FigureContract | null {
             {
               id,
               description: text(e.description) || id,
-              required: e.required !== false,
+              required: typeof e.required === 'boolean' ? e.required : defaultRequired,
               source: (SOURCE_SET.has(source) ? source : 'user') as ProvenanceSource,
             },
           ]
@@ -195,8 +199,8 @@ export function parseFigureContract(raw: unknown): FigureContract | null {
       ...(finalHeightMm !== undefined ? { finalHeightMm } : {}),
       aspectRatio,
     },
-    evidenceMustShow: evidence(r.evidenceMustShow).filter((e) => e.required),
-    evidenceOptional: evidence(r.evidenceOptional).filter((e) => !e.required),
+    evidenceMustShow: evidence(r.evidenceMustShow, true).filter((e) => e.required),
+    evidenceOptional: evidence(r.evidenceOptional, false).filter((e) => !e.required),
     forbiddenClaims: strings(r.forbiddenClaims),
     visibleTextPolicy: {
       allowed: strings(policy.allowed),

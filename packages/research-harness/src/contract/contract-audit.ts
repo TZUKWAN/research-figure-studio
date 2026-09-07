@@ -44,6 +44,17 @@ export interface ContractAuditInput {
   renderedTexts: RenderedText[]
   /** semantic node id → contract evidence ids it claims to carry */
   evidenceRefs?: Map<string, string[]>
+  /**
+   * P0-7: provenance refs are a SEPARATE channel — evidenceRefs must never
+   * masquerade as provenance for a quantitative claim (GOAL 禁止事项 #8).
+   */
+  provenanceRefs?: Map<string, string[]>
+  /**
+   * P0-7: structured quantitative signal — nodes the PLANNER declared
+   * claimType:'quantitative' require provenance even when the regex misses
+   * (unit-less claims, non-CJK phrasing, …).
+   */
+  quantitativeNodeIds?: Set<string>
 }
 
 export function auditFigureContract(input: ContractAuditInput): ContractAuditIssue[] {
@@ -78,10 +89,29 @@ export function auditFigureContract(input: ContractAuditInput): ContractAuditIss
     }
   }
 
-  // ── allowed whitelist: only enforced when explicitly non-empty ──
+  // ── allowed whitelist (P0-7, mode allowedExact): a whole visible text must
+  // EQUAL an allowlist entry after normalization. `includes` matching would
+  // let an authorized phrase whitewash appended fabricated claims
+  // ("模型性能提升" must NOT admit "模型性能提升 37.8%，世界领先"). An entry
+  // ending in `*` grants PREFIX composition (token-style) for generated
+  // variants of an authorized stem — never for numbers/percent signs. ──
   const allowed = (contract.visibleTextPolicy?.allowed ?? []).map(norm).filter(Boolean)
   if (allowed.length > 0) {
-    const violators = texts.filter((t) => !t.n || !allowed.some((a) => t.n.includes(a)))
+    const whitelisted = (t: { n: string }): boolean => {
+      if (!t.n) return false
+      return allowed.some((a) => {
+        if (a.endsWith('*')) {
+          const stem = a.slice(0, -1)
+          if (!stem) return true
+          if (!t.n.startsWith(stem)) return false
+          // the appended part must not introduce quantitative content
+          const tail = t.n.slice(stem.length)
+          return !QUANTITATIVE_CLAIM.test(tail)
+        }
+        return t.n === a
+      })
+    }
+    const violators = texts.filter((t) => !whitelisted(t))
     if (violators.length > 0) {
       issues.push({
         kind: 'ALLOWED_VIOLATION',
@@ -128,12 +158,12 @@ export function auditFigureContract(input: ContractAuditInput): ContractAuditIss
   // ── provenance: quantitative claims need a source; sample markers exempt ──
   for (const t of texts) {
     if (t.kind === 'micro' && SAMPLE_MARKER.test(t.text)) continue
-    if (!QUANTITATIVE_CLAIM.test(t.text)) continue
-    const refs = input.evidenceRefs?.get(t.id) ?? []
-    void refs
-    // provenance refs ride the same SemanticNode refs map, keyed by node id
+    const structured = input.quantitativeNodeIds?.has(t.id) ?? false
+    if (!QUANTITATIVE_CLAIM.test(t.text) && !structured) continue
+    // P0-7: ONLY the provenance channel counts — evidence refs, however
+    // plentiful, never substitute for a quantitative source
     const hasProvenance =
-      (input.evidenceRefs?.get(t.id)?.length ?? 0) > 0 ||
+      (input.provenanceRefs?.get(t.id)?.length ?? 0) > 0 ||
       (contract.provenance ?? []).some((p) => t.n.includes(norm(p.claim)))
     if (!hasProvenance) {
       issues.push({

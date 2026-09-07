@@ -433,16 +433,25 @@ export async function orchestrateFigure(
           text: edge.label,
         })
     }
+    // P0-7: evidence and provenance travel in SEPARATE channels — merging
+    // them let an evidence citation whitewash an unsourced number.
     const evidenceRefs = new Map<string, string[]>()
+    const provenanceRefs = new Map<string, string[]>()
+    const quantitativeNodeIds = new Set<string>()
     for (const node of attemptPlan.nodes) {
-      const refs = [...(node.evidenceRefs ?? []), ...(node.provenanceRefs ?? [])]
-      if (refs.length > 0) evidenceRefs.set(node.id, refs)
+      if ((node.evidenceRefs?.length ?? 0) > 0) evidenceRefs.set(node.id, node.evidenceRefs!)
+      if ((node.provenanceRefs?.length ?? 0) > 0) {
+        provenanceRefs.set(node.id, node.provenanceRefs!)
+      }
+      if (node.claimType === 'quantitative') quantitativeNodeIds.add(node.id)
     }
     const issues = auditFigureContract({
       contract: input.contract,
       placedNodeIds: placements.map((placement) => placement.id),
       renderedTexts: rendered,
       evidenceRefs,
+      provenanceRefs,
+      quantitativeNodeIds,
     })
     const violations = issues.filter((issue) => issue.kind !== 'EVIDENCE_MISSING').length
     const missingEvidence = issues.filter((issue) => issue.kind === 'EVIDENCE_MISSING').length
