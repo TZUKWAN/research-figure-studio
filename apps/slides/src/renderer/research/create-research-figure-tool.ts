@@ -29,9 +29,12 @@ import {
   figurePlanJsonSchema,
   orchestrateFigure,
   parseFigureContract,
+  parseFigurePlanV2WithDiagnostics,
+  parseSpatialPlanWithDiagnostics,
   revertAction,
   spatialPlanJsonSchema,
   type CapabilityInput,
+  type FigurePlanV2,
 } from '@genoffice/research-harness'
 import { getThemeById } from '@genoffice/theme-engine'
 import type { RenderSlide } from '@genoffice/pptx-render'
@@ -224,6 +227,10 @@ export async function executeCreateResearchFigure(deps: {
         mode: carrier ? 'native-json' : 'plain',
       }
     }
+  // Retry-budget layering (P0-2): Protocol Repair (JSON shape, schema,
+  // references) lives HERE with maxRepairs=1 per request. Scientific Replan
+  // (evidence, causality, abstraction) lives in the orchestrator's
+  // planSemanticFigure with its own budget. The two never multiply.
   const plannerSystem = composeSemanticPlannerPrompt(
     effectivePrompt('research.semantic-planner', RESEARCH_SEMANTIC_PLANNER_POLICY),
   )
@@ -242,7 +249,16 @@ export async function executeCreateResearchFigure(deps: {
               feedback +
               '\nFix the issues and output the JSON object again.'
             : plannerUser,
-          validate: (value) => (value !== null && typeof value === 'object' ? value : null),
+          // P0-2: REAL runtime validation — the machine schema is enforced by
+          // executing the production parser; its exact diagnostics become the
+          // repair feedback instead of a structural typeof check.
+          validate: (value) => {
+            const parsed = parseFigurePlanV2WithDiagnostics(value)
+            if (!parsed.plan) {
+              throw new Error(parsed.errors.join('; ') || 'FigurePlan failed schema validation')
+            }
+            return parsed.plan as unknown as Record<string, unknown>
+          },
         },
         {
           maxRepairs: 1,
@@ -276,7 +292,34 @@ export async function executeCreateResearchFigure(deps: {
           },
           system: designerSystem,
           user: JSON.stringify(ctx),
-          validate: (value) => (value !== null && typeof value === 'object' ? value : null),
+          // P0-2: strict runtime validation against the CURRENT plan —
+          // placement ids must resolve to real nodes, boxHints must be 0..1
+          // fractions, visualPlan refs must resolve; exact diagnostics feed
+          // the single protocol repair turn.
+          validate: (value) => {
+            const plan = ctx.plan as FigurePlanV2
+            const nodeIds = plan.nodes.map((node) => node.id)
+            const edgeIds = plan.edges.map((edge) => edge.id ?? `${edge.from}->${edge.to}`)
+            const parsed = parseSpatialPlanWithDiagnostics(value, nodeIds, {
+              edgeIds,
+              planNodes: plan.nodes.map((node) => ({
+                id: node.id,
+                semanticLabel: node.semanticLabel,
+                visible: { title: node.visible.title },
+              })),
+            })
+            if (!parsed.plan) {
+              throw new Error(parsed.errors.join('; ') || 'SpatialPlan failed schema validation')
+            }
+            // the decomposition travels WITH the spatial plan, exactly like the
+            // orchestrator's own modelPlan composition
+            return {
+              ...parsed.plan,
+              ...(parsed.visualPlan && parsed.visualPlan.modules.length > 0
+                ? { visualPlan: parsed.visualPlan }
+                : {}),
+            } as unknown as Record<string, unknown>
+          },
         },
         {
           maxRepairs: 1,

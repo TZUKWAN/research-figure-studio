@@ -4,6 +4,8 @@
  * coordinates. The solver turns it into legal geometry while preserving intent.
  */
 
+import { normalizeVisualPlan } from '../visual/visualPlan.js'
+
 export type ReadingFlow = 'LR' | 'RL' | 'TB' | 'BT' | 'radial' | 'mixed'
 
 export interface NormalizedBox {
@@ -166,4 +168,137 @@ export function normalizeSpatialPlan(
         }
       : {}),
   }
+}
+
+/**
+ * P0-2 (production closure 2): diagnostics-aware SpatialPlan validation for
+ * the Composition Designer's structured output. Unlike normalizeSpatialPlan —
+ * which silently DROPS unknown placement ids and silently clamps boxHints —
+ * this reports every violation with the exact field and id, so the protocol
+ * repair loop can fix the real problem instead of shipping a silently
+ * truncated composition intent.
+ *
+ * Empty placements stay legal: the documented fallback contract lets the
+ * designer declare "no safe composition intent" and the deterministic priors
+ * take over.
+ */
+export function parseSpatialPlanWithDiagnostics(
+  raw: unknown,
+  knownIds: string[],
+  options?: {
+    edgeIds?: string[]
+    defaults?: Parameters<typeof normalizeSpatialPlan>[2]
+    /** semantic labels/visible titles for visualPlan normalization */
+    planNodes?: Array<{ id: string; semanticLabel: string; visible: { title: string } }>
+  },
+): {
+  plan: SpatialPlan | null
+  visualPlan: import('../visual/visualPlan.js').VisualPlan | null
+  errors: string[]
+} {
+  const errors: string[] = []
+  if (typeof raw !== 'object' || raw === null) {
+    return { plan: null, visualPlan: null, errors: ['SpatialPlan must be a JSON object'] }
+  }
+  const plan = raw as Record<string, unknown>
+  const known = new Set(knownIds)
+  const composition = (plan.composition ?? {}) as Record<string, unknown>
+  const flow = String(composition.readingFlow ?? 'LR')
+  const flows: ReadingFlow[] = ['LR', 'RL', 'TB', 'BT', 'radial', 'mixed']
+  if (!flows.includes(flow as ReadingFlow)) {
+    errors.push(`composition.readingFlow "${flow}" unsupported (allowed: ${flows.join(', ')})`)
+  }
+  if (!Array.isArray(plan.placements)) {
+    errors.push('"placements" must be an array')
+  } else {
+    for (const [index, rawPlacement] of plan.placements.entries()) {
+      const p = (rawPlacement ?? {}) as Record<string, unknown>
+      const id = typeof p.id === 'string' ? p.id.trim() : ''
+      if (!id) {
+        errors.push(`placement at index ${index} is missing "id"`)
+        continue
+      }
+      if (!known.has(id)) {
+        errors.push(
+          `placement "${id}" references missing node (must be one of the FigurePlan node ids)`,
+        )
+      }
+      const box = p.boxHint as Record<string, unknown> | undefined
+      if (typeof box !== 'object' || box === null) {
+        errors.push(`placement "${id}" is missing "boxHint"`)
+      } else {
+        for (const key of ['x', 'y', 'w', 'h'] as const) {
+          const v = box[key]
+          if (typeof v !== 'number' || !Number.isFinite(v)) {
+            errors.push(`placement "${id}" boxHint.${key} must be a finite number`)
+          } else if (v < 0 || v > 1) {
+            errors.push(
+              `placement "${id}" boxHint.${key}=${v} outside 0..1 (fractions, never pixels)`,
+            )
+          }
+        }
+      }
+      const role = String(p.visualRole ?? 'primary')
+      if (!VISUAL_ROLES.has(role)) {
+        errors.push(
+          `placement "${id}" visualRole "${role}" unsupported (allowed: ${[...VISUAL_ROLES].join(', ')})`,
+        )
+      }
+    }
+  }
+  // visualPlan references must resolve against the CURRENT plan
+  const visualPlan = plan.visualPlan as Record<string, unknown> | undefined
+  if (visualPlan && typeof visualPlan === 'object') {
+    const edgeIds = new Set(options?.edgeIds ?? [])
+    if (Array.isArray(visualPlan.modules)) {
+      for (const rawModule of visualPlan.modules as unknown[]) {
+        const m = (rawModule ?? {}) as Record<string, unknown>
+        const moduleId = typeof m.moduleId === 'string' ? m.moduleId.trim() : ''
+        if (moduleId && !known.has(moduleId)) {
+          errors.push(`visualPlan module "${moduleId}" references missing node`)
+        }
+        if (Array.isArray(m.units)) {
+          for (const rawUnit of m.units as unknown[]) {
+            const u = (rawUnit ?? {}) as Record<string, unknown>
+            const unitRef = typeof u.semanticNodeId === 'string' ? u.semanticNodeId : ''
+            if (unitRef && !known.has(unitRef)) {
+              errors.push(
+                `visualPlan unit "${String(u.id ?? '?')}" references missing node "${unitRef}"`,
+              )
+            }
+            const edgeRef = typeof u.semanticEdgeId === 'string' ? u.semanticEdgeId : ''
+            if (edgeRef && options?.edgeIds && !edgeIds.has(edgeRef)) {
+              errors.push(
+                `visualPlan unit "${String(u.id ?? '?')}" references missing edge "${edgeRef}"`,
+              )
+            }
+          }
+        }
+      }
+    }
+  }
+  if (errors.length > 0) return { plan: null, visualPlan: null, errors }
+  const normalized = normalizeSpatialPlan(raw, knownIds, options?.defaults ?? {})
+  if (!normalized) {
+    // An EMPTY placements list is the documented "no safe composition intent"
+    // fallback (deterministic priors take over) — legal, plan stays null.
+    const placements = (plan as Record<string, unknown>).placements
+    if (Array.isArray(placements) && placements.length === 0) {
+      return { plan: null, visualPlan: null, errors: [] }
+    }
+    return {
+      plan: null,
+      visualPlan: null,
+      errors: ['SpatialPlan failed structural normalization'],
+    }
+  }
+  // The decomposition travels WITH the spatial plan (the orchestrator treats
+  // modelPlan.visualPlan the same way) — normalized against the real plan.
+  const planNodes =
+    options?.planNodes ?? knownIds.map((id) => ({ id, semanticLabel: id, visible: { title: id } }))
+  const normalizedVisualPlan = normalizeVisualPlan(plan.visualPlan, {
+    nodes: planNodes,
+    edges: (options?.edgeIds ?? []).map((id) => ({ id })),
+  })
+  return { plan: normalized, visualPlan: normalizedVisualPlan, errors: [] }
 }
