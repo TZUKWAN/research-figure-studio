@@ -1212,11 +1212,12 @@ const FONT_STACK: Record<string, string> = {
   宋体: "SimSun, 'Songti SC', serif",
   simsun: "SimSun, 'Songti SC', serif",
   黑体: "SimHei, 'Heiti SC', sans-serif",
-  simhei: "SimHei, 'Heiti SC', sans-serif",
+  simhei: "SimHei, 'Heiti SC', 'Noto Sans SC', 'Noto Sans CJK SC', 'WenQuanYi Zen Hei', sans-serif",
   楷体: "KaiTi, 'Kaiti SC', serif",
   仿宋: "FangSong, 'Songti SC', serif",
-  等线: "DengXian, 'Microsoft YaHei', 'PingFang SC', sans-serif",
-  dengxian: "DengXian, 'Microsoft YaHei', 'PingFang SC', sans-serif",
+  等线: "DengXian, 'Microsoft YaHei', 'PingFang SC', 'Noto Sans SC', 'Noto Sans CJK SC', 'WenQuanYi Zen Hei', sans-serif",
+  dengxian:
+    "DengXian, 'Microsoft YaHei', 'PingFang SC', 'Noto Sans SC', 'Noto Sans CJK SC', 'WenQuanYi Zen Hei', sans-serif",
   // Western: consistent with the main-process metrics alias chain (calibri→Carlito→Arial etc.),
   // otherwise metrics use Arial while drawing falls back to the system default font, misaligning word spacing/line breaks.
   calibri: 'Calibri, Carlito, Arial, sans-serif',
@@ -1285,7 +1286,9 @@ export function displayFontFamily(name: string): string {
   if (script === 'ja') return `'${name}', ${SERIF_HINT_RE.test(name) ? JA_SERIF : JA_SANS}`
   if (script === 'ko') return `'${name}', ${SERIF_HINT_RE.test(name) ? KO_SERIF : KO_SANS}`
   if (script === 'tc') return `'${name}', ${SERIF_HINT_RE.test(name) ? TC_SERIF : TC_SANS}`
-  return `'${name}', 'PingFang SC', 'Microsoft YaHei', sans-serif`
+  // P1-5: Noto/WenQuanYi kept in every tail so Linux (Noto CJK installed) renders CJK
+  // instead of tofu; measurement and drawing resolve through the SAME canvas stack.
+  return `'${name}', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', 'WenQuanYi Zen Hei', sans-serif`
 }
 
 /**

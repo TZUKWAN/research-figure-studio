@@ -192,6 +192,9 @@ jobs:
       # Electron needs a display server on Linux runners. DEBUG=pw:browser
       # forwards the Electron process stdout/stderr into the CI log so launch
       # failures are diagnosable.
+      - name: Install CJK fonts (E2E screenshots must not render tofu)
+        run: sudo apt-get update && sudo apt-get install -y fonts-noto-cjk
+
       - name: E2E (Electron shell)
         env:
           DEBUG: 'pw:browser'
