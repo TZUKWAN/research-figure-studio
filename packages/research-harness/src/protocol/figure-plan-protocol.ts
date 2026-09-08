@@ -16,6 +16,7 @@
 
 export const FIGURE_PLAN_PROTOCOL_VERSION = '2.1.0'
 
+import { runtimeCapabilities } from './runtime-capabilities.js'
 import { RELATION_PRESENTATIONS, RELATION_TYPES } from '../semantic/schema.js'
 import {
   EXPRESSION_MODES,
@@ -378,4 +379,55 @@ export function spatialPlanJsonSchema(capabilities?: {
  */
 export function renderJsonContract(schema: Record<string, unknown>): string {
   return JSON.stringify(schema)
+}
+
+/**
+ * P0-3 (production closure 2): ONE runtime protocol object.
+ *
+ * The provider carrier schema, the machine prompt contract and every
+ * capability-constrained enum are compiled from THE SAME capability set in
+ * ONE call — no hand-maintained second copy of the vocabulary anywhere.
+ * The app-layer prompt composers embed exactly `renderJsonContract()`
+ * output of these schemas, so provider and prompt can never drift.
+ */
+export interface ResearchRuntimeProtocol {
+  capabilities: import('./runtime-capabilities.js').ResearchRuntimeCapabilities
+  figurePlanSchema: Record<string, unknown>
+  spatialPlanSchema: Record<string, unknown>
+}
+
+export function compileResearchRuntimeProtocol(
+  overrides: {
+    capabilities?: Partial<import('./runtime-capabilities.js').ResearchRuntimeCapabilities>
+  } = {},
+): ResearchRuntimeProtocol {
+  const caps = runtimeCapabilities(overrides.capabilities)
+  const figurePlanSchema = figurePlanJsonSchema()
+  // The model may only declare presentations this renderer realizes: the
+  // presentation enum is rewritten FROM the capability set right here — the
+  // single place where schema and capability can meet or drift.
+  constrainSchemaEnum(figurePlanSchema, 'presentation', [...caps.declarablePresentations])
+  return {
+    capabilities: caps,
+    figurePlanSchema,
+    spatialPlanSchema: spatialPlanJsonSchema({
+      presentations: [...caps.declarablePresentations],
+      microLayouts: [...caps.microLayouts],
+      shapes: [...caps.visualUnitShapes],
+    }),
+  }
+}
+
+/** Narrow a `presentation` enum property in place (recursive). */
+export function constrainSchemaEnum(node: unknown, property: string, values: string[]): void {
+  if (Array.isArray(node)) {
+    for (const item of node) constrainSchemaEnum(item, property, values)
+    return
+  }
+  if (typeof node !== 'object' || node === null) return
+  const inner = (node as Record<string, unknown>).properties as Record<string, unknown> | undefined
+  if (inner && inner[property] && typeof inner[property] === 'object') {
+    inner[property] = { ...(inner[property] as Record<string, unknown>), enum: values }
+  }
+  for (const value of Object.values(node)) constrainSchemaEnum(value, property, values)
 }

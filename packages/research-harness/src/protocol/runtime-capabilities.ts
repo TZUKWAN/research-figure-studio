@@ -9,6 +9,7 @@
  * reach the model through the protocol layer.
  */
 import type { RelationPresentation } from '../semantic/schema.js'
+import { FAMILY_STRATEGIES } from '../composition/family-strategy.js'
 import type { MicroLayout, ShapeKind } from '../visual/visualPlan.js'
 
 /** What the native writer can draw today, and how each presentation is realized. */
@@ -22,6 +23,8 @@ export interface ResearchRuntimeCapabilities {
   microLayouts: readonly MicroLayout[]
   visualUnitShapes: readonly ShapeKind[]
   figureFamilies: readonly string[]
+  /** declared families this runtime can NOT compose (typed error if forced) */
+  unsupportedFigureFamilies: readonly string[]
   domains: readonly string[]
   outputContexts: readonly string[]
   /** vision critic availability (model-dependent; flipped off per capability profile) */
@@ -76,6 +79,22 @@ export const RENDERER_VISUAL_UNIT_SHAPES: readonly ShapeKind[] = [
   'diamond',
 ]
 
+// ── P0-3: family support is DERIVED from the strategy implementation ──
+
+function supportedFigureFamilies(): readonly string[] {
+  return Object.values(FAMILY_STRATEGIES)
+    .filter(
+      (strategy) =>
+        !(strategy.eligibleGrammars.length === 0 && strategy.fallbackPolicy === 'strict'),
+    )
+    .map((strategy) => strategy.family)
+}
+
+function unsupportedFigureFamilies(): readonly string[] {
+  const supported = new Set(supportedFigureFamilies())
+  return Object.keys(FAMILY_STRATEGIES).filter((family) => !supported.has(family))
+}
+
 export function runtimeCapabilities(
   overrides: Partial<ResearchRuntimeCapabilities> = {},
 ): ResearchRuntimeCapabilities {
@@ -88,19 +107,13 @@ export function runtimeCapabilities(
     declarablePresentations: [...connectorPresentations, ...spatialPresentations],
     microLayouts: overrides.microLayouts ?? RENDERER_MICRO_LAYOUTS,
     visualUnitShapes: overrides.visualUnitShapes ?? RENDERER_VISUAL_UNIT_SHAPES,
-    figureFamilies: overrides.figureFamilies ?? [
-      'framework',
-      'architecture',
-      'pipeline',
-      'mechanism',
-      'causal-model',
-      'hierarchy',
-      'network',
-      'timeline',
-      'matrix',
-      'comparison',
-      'freeform',
-    ],
+    // P0-3: derived from the IMPLEMENTATION (family-strategy table) — a family
+    // is "supported" iff its strategy can compose at least one grammar; an
+    // empty eligible set with a strict fallback means a forced run throws
+    // UnsupportedFigureFamilyError, so it is reported as unsupported instead
+    // of being promised to the model.
+    figureFamilies: overrides.figureFamilies ?? supportedFigureFamilies(),
+    unsupportedFigureFamilies: overrides.unsupportedFigureFamilies ?? unsupportedFigureFamilies(),
     domains: overrides.domains ?? [
       'general',
       'cs-ml',
