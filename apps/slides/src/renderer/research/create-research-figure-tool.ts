@@ -85,8 +85,11 @@ export interface DurableFigureState {
 export interface ToolFailure {
   output: string
   isError: true
-  mutated: false
+  /** true when a rollback itself failed — canvas state is UNCERTAIN */
+  mutated: boolean
   summary: string
+  /** P0-1: critical marker, see output text for manual-recovery guidance */
+  critical?: true
 }
 
 export interface ToolSuccess {
@@ -111,6 +114,21 @@ interface SlidesApiForFigure {
 
 function fail(summary: string, output: string): ToolFailure {
   return { output, isError: true, mutated: false, summary }
+}
+
+/** Count rendered nodes still carrying the figure run's identity (rollback leak check). */
+function figureRunLeak(slide: { nodes: unknown[] }, runId: string): number {
+  let leaks = 0
+  const walk = (
+    nodes: Array<{ semanticMetadata?: Record<string, unknown>; children?: unknown[] }>,
+  ) => {
+    for (const node of nodes) {
+      if (node.semanticMetadata?.figureRunId === runId) leaks++
+      if (Array.isArray(node.children)) walk(node.children as typeof nodes)
+    }
+  }
+  walk(slide.nodes as Parameters<typeof walk>[0])
+  return leaks
 }
 
 const STAGE_BUDGET_MS = 180_000
@@ -388,7 +406,16 @@ export async function executeCreateResearchFigure(deps: {
     )
   }
 
-  // ── ONE atomic transaction ──
+  // ── ONE atomic transaction (P0-1 fail-closed) ──
+  // Rule B: rollback capability is a MUTATION PRECONDITION. Post-write
+  // verification that cannot roll back must never run against a mutated
+  // canvas, so a session without undo refuses the write up front.
+  if (typeof slidesApi.undo !== 'function') {
+    return fail(
+      t('aiFailNewElement'),
+      'this renderer session has no undo/rollback capability; refusing to create the figure (post-write verification must be able to restore the canvas)',
+    )
+  }
   const scale = slide.scale > 0 ? slide.scale : 1
   const txn = figurePlanToTxnOps(renderPlan, { slideIndex: idx, scale })
   const actionId = beginAction('Create research figure (orchestrated)')
@@ -412,13 +439,64 @@ export async function executeCreateResearchFigure(deps: {
     )
   }
 
-  // ── post-write verification against the REBUILT slide (P1-09) ──
+  // Rollback helper: undo MUST restore a slide with zero elements of THIS
+  // figure run — a restoration that leaks figure shapes is a failed rollback.
+  const runId = renderPlan.slideMetadata.figureRunId
+  const undoFn = slidesApi.undo
+  const rollbackFigure = async (): Promise<{ ok: boolean; detail: string }> => {
+    try {
+      const restored = (await undoFn?.()) ?? null
+      const restoredSlide = restored?.[idx]
+      if (!restoredSlide) {
+        return { ok: false, detail: 'undo returned no restored slide' }
+      }
+      const leak = figureRunLeak(restoredSlide, runId)
+      if (leak > 0) {
+        return { ok: false, detail: `undo left ${leak} figure element(s) on the canvas` }
+      }
+      access.applyDeck(restored)
+      return { ok: true, detail: 'canvas restored' }
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) }
+    }
+  }
+  const criticalFail = (issues: string): ToolFailure => {
+    // Rollback itself failed: the canvas state is UNCERTAIN. Never pretend the
+    // canvas is unchanged — report a critical, mutated failure.
+    revertAction(actionId, 'CRITICAL: rollback failed — ' + issues)
+    return {
+      output:
+        'CRITICAL_TRANSACTION_ROLLBACK_FAILED: ' +
+        issues +
+        ' The figure write could not be rolled back; the canvas is in an uncertain state. Ask the user to check/undo manually before any further edit.',
+      isError: true,
+      mutated: true,
+      critical: true,
+      summary: t('aiFailNewElement'),
+    }
+  }
+
+  // ── post-write verification against the REBUILT slide (P0-1 Rule A) ──
+  const written = result.slides?.[idx]
+  if (!written) {
+    // applied=true without a rebuilt slide cannot be verified → roll back,
+    // never return success.
+    const rollback = await rollbackFigure()
+    if (!rollback.ok) {
+      return criticalFail(`rebuilt slide missing; rollback failed (${rollback.detail})`)
+    }
+    revertAction(actionId, 'rebuilt slide missing after apply')
+    return fail(
+      t('aiFailNewElement'),
+      'the transaction applied but no rebuilt slide was returned; the canvas was rolled back and nothing was created',
+    )
+  }
+
   // Elements are re-materialized after the transaction (parse-time ids are
   // reborn), so element identity is read back from the rebuilt slide via the
   // semantic signature each spec stamped, not from the txn record mints.
-  const written = result.slides?.[idx]
   const createdIdBySpecId = new Map<string, string>()
-  if (written) {
+  {
     const sigKeys = ['componentType', 'semanticNodeId', 'visualUnitId', 'semanticEdgeId'] as const
     const signature = (meta: Record<string, unknown>): string =>
       sigKeys.map((key) => `${meta[key] ?? ''}`).join('|')
@@ -448,25 +526,26 @@ export async function executeCreateResearchFigure(deps: {
     }
     walk(written.nodes as Parameters<typeof walk>[0])
   }
-  let verification: { ok: boolean; issues: string[] }
-  if (written) {
-    verification = verifyFigureWrite(
-      written,
-      renderPlan,
-      createdIdBySpecId,
-      auditSlideLayout(written),
-    )
-    if (!verification.ok && slidesApi.undo) {
-      // Audit failed post-commit: undo restores the exact pre-transaction
-      // snapshot — the canvas never keeps an unvouched figure.
-      const restored = await slidesApi.undo()
-      if (restored) access.applyDeck(restored)
-      revertAction(actionId, 'post-write verification failed: ' + verification.issues.join('; '))
-      return fail(
-        t('aiFailNewElement'),
-        'figure reverted after post-write verification: ' + verification.issues.join('; '),
+  const verification = verifyFigureWrite(
+    written,
+    renderPlan,
+    createdIdBySpecId,
+    auditSlideLayout(written),
+  )
+  if (!verification.ok) {
+    // P0-1 Rule B: verification failure ALWAYS rolls back — a session without
+    // undo was rejected before the mutation, so this branch can restore.
+    const rollback = await rollbackFigure()
+    if (!rollback.ok) {
+      return criticalFail(
+        `post-write verification failed (${verification.issues.join('; ')}); rollback failed (${rollback.detail})`,
       )
     }
+    revertAction(actionId, 'post-write verification failed: ' + verification.issues.join('; '))
+    return fail(
+      t('aiFailNewElement'),
+      'figure reverted after post-write verification: ' + verification.issues.join('; '),
+    )
   }
   if (written) access.applySlide(idx, written)
 
