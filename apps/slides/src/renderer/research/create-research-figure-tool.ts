@@ -342,6 +342,15 @@ export async function executeCreateResearchFigure(deps: {
     typeof call.input.contract === 'object' && call.input.contract !== null
       ? (call.input.contract as Record<string, unknown>)
       : {}
+  const contractProvided =
+    typeof call.input.contract === 'object' && call.input.contract !== null
+      ? Object.keys(call.input.contract as Record<string, unknown>).length > 0
+      : Boolean(
+          call.input.figureFamily ||
+          call.input.domain ||
+          call.input.venue ||
+          call.input.outputContext,
+        )
   const contract = parseFigureContract({
     ...contractInput,
     centralClaim: String(contractInput.centralClaim ?? '') || thesis,
@@ -357,6 +366,14 @@ export async function executeCreateResearchFigure(deps: {
       ),
     },
   })
+  // P0-4 fail-closed: a DECLARED but unparseable contract is a hard error —
+  // silently proceeding without gates would ship ungated scientific claims.
+  if (contractProvided && !contract) {
+    return fail(
+      t('aiFailNewElement'),
+      'the declared FigureContract is invalid (check provenance/evidence entries: every item needs an explicit source: user|document|search|dataset|sample|derived)',
+    )
+  }
   // AI-P1-14: autonomy calibration comes from the real capability profile;
   // the tool's explicit calibration argument stays authoritative.
   const profileCalibration = calibrationFromProfile(capabilityProfile)

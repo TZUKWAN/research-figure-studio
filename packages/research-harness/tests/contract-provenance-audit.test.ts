@@ -25,8 +25,8 @@ const CONTRACT = parseFigureContract({
     required: ['A improves B'],
     forbidden: ['零成本'],
   },
-  evidenceMustShow: [{ id: 'ev-1', description: 'benchmark table' }],
-  evidenceOptional: [{ id: 'ev-opt-1', description: 'extra ablation' }],
+  evidenceMustShow: [{ id: 'ev-1', description: 'benchmark table', source: 'document' }],
+  evidenceOptional: [{ id: 'ev-opt-1', description: 'extra ablation', source: 'user' }],
   provenance: [],
 })!
 
@@ -39,8 +39,8 @@ describe('evidenceOptional default (P0-7.1)', () => {
   it('an explicit flag wins within its section (contradictory entries are dropped, never relocated)', () => {
     const explicit = parseFigureContract({
       centralClaim: 'x',
-      evidenceMustShow: [{ id: 'a', required: false }],
-      evidenceOptional: [{ id: 'b', required: true }],
+      evidenceMustShow: [{ id: 'a', required: false, source: 'user' }],
+      evidenceOptional: [{ id: 'b', required: true, source: 'user' }],
     })!
     expect(explicit.evidenceMustShow).toEqual([])
     expect(explicit.evidenceOptional).toEqual([])
@@ -143,5 +143,46 @@ describe('visible-text whitelist exactness (P0-7.3)', () => {
   it('required text missing from the canvas fails', () => {
     const issues = auditFigureContract(baseInput([{ id: 'n1', kind: 'title', text: '无关标题' }]))
     expect(issues.some((i) => i.kind === 'REQUIRED_TEXT_MISSING')).toBe(true)
+  })
+})
+
+describe('provenance source is never guessed (P0-4)', () => {
+  it('missing source → the whole contract is INVALID (null)', () => {
+    const parsed = parseFigureContract({
+      centralClaim: 'x',
+      evidenceMustShow: [{ id: 'ev-1' }],
+    })
+    expect(parsed).toBeNull()
+  })
+
+  it('unknown source value → contract INVALID', () => {
+    const parsed = parseFigureContract({
+      centralClaim: 'x',
+      evidenceMustShow: [{ id: 'ev-1', source: 'vibes' }],
+    })
+    expect(parsed).toBeNull()
+  })
+
+  it('explicit valid sources are preserved verbatim', () => {
+    const parsed = parseFigureContract({
+      centralClaim: 'x',
+      evidenceMustShow: [{ id: 'a', source: 'user' }],
+      evidenceOptional: [{ id: 'b', source: 'dataset' }],
+      provenance: [{ claim: 'accuracy 92%', source: 'document', locator: 'table 3' }],
+    })!
+    expect(parsed.evidenceMustShow[0]?.source).toBe('user')
+    expect(parsed.evidenceOptional[0]?.source).toBe('dataset')
+    expect(parsed.provenance[0]?.source).toBe('document')
+    expect(parsed.provenance[0]?.locator).toBe('table 3')
+  })
+
+  it('invalid OPTIONAL evidence / provenance items are dropped (item-level)', () => {
+    const parsed = parseFigureContract({
+      centralClaim: 'x',
+      evidenceOptional: [{ id: 'no-source' }, { id: 'ok', source: 'sample' }],
+      provenance: [{ claim: 'x2' }, { claim: 'ok', source: 'derived' }],
+    })!
+    expect(parsed.evidenceOptional.map((e) => e.id)).toEqual(['ok'])
+    expect(parsed.provenance.map((p) => p.claim)).toEqual(['ok'])
   })
 })

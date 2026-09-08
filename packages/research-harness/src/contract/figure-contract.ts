@@ -149,6 +149,7 @@ export function parseFigureContract(raw: unknown): FigureContract | null {
   // evidenceMustShow entries default required, evidenceOptional entries default
   // optional; a caller never has to repeat `required: false` in the optional
   // list (an explicit `required` flag still wins).
+  let invalidRequiredEvidence = false
   const evidence = (value: unknown, defaultRequired: boolean): EvidenceRequirement[] =>
     Array.isArray(value)
       ? (value as unknown[]).flatMap((item) => {
@@ -156,12 +157,21 @@ export function parseFigureContract(raw: unknown): FigureContract | null {
           const id = text(e.id)
           if (!id) return []
           const source = text(e.source)
+          // P0-4: provenance source is NEVER guessed. A missing or unknown
+          // source makes the entry invalid — the contract author must state
+          // where it comes from. An invalid REQUIRED evidence entry poisons
+          // the whole contract (fail-closed: gating must never silently
+          // weaken); invalid optional entries are dropped as items.
+          if (!SOURCE_SET.has(source)) {
+            if (defaultRequired) invalidRequiredEvidence = true
+            return []
+          }
           return [
             {
               id,
               description: text(e.description) || id,
               required: typeof e.required === 'boolean' ? e.required : defaultRequired,
-              source: (SOURCE_SET.has(source) ? source : 'user') as ProvenanceSource,
+              source: source as ProvenanceSource,
             },
           ]
         })
@@ -172,18 +182,24 @@ export function parseFigureContract(raw: unknown): FigureContract | null {
         const claim = text(p.claim)
         if (!claim) return []
         const source = text(p.source)
+        // P0-4: same no-guessing rule for quantitative provenance — an
+        // explicit source is part of the contract, not a default.
+        if (!SOURCE_SET.has(source)) return []
         return [
           {
             claim,
-            source: (SOURCE_SET.has(source) ? source : 'user') as ProvenanceSource,
+            source: source as ProvenanceSource,
             ...(text(p.locator) ? { locator: text(p.locator) } : {}),
           },
         ]
       })
     : []
+  // P0-4 fail-closed: a required evidence entry with a missing/unknown
+  // source invalidates the WHOLE contract — never ship with weakened gates.
+  if (invalidRequiredEvidence) return null
   const policy = (r.visibleTextPolicy ?? {}) as Record<string, unknown>
   const language = text(policy.language)
-  return {
+  const parsedContract: FigureContract = {
     centralClaim,
     figureFamily: (FAMILY_SET.has(family.toLowerCase())
       ? (family.toLowerCase() as FigureFamily)
@@ -215,6 +231,10 @@ export function parseFigureContract(raw: unknown): FigureContract | null {
       : {}),
     editability: text(r.editability) === 'hybrid-vector' ? 'hybrid-vector' : 'fully-native',
   }
+  // P0-4 fail-closed: a required evidence entry with a missing/unknown
+  // source invalidates the WHOLE contract — never ship with weakened gates.
+  if (invalidRequiredEvidence) return null
+  return parsedContract
 }
 
 /**
