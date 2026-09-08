@@ -43,6 +43,18 @@ import { auditSlideLayout } from '../ai/layout-audit'
 import { t } from '../i18n/locale'
 import { buildFigureRenderPlan } from './native-figure-renderer'
 import { figurePlanToTxnOps, verifyFigureWrite } from './transaction'
+import { renderCandidatePreview, toAgentImage } from './candidate-preview'
+import type { VisionReview } from '@genoffice/research-harness'
+
+/**
+ * P1-1 vision rubric: the reviewer scores ONLY visual qualities. Scientific
+ * truth stays with the Scientific Critic — vision can never outvote it.
+ */
+const VISION_RUBRIC_PROMPT = `You are a Vision Critic for research figures. You see ONE screenshot.
+Score each dimension 0-10 (integers): scientificReadability, fiveSecondClarity, visualHierarchy, composition, relationClarity, typography, visualRestraint, domainAppropriateness, professionalAppearance.
+Also list blockingProblems (empty array if none) and optional repairSuggestions.
+You judge APPEARANCE only; you cannot judge factual truth or evidence validity.
+Reply with ONLY one JSON object: {"scientificReadability":n,...,"blockingProblems":[...],"repairSuggestions":[{"repairClass":"...","targetIds":["..."],"instruction":"..."}]}`
 
 export interface DeckAccessLike {
   getSlides: () => RenderSlide[]
@@ -61,6 +73,7 @@ export interface DeckAccessLike {
     system: string,
     user: string,
     signal?: AbortSignal,
+    images?: Array<{ base64: string; mime: string }>,
   ) => Promise<{ ok: boolean; text?: string; error?: string }>
   runStructured?(options: {
     system: string
@@ -394,6 +407,43 @@ export async function executeCreateResearchFigure(deps: {
       // Probed weak tool-calling → keep the model out of the composition loop.
       ...(capabilityProfile?.confidence === 'probed' && !capabilityProfile.toolCalling
         ? { allowModelComposition: false }
+        : {}),
+      // P1-1: the screenshot vision reviewer participates in candidate
+      // selection whenever this session can render previews AND the model
+      // accepts image input (probe-gated; unprobed gateways stay text-only).
+      ...(access.runLlm &&
+      access.getCapabilityProfile &&
+      capabilityProfile?.confidence === 'probed' &&
+      capabilityProfile.vision
+        ? {
+            vision: {
+              renderPreview: (
+                candidate: import('@genoffice/research-harness').CompositionCandidate,
+                planNodes: Array<{ id: string; visible: { title: string } }>,
+              ) =>
+                renderCandidatePreview(candidate, planNodes, slide.widthPx, slide.heightPx),
+              visionReview: async (
+                _candidate: import('@genoffice/research-harness').CompositionCandidate,
+                screenshotPngBase64: string,
+              ): Promise<VisionReview | null> => {
+                const r = await access.runLlm!(
+                  VISION_RUBRIC_PROMPT,
+                  'Review this research figure screenshot. Reply with ONLY the rubric JSON.',
+                  signal,
+                  [toAgentImage(screenshotPngBase64)],
+                )
+                if (!r.ok || !r.text) return null
+                try {
+                  const start = r.text.indexOf('{')
+                  const end = r.text.lastIndexOf('}')
+                  const parsed = JSON.parse(r.text.slice(start, end + 1)) as VisionReview
+                  return typeof parsed.scientificReadability === 'number' ? parsed : null
+                } catch {
+                  return null
+                }
+              },
+            },
+          }
         : {}),
     },
     llm,

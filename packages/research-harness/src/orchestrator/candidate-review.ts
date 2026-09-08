@@ -37,7 +37,11 @@ export type VisionReviewer = (
   screenshotPngBase64: string,
 ) => Promise<VisionReview | null>
 
-export type PreviewRenderer = (candidate: CompositionCandidate) => Promise<string>
+export type PreviewRenderer = (
+  candidate: CompositionCandidate,
+  /** plan node titles for the preview (the orchestrator's current plan) */
+  planNodes: Array<{ id: string; visible: { title: string } }>,
+) => Promise<string>
 
 export interface ReviewedCandidate {
   candidate: CompositionCandidate
@@ -87,6 +91,8 @@ export async function reviewCandidates(input: {
   maxDeliverableNodes?: number
   renderPreview: PreviewRenderer
   visionReview: VisionReviewer
+  /** titles for preview rendering (the orchestrator's current plan) */
+  planNodes?: Array<{ id: string; visible: { title: string } }>
 }): Promise<CandidateReviewResult> {
   const rejected: CandidateReviewResult['rejected'] = []
   const survivors: CompositionCandidate[] = []
@@ -116,7 +122,7 @@ export async function reviewCandidates(input: {
   for (const candidate of survivors) {
     let vision: VisionReview | null = null
     try {
-      const screenshot = await input.renderPreview(candidate)
+      const screenshot = await input.renderPreview(candidate, input.planNodes ?? [])
       if (screenshot) vision = await input.visionReview(candidate, screenshot)
     } catch {
       // vision review is OPTIONAL quality signal; deterministic score still applies

@@ -64,6 +64,19 @@ export const OUTPUT_CONTEXT_MIN_TEXT_PT: Record<OutputContext, number> = {
 
 export type ProvenanceSource = 'user' | 'document' | 'search' | 'dataset' | 'sample' | 'derived'
 
+/** P1-2: publication-grade delivery requires screenshot vision review. */
+export function publicationGradeContract(venue: string, context: string): boolean {
+  const v = venue.toLowerCase()
+  if (v.includes('nature') || v.includes('science') || v.includes('journal') || v.includes('thesis')) {
+    return true
+  }
+  return (
+    context === 'paper-single-column' ||
+    context === 'paper-double-column' ||
+    context === 'full-page-paper'
+  )
+}
+
 export interface ProvenanceSpec {
   /** the claim/value the provenance covers (e.g. "accuracy 92%") */
   claim: string
@@ -106,6 +119,9 @@ export interface FigureContract {
   /** explicit override of the per-context floor */
   minTextPtAtFinalSize?: number
   editability: 'fully-native' | 'hybrid-vector'
+  /** P1-2 venue policy: does delivery REQUIRE screenshot vision review?
+   * Absent = derive from venue/context (publication-grade → 'required'). */
+  visionReview?: 'required' | 'optional'
 }
 
 const FAMILY_SET = new Set<string>(FIGURE_FAMILIES)
@@ -229,8 +245,18 @@ export function parseFigureContract(raw: unknown): FigureContract | null {
     ...(typeof r.minTextPtAtFinalSize === 'number' && r.minTextPtAtFinalSize > 0
       ? { minTextPtAtFinalSize: r.minTextPtAtFinalSize }
       : {}),
-    editability: text(r.editability) === 'hybrid-vector' ? 'hybrid-vector' : 'fully-native',
+      editability: text(r.editability) === 'hybrid-vector' ? 'hybrid-vector' : 'fully-native',
   }
+  // P1-2 venue policy: publication-grade venues/contexts REQUIRE screenshot
+  // vision review unless the contract explicitly downgrades to 'optional'
+  // (documented submission-risk decision).
+  const vr = text(r.visionReview)
+  parsedContract.visionReview =
+    vr === 'required' || vr === 'optional'
+      ? (vr as 'required' | 'optional')
+      : publicationGradeContract(venue, text(output.context))
+        ? 'required'
+        : 'optional'
   // P0-4 fail-closed: a required evidence entry with a missing/unknown
   // source invalidates the WHOLE contract — never ship with weakened gates.
   if (invalidRequiredEvidence) return null

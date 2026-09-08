@@ -26,6 +26,7 @@ import { normalizeVisualPlan } from '../visual/visualPlan.js'
 
 import { minimumHeightForUnits, minimumWidthForUnits } from '../visual/microLayout.js'
 import { auditScientific, type ScientificIssue } from '../critic/scientific-critic.js'
+import { reviewCandidates } from './candidate-review.js'
 import {
   OUTPUT_CONTEXT_DEFAULT_WIDTH_MM,
   OUTPUT_CONTEXT_MIN_TEXT_PT,
@@ -81,6 +82,7 @@ export interface FigureNodeSpec {
 
 /** Typed machine diagnostics for LLM-stage failures (AI-P0-08/09). */
 export type OrchestrationDiagnosticCode =
+  | 'QUALITY_REVIEW_UNAVAILABLE'
   | 'MODEL_SEMANTIC_PROVIDER_FAILED'
   | 'MODEL_SEMANTIC_PARSE_FAILED'
   | 'MODEL_SEMANTIC_SCHEMA_FAILED'
@@ -167,11 +169,23 @@ export interface OrchestrationInput {
   maxSemanticReplans?: number
   /** publication contract (P1): venue, final size, forbidden claims, provenance */
   contract?: import('../contract/figure-contract.js').FigureContract
+  /**
+   * P1-1: production vision review. When provided, surviving candidates are
+   * rendered off-screen, reviewed by a screenshot critic, and the blended
+   * winner is selected — vision PARTICIPATES in candidate selection. When
+   * absent, publication-grade contracts fail the delivery gate honestly
+   * (VISION_REVIEW_UNAVAILABLE) instead of claiming submission quality.
+   */
+  vision?: {
+    renderPreview: import('./candidate-review.js').PreviewRenderer
+    visionReview: import('./candidate-review.js').VisionReviewer
+  }
   /** domain hint when no contract is supplied */
   domainHint?: string
 }
 
 export type OrchestrationStage =
+  | 'vision.review.adopted'
   | 'semantic.plan'
   | 'semantic.plan.started'
   | 'semantic.plan.completed'
@@ -657,6 +671,8 @@ export async function orchestrateFigure(
   const repairs: AppliedRepair[] = []
   let routes: RoutedEdge[] = []
   let unrenderedRelations: RoutedEdge[] = []
+  /** inputs of the CURRENT candidate's routing (for vision re-route adoption) */
+  let lastRouteableInputs: import('../routing/router.js').RoutedEdgeInput[] = []
   // hard bound: the ladder always terminates (fuzz invariant). Sized so the
   // full ladder can reach its honest exhaustion marker: per recompose round
   // up to 2 L3 candidate steps, plus route-fix replays and the final round.
@@ -1043,6 +1059,7 @@ export async function orchestrateFigure(
         { w: input.canvasW, h: input.canvasH },
         state.direction,
       )
+      lastRouteableInputs = routeableInputs
       const evaluation = evaluateCandidateState({ best, routes, candidateId })
       critic = evaluation.critic
       scientificIssues = evaluation.scientificIssues
@@ -1231,6 +1248,78 @@ export async function orchestrateFigure(
   // P0.5 Delivery Gate — the ONLY source of orchestration.ok. Repair budget
   // exhaustion is never acceptance: a non-PASS verdict after the full ladder
   // fails delivery with every diagnostic preserved.
+  // ── P1-1: production vision review participates in candidate selection ──
+  // With the reviewer wired (renderer off-screen preview + screenshot rubric),
+  // surviving candidates are rendered and reviewed; the blended winner is
+  // ADOPTED with a full QA re-run (evaluateCandidateState) so beauty never
+  // outvotes science. Vision review also feeds the venue policy below.
+  let visionReviewed = false
+  if (input.vision && best && critic && candidates.length >= 2) {
+    try {
+      const review = await reviewCandidates({
+        candidates,
+        renderPreview: input.vision.renderPreview,
+        visionReview: input.vision.visionReview,
+        planNodes: state.plan.nodes.map((node) => ({
+          id: node.id,
+          visible: { title: node.visible.title },
+        })),
+      })
+      const winner = review.ranked.find(
+        (entry) =>
+          !entry.vision?.blockingProblems?.length ||
+          entry.vision.blockingProblems.length === 0,
+      )
+      const adopted = winner?.candidate ?? best
+      if (adopted !== best) {
+        const rectMap = new Map<string, import('../routing/geometry.js').Rect>(
+          adopted.solve.placements.map((placement) => [placement.id, placement]),
+        )
+        const adoptedRoutes = routeEdgesWithObstacles(
+          lastRouteableInputs,
+          rectMap,
+          { w: input.canvasW, h: input.canvasH },
+          state.direction,
+        )
+        const evaluation = evaluateCandidateState({
+          best: adopted,
+          routes: adoptedRoutes,
+          candidateId: adopted.priorId ?? 'model',
+        })
+        if (evaluation.critic.verdict !== 'RECOMPOSE') {
+          best = adopted
+          routes = adoptedRoutes
+          critic = evaluation.critic
+          scientificIssues = evaluation.scientificIssues
+          lastScientificHard = evaluation.scientificHard
+          lastPublicationHard = evaluation.publicationHard
+          lastContractViolations = evaluation.contractViolations
+          lastMissingEvidence = evaluation.missingEvidence
+          repairs.push('L4 COMPOSITION_REDESIGN' as AppliedRepair)
+          emit('vision.review.adopted', true, `winner ${adopted.priorId ?? 'model'}`)
+        }
+      }
+      visionReviewed = true
+    } catch {
+      visionReviewed = false
+    }
+  }
+  // ── P1-2 venue policy: publication-grade contracts REQUIRE vision review ──
+  const venue = (input.contract?.venue ?? '').toLowerCase()
+  const publicationGrade =
+    input.contract?.visionReview === 'required' ||
+    (!input.contract?.visionReview &&
+      (venue.includes('nature') ||
+        venue.includes('science') ||
+        venue.includes('journal') ||
+        venue.includes('thesis') ||
+        input.contract?.output.context === 'paper-single-column' ||
+        input.contract?.output.context === 'paper-double-column' ||
+        input.contract?.output.context === 'full-page-paper'))
+  const visionReviewMissing = publicationGrade && !visionReviewed
+  if (publicationGrade && !visionReviewed) {
+    diagnose('QUALITY_REVIEW_UNAVAILABLE', 'publication-grade contract without a screenshot vision review; submission-grade delivery is blocked')
+  }
   const delivery = evaluateDeliveryGate({
     critic,
     scientificHardIssues: lastScientificHard,
@@ -1239,6 +1328,7 @@ export async function orchestrateFigure(
     requiredEvidenceMissing: lastMissingEvidence,
     // truthfully computed from the ladder: a PASS verdict never sets this
     repairBudgetExhausted: ladderExhausted || critic.verdict !== 'PASS',
+    visionReviewRequiredMissing: visionReviewMissing,
   })
   if (!delivery.pass) {
     const error = `delivery gate failed: ${delivery.detail} — ${critic.reason ?? critic.gateIssues.join('; ') ?? 'quality below threshold'}`

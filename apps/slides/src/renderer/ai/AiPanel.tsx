@@ -814,6 +814,7 @@ export function AiPanel({
       signal?: AbortSignal,
       maxTokens?: number,
       jsonSchema?: { name: string; schema: Record<string, unknown> },
+      images?: AgentImage[],
     ): Promise<LlmResult> =>
       new Promise((resolve) => {
         if (signal?.aborted) {
@@ -892,7 +893,13 @@ export function AiPanel({
             requestId,
             settings,
             system,
-            messages: [{ role: 'user', text: user }],
+            messages: [
+              {
+                role: 'user',
+                text: user,
+                ...(images?.length ? { images } : {}),
+              },
+            ],
             ...(maxTokens ? { maxTokens } : {}),
             ...(jsonSchema ? { jsonSchema } : {}),
           })
@@ -913,6 +920,7 @@ export function AiPanel({
       signal?: AbortSignal,
       maxTokens?: number,
       jsonSchema?: { name: string; schema: Record<string, unknown> },
+      images?: AgentImage[],
     ): Promise<LlmResult> => {
       const first = await runLlmAttempt(
         useGenModel ? settingsForGen() : settingsRef.current,
@@ -922,6 +930,7 @@ export function AiPanel({
         signal,
         maxTokens,
         jsonSchema,
+        images,
       )
       if (first.ok || !useGenModel || signal?.aborted) return first
       // Only "request errors" fall back to the user's model for a retry; timeouts/empty output don't switch models (mostly network/output problems, switching won't help)
@@ -938,8 +947,8 @@ export function AiPanel({
       // Creation Orchestrator (create_research_figure): one raw LLM call with
       // the user's own model (no gen-model override) for schema-contract stages.
       // signal: user stop must abort in-flight pipeline LLM calls too (AI-P1-05).
-      runLlm: async (system, user, signal) => {
-        const result = await runLlmOnce(system, user, undefined, false, signal)
+      runLlm: async (system, user, signal, images) => {
+        const result = await runLlmOnce(system, user, undefined, false, signal, undefined, undefined, images)
         return result.ok
           ? { ok: true, text: result.text }
           : { ok: false, error: result.error ?? 'LLM call failed' }

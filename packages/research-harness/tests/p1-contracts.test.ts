@@ -168,10 +168,46 @@ describe('P1 contract-driven orchestration', () => {
       { thesis: plan.thesis, canvasW: 1280, canvasH: 720, contract },
       { semanticPlan: async () => plan },
     )
-    expect(result.ok, result.critic?.gateIssues.join('; ')).toBe(true)
-    // floor 5.5pt at 85mm → canvas detail text must have been scaled ≥ ~21pt
+    // INVARIANT CHANGE (Production Closure 2, P1-2): OLD — a journal contract
+    // shipped without any screenshot vision review. NEW — publication-grade
+    // venues REQUIRE vision review; without a reviewer the delivery gate
+    // blocks with VISION_REVIEW_UNAVAILABLE instead of claiming submission
+    // quality. The typography SSOT result below is still asserted.
     expect(result.critic?.verdict).toBe('PASS')
+    expect(result.ok).toBe(false)
+    expect(result.delivery?.reasons).toContain('VISION_REVIEW_UNAVAILABLE')
+    // forward font scaling still resolved: the smallest effective pt clears
+    // the journal floor (5.5pt at 85mm → scaled canvas pt)
+    expect((result.typography?.minEffectiveTextPt ?? 0) * (85 / (1280 * 25.4 / 96))).toBeGreaterThanOrEqual(5.5 - 0.5)
     expect(result.domain).toBe('general')
+
+    // WITH a vision reviewer wired, the same figure delivers (GOAL P1-1).
+    const reviewed = await orchestrateFigure(
+      {
+        thesis: plan.thesis,
+        canvasW: 1280,
+        canvasH: 720,
+        contract,
+        vision: {
+          renderPreview: async () => 'c2Nhbg==',
+          visionReview: async () => ({
+            scientificReadability: 9,
+            fiveSecondClarity: 9,
+            visualHierarchy: 9,
+            composition: 8,
+            relationClarity: 9,
+            typography: 8,
+            visualRestraint: 8,
+            domainAppropriateness: 8,
+            professionalAppearance: 8,
+            blockingProblems: [],
+          }),
+        },
+      },
+      { semanticPlan: async () => plan },
+    )
+    expect(reviewed.ok, reviewed.critic?.gateIssues.join('; ')).toBe(true)
+    expect(reviewed.delivery?.reasons ?? []).not.toContain('VISION_REVIEW_UNAVAILABLE')
   })
 
   it('reports the resolved domain on the result', async () => {

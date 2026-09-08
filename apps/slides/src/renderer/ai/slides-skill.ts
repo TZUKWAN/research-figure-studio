@@ -154,11 +154,13 @@ export interface DeckAccess {
   /** Whether cloud single-page generation is available (kill switch + gsk login state) */
   isCloudPageGenEnabled?(): Promise<boolean>
   /** Creation Orchestrator: one raw schema-contract LLM call with the user's own model.
-   *  signal: aborted when the user hits stop — in-flight research pipeline LLM calls stop promptly (AI-P1-05). */
+   *  signal: aborted when the user hits stop — in-flight research pipeline LLM calls stop promptly (AI-P1-05).
+   *  images: multimodal screenshots for the vision candidate reviewer (P1-1). */
   runLlm?(
     system: string,
     user: string,
     signal?: AbortSignal,
+    images?: Array<{ base64: string; mime: string }>,
   ): Promise<{ ok: boolean; text?: string; error?: string }>
   /**
    * Structured LLM call (AI-P0-01): passes the JSON schema to the transport

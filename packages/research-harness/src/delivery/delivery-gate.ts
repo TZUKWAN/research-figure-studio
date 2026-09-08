@@ -17,6 +17,7 @@ export type DeliveryGateReason =
   | 'POST_WRITE_LAYOUT_FAIL'
   | 'QUALITY_THRESHOLD_FAIL'
   | 'REPAIR_BUDGET_EXHAUSTED'
+  | 'VISION_REVIEW_UNAVAILABLE'
 
 export interface DeliveryGateInput {
   critic: Pick<CriticVerdict, 'verdict' | 'hardPass' | 'hardGates'>
@@ -30,6 +31,12 @@ export interface DeliveryGateInput {
   requiredEvidenceMissing: number
   /** renderer-side post-write layout audit issues (slides layer) */
   postWriteIssues?: number
+  /**
+   * P1-2 venue policy: the contract REQUIRES screenshot vision review
+   * (publication-grade venue/context) but no vision reviewer reached the
+   * pipeline — a submission-grade PASS is impossible without it.
+   */
+  visionReviewRequiredMissing?: boolean
   /** true when the repair ladder ran out of budget while not yet PASS */
   repairBudgetExhausted: boolean
 }
@@ -61,6 +68,7 @@ export function evaluateDeliveryGate(input: DeliveryGateInput): DeliveryGateResu
   if (input.critic.verdict !== 'PASS') reasons.push('QUALITY_THRESHOLD_FAIL')
   if (input.repairBudgetExhausted && input.critic.verdict !== 'PASS')
     reasons.push('REPAIR_BUDGET_EXHAUSTED')
+  if (input.visionReviewRequiredMissing) reasons.push('VISION_REVIEW_UNAVAILABLE')
 
   const unique = [...new Set(reasons)]
   return {
