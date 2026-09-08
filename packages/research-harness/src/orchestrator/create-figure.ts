@@ -1267,8 +1267,7 @@ export async function orchestrateFigure(
       })
       const winner = review.ranked.find(
         (entry) =>
-          !entry.vision?.blockingProblems?.length ||
-          entry.vision.blockingProblems.length === 0,
+          !entry.vision?.blockingProblems?.length || entry.vision.blockingProblems.length === 0,
       )
       const adopted = winner?.candidate ?? best
       if (adopted !== best) {
@@ -1318,7 +1317,10 @@ export async function orchestrateFigure(
         input.contract?.output.context === 'full-page-paper'))
   const visionReviewMissing = publicationGrade && !visionReviewed
   if (publicationGrade && !visionReviewed) {
-    diagnose('QUALITY_REVIEW_UNAVAILABLE', 'publication-grade contract without a screenshot vision review; submission-grade delivery is blocked')
+    diagnose(
+      'QUALITY_REVIEW_UNAVAILABLE',
+      'publication-grade contract without a screenshot vision review; submission-grade delivery is blocked',
+    )
   }
   const delivery = evaluateDeliveryGate({
     critic,

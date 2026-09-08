@@ -39,6 +39,7 @@ import {
   executeCreateResearchFigure,
   type DurableFigureState,
 } from '../research/create-research-figure-tool'
+import { executeStructuredEdit } from '../research/edit-plan'
 import { runLayoutScript, type LayoutScriptElement, type SlideStylePatch } from './layout-script'
 import { t } from '../i18n/locale'
 
@@ -1138,6 +1139,21 @@ const TOOLS: AgentToolDef[] = [
         },
       },
       required: ['slideIndex', 'nodes'],
+    },
+  },
+  {
+    name: 'edit_research_figure',
+    description:
+      "[Research Figure Mode] Edit an EXISTING generated research figure with ONE structured instruction (works on any model, including weak tool-callers): the figure's semantic graph is recovered from slide metadata, the model returns a validated EditPlan over semantic ids, and a deterministic executor applies it as one atomic transaction (auto-rollback on any failure). Use this for moves, resizes, text edits, adding/removing relations on the current figure. input: {instruction: string}.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        instruction: {
+          type: 'string',
+          description: 'What to change on the current research figure (plain language)',
+        },
+      },
+      required: ['instruction'],
     },
   },
   {
@@ -4072,6 +4088,24 @@ async function executeTool(
         ...(signal ? { signal } : {}),
         ...(onProgress ? { onProgress } : {}),
       })
+    }
+    case 'edit_research_figure': {
+      // P1-3: weak-model Structured EditPlan — semantic-id operations applied
+      // by the deterministic executor as ONE atomic transaction.
+      const instruction = String(call.input.instruction ?? '').trim()
+      if (!instruction) {
+        return fail(t('aiFailNewElement'), 'instruction is required')
+      }
+      const r = await executeStructuredEdit(access, instruction, {
+        ...(state?.durableFigureState?.slideIndex != null
+          ? { slideIndex: state.durableFigureState.slideIndex }
+          : {}),
+        ...(signal ? { signal } : {}),
+      })
+      if (!r.ok) {
+        return fail(t('aiFailNewElement'), r.output)
+      }
+      return { output: r.output, mutated: true, summary: t('aiSumNewShape', { n: 1 }) }
     }
     case 'create_input_core_output': {
       const idx = Number(call.input.slideIndex)

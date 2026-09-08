@@ -67,7 +67,12 @@ export type ProvenanceSource = 'user' | 'document' | 'search' | 'dataset' | 'sam
 /** P1-2: publication-grade delivery requires screenshot vision review. */
 export function publicationGradeContract(venue: string, context: string): boolean {
   const v = venue.toLowerCase()
-  if (v.includes('nature') || v.includes('science') || v.includes('journal') || v.includes('thesis')) {
+  if (
+    v.includes('nature') ||
+    v.includes('science') ||
+    v.includes('journal') ||
+    v.includes('thesis')
+  ) {
     return true
   }
   return (
@@ -245,7 +250,7 @@ export function parseFigureContract(raw: unknown): FigureContract | null {
     ...(typeof r.minTextPtAtFinalSize === 'number' && r.minTextPtAtFinalSize > 0
       ? { minTextPtAtFinalSize: r.minTextPtAtFinalSize }
       : {}),
-      editability: text(r.editability) === 'hybrid-vector' ? 'hybrid-vector' : 'fully-native',
+    editability: text(r.editability) === 'hybrid-vector' ? 'hybrid-vector' : 'fully-native',
   }
   // P1-2 venue policy: publication-grade venues/contexts REQUIRE screenshot
   // vision review unless the contract explicitly downgrades to 'optional'

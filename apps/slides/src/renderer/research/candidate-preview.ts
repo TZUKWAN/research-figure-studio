@@ -11,7 +11,11 @@
 import type { CompositionCandidate } from '@genoffice/research-harness'
 import type { RenderSlide, ShapeRenderNode } from '@genoffice/pptx-render'
 // Konva is imported LAZILY: static import would pull node-canvas into every jsdom test
-type RenderSlidesFn = (slides: RenderSlide[], images: Map<string, HTMLImageElement>, pixelRatio?: number) => Promise<string[]>
+type RenderSlidesFn = (
+  slides: RenderSlide[],
+  images: Map<string, HTMLImageElement>,
+  pixelRatio?: number,
+) => Promise<string[]>
 let renderSlidesToPngBase64: RenderSlidesFn | null = null
 async function rasterize(): Promise<RenderSlidesFn> {
   if (!renderSlidesToPngBase64) {

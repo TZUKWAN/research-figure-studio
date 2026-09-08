@@ -178,7 +178,9 @@ describe('P1 contract-driven orchestration', () => {
     expect(result.delivery?.reasons).toContain('VISION_REVIEW_UNAVAILABLE')
     // forward font scaling still resolved: the smallest effective pt clears
     // the journal floor (5.5pt at 85mm → scaled canvas pt)
-    expect((result.typography?.minEffectiveTextPt ?? 0) * (85 / (1280 * 25.4 / 96))).toBeGreaterThanOrEqual(5.5 - 0.5)
+    expect(
+      (result.typography?.minEffectiveTextPt ?? 0) * (85 / ((1280 * 25.4) / 96)),
+    ).toBeGreaterThanOrEqual(5.5 - 0.5)
     expect(result.domain).toBe('general')
 
     // WITH a vision reviewer wired, the same figure delivers (GOAL P1-1).

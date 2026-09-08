@@ -51,7 +51,10 @@ export interface ReviewedCandidate {
 }
 
 /** Vision rubric weights (sum = 1). GOAL §二十. */
-export const VISION_WEIGHTS: Record<keyof Omit<VisionReview, 'blockingProblems' | 'repairSuggestions'>, number> = {
+export const VISION_WEIGHTS: Record<
+  keyof Omit<VisionReview, 'blockingProblems' | 'repairSuggestions'>,
+  number
+> = {
   scientificReadability: 0.15,
   fiveSecondClarity: 0.15,
   visualHierarchy: 0.1,
@@ -139,11 +142,10 @@ export async function reviewCandidates(input: {
     }
     const deterministic = Math.max(0, 10 - candidate.score / 100)
     const visionScore = vision ? visionOverall(vision) : null
-    const blendedScore = Math.round(
-      (BLEND.deterministic * deterministic +
-        BLEND.vision * (visionScore ?? deterministic)) *
-        100,
-    ) / 100
+    const blendedScore =
+      Math.round(
+        (BLEND.deterministic * deterministic + BLEND.vision * (visionScore ?? deterministic)) * 100,
+      ) / 100
     ranked.push({ candidate, vision, blendedScore })
   }
 

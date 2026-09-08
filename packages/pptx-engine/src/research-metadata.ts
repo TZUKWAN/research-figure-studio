@@ -55,6 +55,8 @@ export interface ResearchFigureSlidePayload {
   relations: ResearchRelationRecord[]
   /** typographic resolution actually used (RENDER-P1-08 fallback traceability) */
   typography?: { fontScale: number; measurer: string }
+  /** P1-3: intent trail of structured edits applied to this figure */
+  editTrail?: string[]
 }
 
 const NAME_PREFIX = 'rfs1:'
