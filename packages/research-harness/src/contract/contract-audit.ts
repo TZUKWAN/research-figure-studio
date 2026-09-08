@@ -1,5 +1,5 @@
 /**
- * Figure Contract runtime audit (P0.5, GOAL §七/§八/§九).
+ * Figure Contract runtime audit (P0.5, GOAL sections 7/8/9).
  *
  * Checks the FINAL render intent — every string that will actually be written
  * onto the canvas (macro titles/details, micro-unit labels, edge labels) —
@@ -46,7 +46,7 @@ export interface ContractAuditInput {
   evidenceRefs?: Map<string, string[]>
   /**
    * P0-7: provenance refs are a SEPARATE channel — evidenceRefs must never
-   * masquerade as provenance for a quantitative claim (GOAL 禁止事项 #8).
+   * masquerade as provenance for a quantitative claim (GOAL forbidden item 8).
    */
   provenanceRefs?: Map<string, string[]>
   /**
@@ -92,7 +92,8 @@ export function auditFigureContract(input: ContractAuditInput): ContractAuditIss
   // ── allowed whitelist (P0-7, mode allowedExact): a whole visible text must
   // EQUAL an allowlist entry after normalization. `includes` matching would
   // let an authorized phrase whitewash appended fabricated claims
-  // ("模型性能提升" must NOT admit "模型性能提升 37.8%，世界领先"). An entry
+  // (an authorized phrase must NOT admit that same phrase with an appended
+ // fabricated percentage and superiority claim). An entry
   // ending in `*` grants PREFIX composition (token-style) for generated
   // variants of an authorized stem — never for numbers/percent signs. ──
   const allowed = (contract.visibleTextPolicy?.allowed ?? []).map(norm).filter(Boolean)

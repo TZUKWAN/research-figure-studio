@@ -1,5 +1,5 @@
 /**
- * Unified repair taxonomy (P0.5, GOAL §十一/§十二).
+ * Unified repair taxonomy (P0.5, GOAL sections 11/12).
  *
  * One enum, one ladder table. UI layers may render friendlier labels, but the
  * runtime only ever emits/compares these classes. Ladder entries declare the

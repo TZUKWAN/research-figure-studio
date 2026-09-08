@@ -13,7 +13,7 @@ import {
  * PPTX XML through the real pipeline.
  *
  * The dblclick target is derived from the SAVED package itself (EMU offsets of
- * the shape whose text is 酶促反应一), so the test does not guess layout: it
+ * the shape whose text matches the fixture label), so the test does not guess layout: it
  * saves once, aims at the real shape, double-clicks, types, commits (Esc),
  * saves again and diffs the XML.
  */

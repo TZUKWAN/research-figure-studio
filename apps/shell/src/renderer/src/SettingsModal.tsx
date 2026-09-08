@@ -126,7 +126,7 @@ function Field({
 }
 
 /** Standards pane: view / edit / reset the AI drawing prompt text. Only prompt
- * TEXT is editable 鈥?layout rules, the Component Registry and QA thresholds stay code-owned. */
+ * TEXT is editable - layout rules, the Component Registry and QA thresholds stay code-owned. */
 function StandardsPane({ t, lang }: { t: TFunc; lang: string }) {
   const [defs, setDefs] = useState<
     { id: string; titleZh: string; titleEn: string; descZh: string; descEn: string }[]

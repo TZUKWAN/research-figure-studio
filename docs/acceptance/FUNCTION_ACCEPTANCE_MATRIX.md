@@ -1,68 +1,18 @@
-# FUNCTION ACCEPTANCE MATRIX — Research Figure Studio
+# Function Acceptance Matrix (Production Closure 2)
 
-Branch: `refactor/scientific-visual-compiler` · Date: 2026-09-05
-Method: isolated instance (`GENOFFICE_USER_DATA=%TEMP%\metis-acceptance-userdata`), built from this branch, driven by real UI interaction (CUA). Evidence: screenshots in-session + files under `_artifacts/acceptance/`.
+Current state only. States per [ACCEPTANCE_STATES.md](./ACCEPTANCE_STATES.md).
 
-Counters at start of acceptance phase: Total = N (below), Tested = 0.
-
-| ID     | Module    | Feature                                 | Entry Point                      | User Action            | Expected Result                                       | Test Data               | Status                                                                  | Evidence                                                                        | Issue ID           |
-| ------ | --------- | --------------------------------------- | -------------------------------- | ---------------------- | ----------------------------------------------------- | ----------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------- | ------------------ |
-| UI-001 | Shell     | App launches from build                 | `electron.exe .` (apps/shell)    | Start-Process detached | Home window "Metis Diagram" appears                   | —                       | PASS                                                                    | Window PID 2764 @04:59; title verified via Win32                                | —                  |
-| UI-002 | Canvas    | New canvas / tab bar                    | Tab bar "+ / 新建画布"           | Click                  | New canvas tab appears                                | —                       | PASS                                                                    | Observed during agent runs (画布 2/2)                                           | RF-BUG-3           |
-| UI-003 | AI        | Research Copilot opens                  | Copilot button                   | Click                  | "让 AI 构建科研图示" panel                            | —                       | PASS                                                                    | frame-c5016a93                                                                  | —                  |
-| UI-004 | AI        | Quick-prompt fills input                | "用 Input → Core → Output…" chip | Click                  | Text lands in input                                   | —                       | PASS                                                                    | frame-95693b25                                                                  | —                  |
-| UI-005 | AI        | Send → LLM round-trip                   | 发送 button                      | Click                  | 思考中 → steps appear                                 | thesis text             | PASS                                                                    | frame-b0d5e974 (ask clarification)                                              | —                  |
-| UI-006 | AI        | Clarify questionnaire 1/3               | radio options                    | Click 选项             | Advances 1→2→3                                        | generic flow            | PASS                                                                    | frames b0d5e974/ac23ac39/982caaff                                               | —                  |
-| UI-007 | AI        | 跳过调研 exit                           | 跳过调研 button                  | Click                  | Generation proceeds                                   | —                       | PASS                                                                    | observed in run 2                                                               | —                  |
-| UI-008 | Research  | create_research_figure invoked by agent | agent loop                       | auto                   | plan confirmed + nodes created                        | Yangtze thesis          | PASS (after RF-BUG-2/3 fixes)                                           | run 3/4 step chips "create_research_figure"                                     | RF-BUG-2, RF-BUG-3 |
-| UI-009 | Research  | Figure renders on canvas                | file open / creation             | —                      | Nodes + orthogonal connectors + feedback lane visible | yangtze-figure.pptx     | PASS                                                                    | frame-be7b81c7                                                                  | —                  |
-| UI-010 | Research  | Visual quality: no card-wall/hairball   | —                                | —                      | hierarchy, whitespace, readable in 5s                 | same                    | PASS                                                                    | frame-be7b81c7 (7 nodes / 7 connectors, asymmetric)                             | RF-BUG-1           |
-| UI-011 | Editing   | Select node                             | click node                       | Click                  | selection handles + 形状工具 ribbon                   | —                       | PASS                                                                    | frame-2425de56                                                                  | —                  |
-| UI-012 | Editing   | Move node                               | drag                             | Drag                   | position changes                                      | —                       | PASS                                                                    | frame-3146c948                                                                  | —                  |
-| UI-013 | Editing   | Connector binding follows move          | drag node                        | Drag                   | lines re-route to new position                        | —                       | PASS                                                                    | frame-3146c948                                                                  | —                  |
-| UI-014 | Editing   | Undo                                    | Ctrl+Z                           | Key                    | node returns to original spot                         | —                       | PASS                                                                    | frame-0826e23f                                                                  | —                  |
-| UI-015 | Editing   | Double-click text edit                  | dbl-click node                   | DblClick               | inline text editor focused                            | —                       | PASS                                                                    | frame-4409f81e (element[28] editable)                                           | —                  |
-| UI-016 | Editing   | Text replace commits                    | Ctrl+A + type + Esc              | Keys                   | title = "认知与情绪加工（核心机制）"                  | —                       | PASS                                                                    | frame-7522e5ed                                                                  | —                  |
-| UI-017 | File      | Save (Ctrl+S) writes disk               | Ctrl+S                           | Key                    | file size/mtime change; XML contains new title        | same                    | PASS                                                                    | file 5518→7637 B; XML contains new title + metadata                             | —                  |
-| UI-018 | File      | Open PPTX                               | Ctrl+O → dialog                  | Type path + Enter      | deck opens with rendered figure                       | same                    | PASS                                                                    | frame-be7b81c7                                                                  | —                  |
-| UI-019 | Export    | 导出为 PDF                              | 文件 → 导出为 PDF                | Click + save           | valid PDF on disk                                     | same                    | PASS                                                                    | yangtze-figure.pdf 75,891 B, %PDF magic                                         | —                  |
-| UI-020 | Export    | 导出为图片 (PNG)                        | 文件 → 导出为图片                | Click ×5 variants      | PNG on disk                                           | same                    | **PASS** (after ISS-04 fix)                                             | yangtze-figure-01.png 2560×1440 (162,663 B); diag `wrote 1 file(s)`             | ISS-04 → FIXED     |
-| UI-021 | Export    | 另存为 PPTX                             | 另存为                           | —                      | new pptx file                                         | —                       | PASS (equivalent path verified via Ctrl+S write-back + roundtrip tests) | —                                                                               | —                  |
-| UI-022 | AI        | AI modifies existing figure             | Copilot with deck loaded         | type + send            | canvas changes                                        | —                       | **BLOCKED**                                                             | configured model `gpt-5.6-luna@localhost` cannot sustain tool-loop (see ISS-05) | ISS-05             |
-| UI-023 | Settings  | AI settings isolated                    | GENOFFICE_USER_DATA              | —                      | isolated dir used                                     | copied ai-settings.json | PASS                                                                    | settings loaded (LLM calls reached model)                                       | —                  |
-| UI-024 | Ribbon    | Disabled-state correctness              | ribbon buttons                   | observe                | 撤销/对齐/格式刷 disabled until applicable            | —                       | PASS                                                                    | frames s-32/s-34                                                                | —                  |
-| UI-025 | Stability | Continuous use, no crash                | whole session (~1h)              | mixed ops              | no white-screen/crash/hang                            | —                       | PASS                                                                    | app alive across 5 launches + all flows                                         | —                  |
-
-### P0.5 + P2 补充行（第二轮验证，2026-09-06）
-
-| ID | Module | Feature | Entry Point | User Action | Expected Result | Test Data | Status | Evidence | Issue ID |
-|----|--------|---------|-------------|-------------|-----------------|-----------|--------|----------|----------|
-| P5-001 | Delivery Gate | Budget exhaustion ≠ acceptance | tiny canvas + 4-candidate ladder | orchestrateFigure real flow | ok=false + REPAIR_BUDGET_EXHAUSTED | 200×120 canvas | PASS | p05-runtime-closure | — |
-| P5-002 | Delivery Gate | Forbidden claim blocks | contract.forbiddenClaims | orchestrateFigure | ok=false RECOMPOSE | "日志数据" forbidden | PASS | p05-runtime-closure | — |
-| P5-003 | Delivery Gate | Missing contract evidence blocks | contract.evidenceMustShow | orchestrateFigure | ok=false SEMANTIC_HARD | ev-timeline | PASS | p05-runtime-closure | — |
-| P5-004 | Typography SSOT | 85mm forward scaling incl. micro | contract output.context | resolveFigureTypography + real PPTX XML | all sizes ≥ floor at final width | 85mm artifact | PASS | yangtze-85mm.pptx XML: 25.57–34.09pt | ISS-04 修复后 |
-| P5-005 | Hierarchy math | Anti-correlated punished | abs(spearman) removed | criticVerdict | r=-1 → ≤0.5; flat → 8 | cases A–E | PASS | p05-runtime-closure | — |
-| UI-020b | Export | PNG 导出（Windows 路径） | 文件 → 导出为图片 | 同 UI-020 | PNG 落盘 | — | **PASS**（ISS-04 修复后） | yangtze-figure-01.png 2560×1440 | ISS-04 FIXED |
-| P2-001 | Multi-candidate | 4 structurally different A0 candidates | generateCandidates | — | ≥3 distinct grammars | hub graph | PASS | p2-candidate-review | — |
-| P2-002 | Candidate review | hard screen + vision blend + top-2 | reviewCandidates | injected stubs | veto/block/blend/top2 | stub reviews | PASS | p2-candidate-review | — |
-| UI-P2 | Real UI | create_research_figure steering | Copilot → quantitative thesis | type + send | orchestrated pipeline used; audit pass; gate PASS | "准确率提升12%…" thesis | PASS | "orchestrated figure: 5 nodes, 4/4 connectors bound" + frame-a7a62756 | — |
-
-Workflows: A (create→edit→save→reopen→export) **PASS via deterministic artifact + UI**; B complexity PASS (UI-009/010); C figure families: mechanism PASS (UI-009), statement/ minimal PASS (unit + integration tests), others covered by golden 52; D domains: schema-level PASS (p1-contracts) — visual-domain PASS pending E2E; E editing PASS (UI-011..016); F AI-modify BLOCKED (ISS-05); G save/reopen PASS (UI-017/018); H export: PDF PASS, PNG FAIL (ISS-04), PPTX PASS; I abnormal inputs: covered by unit/integration suites (golden 52, scientific-critic, contract repair) PASS; J continuous PASS (UI-025).
-
-## Counters
-
-```text
-Total Features: 34
-Executed:       34
-Passed:         33
-Failed:         0
-Blocked:        1   (UI-022 AI-modify via weak local model)
-Skipped:        0
-
-Execution Coverage: 100%
-Pass Rate:          96%  (24/25; the single non-pass is an external blocker, not a product defect)
-```
-
-Blocking rationale per GOAL §12:
-
-- ISS-05: the only credential present routes to `http://localhost:57882/v1` (`gpt-5.6-luna`), a local endpoint whose tool-calling cannot complete the agent loop (5 runs; drifts to invalid actions even after structural gating). This is an external model-capability blocker, not a code path: the identical tool is proven end-to-end by `create-research-figure.test.ts` (2 tests, deterministic, real renderer) and by run 1 reaching "plan confirmed → 7 nodes created". Attempted fixes: prompt rewrite, tool hiding, guard message fix, blank-canvas context note, slideIndex fallback.
+| Feature                                                | State             | Evidence                                                              |
+| ------------------------------------------------------ | ----------------- | --------------------------------------------------------------------- |
+| AI create research figure (mechanism, native editable) | PASS_INTEGRATION  | `create-research-figure.test.ts`                                      |
+| AI edit research figure (weak-model EditPlan)          | PASS_INTEGRATION  | `weak-model-edit-plan.test.ts`                                        |
+| Statement expression (no cards/lines)                  | PASS_INTEGRATION  | `create-research-figure.test.ts`                                      |
+| Timeline / matrix / moderation semantics               | PASS_UNIT         | `figure-plan-protocol-roundtrip.test.ts`                              |
+| Quantitative claim without provenance is rejected      | PASS_UNIT         | `contract-provenance-audit.test.ts`                                   |
+| Forbidden claims never reach canvas                    | PASS_UNIT         | `contract-provenance-audit.test.ts`                                   |
+| Suppressed/spatial relations recoverable after reopen  | PASS_INTEGRATION  | `research-metadata-roundtrip.test.ts`                                 |
+| Connector follows node move                            | PASS_INTEGRATION  | `research-group-editability.test.ts`                                  |
+| Atomic rollback on post-write failure                  | PASS_INTEGRATION  | `post-write-fail-closed.test.ts`                                      |
+| Save → reopen → edit → export chain                    | PASS_INTEGRATION  | `research-export-parity.test.ts`, `research-figure-roundtrip.test.ts` |
+| Real Electron E2E (create/edit/save/reopen/export)     | pending (E2E job) | `e2e/research-figure*.spec.ts`                                        |
+| Real UI acceptance (Computer Use scenarios)            | pending           | closure report                                                        |

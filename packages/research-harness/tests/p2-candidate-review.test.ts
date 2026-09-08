@@ -1,5 +1,5 @@
 /**
- * P2 candidate review tests (GOAL §十四-§二十二): hard screen, fingerprint
+ * P2 candidate review tests (GOAL section 14-#22): hard screen, fingerprint
  * dedup, vision blend, top-2 budget. Selection logic is exercised with an
  * injected stub renderer/vision reviewer — identical to the app wiring.
  */

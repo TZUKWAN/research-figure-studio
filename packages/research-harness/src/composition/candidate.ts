@@ -1633,7 +1633,7 @@ export function generateCandidates(
       `UNSUPPORTED_FIGURE_FAMILY: no eligible grammar composed family "${ctx.family}" on this graph`,
     )
   }
-  // GOAL §十五: near-identical compositions are deduped — only the best of a
+  // GOAL section 15: near-identical compositions are deduped — only the best of a
   // too-similar pair survives, so what remains is genuine visual competition.
   candidates = dedupeByFingerprint(candidates)
   return candidates.sort(

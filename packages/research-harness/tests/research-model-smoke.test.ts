@@ -37,7 +37,7 @@ async function productionTransport(request: {
   user: string
   signal?: AbortSignal
   jsonSchema?: { name: string; schema: Record<string, unknown> }
-}): Promise<{ ok: boolean; text?: string; error?: string; mode?: string }> {
+}): Promise<{ ok: boolean; text?: string; error?: string; mode: 'native-json' | 'plain' }> {
   const messages: Array<Record<string, unknown>> = [
     { role: 'system', content: request.system },
     { role: 'user', content: request.user },
@@ -68,7 +68,7 @@ async function productionTransport(request: {
     ...(request.signal ? { signal: request.signal } : {}),
   })
   if (!response.ok) {
-    return { ok: false, error: `HTTP ${response.status}: ${await response.text()}` }
+    return { ok: false, error: `HTTP ${response.status}: ${await response.text()}`, mode: 'plain' }
   }
   const json = (await response.json()) as {
     choices?: Array<{ message?: { content?: string } }>
@@ -104,7 +104,7 @@ describe.skipIf(!HAS_CREDENTIALS)('research model smoke (P1-4, real model)', () 
         result.ok,
         `planner failed: ${result.diagnostics.map((d) => `${d.code}: ${d.message}`).join('; ')}`,
       ).toBe(true)
-      expect(result.value!.nodes.length).toBeGreaterThan(0)
+      expect((result.value as unknown as { nodes: unknown[] }).nodes.length).toBeGreaterThan(0)
     },
   )
 

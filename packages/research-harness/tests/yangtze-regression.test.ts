@@ -13,7 +13,7 @@ import { routeEdges } from '../src/routing/router.js'
  * even on a rich content + A0 fallback.
  *
  * The planner output here is what the previous round was missing:
- *  1. The four methods (原型筛选 / 跨文化认知 / 行为建模 / 策略优化) appear
+ *  1. The four method nodes from the fixture chain appear (by visible title)
  *     as CORE nodes, each with sub-step children, not collapsed into one
  *     "complex mechanism" card.
  *  2. primarySpine names the chain in research order so the composer lays

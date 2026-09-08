@@ -1,5 +1,5 @@
 /**
- * Render Typography — single source of truth (P0.5, GOAL §四).
+ * Render Typography — single source of truth (P0.5, GOAL section 4).
  *
  * The orchestrator resolves EVERY visible font size exactly once (per semantic
  * node, plus the micro-unit roles), applying the contract's final-size scale.
@@ -45,7 +45,7 @@ export function contractFontScale(contract: FigureContract | undefined, canvasW:
     contract.minTextPtAtFinalSize ?? OUTPUT_CONTEXT_MIN_TEXT_PT[contract.output.context]
   const canvasMm = (canvasW * 25.4) / 96
   // The scale must lift the SMALLEST text (micro annotation base, 9pt) — not
-  // just node details — or micro units print below the floor (GOAL §四).
+  // just node details — or micro units print below the floor (GOAL section 4).
   const smallestDefault = Math.min(
     MICRO_BASE.annotationPt,
     ...Object.values(SEMANTIC_NODE_STYLES).map((style) => style.detailSizePt),

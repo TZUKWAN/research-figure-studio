@@ -24,7 +24,11 @@ for (const file of git.stdout.trim().split('\n')) {
   // A deleted tracked file remains in git ls-files until the change is committed.
   if (!existsSync(join(root, file))) continue
   const isCode = /\.(ts|tsx|mjs|cjs|js)$/.test(file)
-  const isDoc = /\.(md|html?)$/.test(file) && !file.includes('/ai/prompts/')
+  // docs/audit/** holds internal audit working papers (historical analysis
+  // documents written in Chinese during the audit rounds) — not product
+  // documentation, same exemption class as the prompt guides.
+  const isDoc =
+    /\.(md|html?)$/.test(file) && !file.includes('/ai/prompts/') && !file.includes('docs/audit/')
   if (!isCode && !isDoc) continue
   const lines = readFileSync(join(root, file), 'utf8').split('\n')
   lines.forEach((line, index) => {

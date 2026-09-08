@@ -1,5 +1,5 @@
 /**
- * Multi-Candidate Art Director selection logic (P2, GOAL §十四-§二十二).
+ * Multi-Candidate Art Director selection logic (P2, GOAL section 14-#22).
  *
  * Pure selection logic with INJECTED render/vision capabilities:
  *   1. hard-gate screen (never sends failing candidates to a vision model)
@@ -50,7 +50,7 @@ export interface ReviewedCandidate {
   blendedScore: number
 }
 
-/** Vision rubric weights (sum = 1). GOAL §二十. */
+/** Vision rubric weights (sum = 1). GOAL section 20. */
 export const VISION_WEIGHTS: Record<
   keyof Omit<VisionReview, 'blockingProblems' | 'repairSuggestions'>,
   number
@@ -79,7 +79,7 @@ export interface CandidateReviewResult {
   /** survivors of the hard screen, ranked best-first */
   ranked: ReviewedCandidate[]
   rejected: Array<{ candidate: CompositionCandidate; reason: string }>
-  /** top candidates entering the refinement budget (max 2, GOAL §二十一) */
+  /** top candidates entering the refinement budget (max 2, GOAL section 21) */
   top2: ReviewedCandidate[]
   refinementBudget: number
 }
@@ -101,7 +101,7 @@ export async function reviewCandidates(input: {
   const survivors: CompositionCandidate[] = []
 
   // 1) deterministic hard screen: geometry-illegal or node-intersecting
-  // candidates are eliminated before any vision token is spent (GOAL §十六)
+  // candidates are eliminated before any vision token is spent (GOAL section 16)
   for (const candidate of input.candidates) {
     if (candidate.solve.issues.length > 0) {
       rejected.push({
@@ -131,8 +131,8 @@ export async function reviewCandidates(input: {
       // vision review is OPTIONAL quality signal; deterministic score still applies
       vision = null
     }
-    // vision veto: blocking problems fail the candidate outright (GOAL §二十:
-    // 科学错误绝不能被漂亮抵消 — and hard visual blockers are not averaged away)
+    // vision veto: blocking problems fail the candidate outright (GOAL section 20:
+    // scientific errors are never outvoted by beauty — and hard visual blockers are not averaged away)
     if (vision && vision.blockingProblems.length > 0) {
       rejected.push({
         candidate,
@@ -155,7 +155,7 @@ export async function reviewCandidates(input: {
     ranked,
     rejected,
     top2,
-    // GOAL §二十二: initial 4, top-2 refinement, max 1 refinement per candidate
+    // GOAL section 22: initial 4, top-2 refinement, max 1 refinement per candidate
     refinementBudget: Math.min(2, top2.length),
   }
 }

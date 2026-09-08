@@ -1,5 +1,5 @@
 /**
- * Delivery Gate (P0.5, GOAL §三/§十二).
+ * Delivery Gate (P0.5, GOAL sections 3/12).
  *
  * Single, non-bypassable authority for "may this figure be delivered?".
  * Repair-budget exhaustion is NEVER acceptance: if the pipeline ran out of

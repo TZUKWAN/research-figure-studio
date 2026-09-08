@@ -872,7 +872,7 @@ function clamp10(v: number): number {
   return Math.max(0, Math.min(10, Math.round(v * 10) / 10))
 }
 
-/** Average-rank assignment so ties split rank mass evenly (GOAL §五). */
+/** Average-rank assignment so ties split rank mass evenly (GOAL section 5). */
 function rankWithTies(values: number[]): number[] {
   const sorted = [...values].sort((a, b) => a - b)
   const rankOf = new Map<number, number>()

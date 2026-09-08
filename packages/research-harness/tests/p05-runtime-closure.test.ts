@@ -1,6 +1,6 @@
 /**
- * P0.5 Runtime Closure tests (GOAL §三/§四/§五/§六/§二十八A).
- * Delivery Gate 是 orchestration.ok 的唯一来源；预算耗尽绝不等于交付。
+ * P0.5 Runtime Closure tests (GOAL sections 3/#4/#5/#6/#28A).
+ * The Delivery Gate is the ONLY source of orchestration.ok; budget exhaustion never equals delivery.
  */
 import { describe, expect, it } from 'vitest'
 import { evaluateDeliveryGate } from '../src/delivery/delivery-gate.js'
