@@ -219,6 +219,72 @@ export function verifyFigureWrite(
       )
     }
   }
+  // ── P0-5: connector verification — bidirectional, not just a count ──
+  // 1. every planned binding (semantic edge) has a native connector;
+  // 2. every rendered connector carries a semanticEdgeId that maps back to a
+  //    planned binding (a connector A→C cannot masquerade as A→B);
+  // 3. the counts agree in BOTH directions;
+  // 4. inhibition bars exist for their edges.
+  const renderedConnectors = new Map<string, { sourceId: string; componentType?: string }>()
+  const renderedBars = new Set<string>()
+  const collect = (nodes: unknown[]) => {
+    for (const raw of nodes) {
+      const node = raw as {
+        sourceId?: string
+        semanticMetadata?: Record<string, unknown>
+        children?: unknown[]
+      }
+      const meta = node.semanticMetadata
+      if (meta?.componentType === 'research-connector' && typeof meta.semanticEdgeId === 'string') {
+        renderedConnectors.set(meta.semanticEdgeId, {
+          sourceId: node.sourceId ?? '(unknown)',
+          componentType: 'research-connector',
+        })
+      }
+      if (
+        meta?.componentType === 'research-inhibition-bar' &&
+        typeof meta.semanticEdgeId === 'string'
+      ) {
+        renderedBars.add(meta.semanticEdgeId)
+      }
+      if (Array.isArray(node.children)) collect(node.children)
+    }
+  }
+  collect(slide.nodes)
+
+  const plannedEdgeIds = new Set<string>()
+  for (const binding of plan.bindings) {
+    plannedEdgeIds.add(binding.semanticEdgeId)
+    if (!renderedConnectors.has(binding.semanticEdgeId)) {
+      issues.push(
+        `semantic relation ${binding.semanticEdgeId} has no native connector on the rebuilt slide`,
+      )
+    }
+  }
+  for (const [edgeId, rendered] of renderedConnectors) {
+    if (!plannedEdgeIds.has(edgeId)) {
+      issues.push(
+        `rendered connector ${rendered.sourceId} carries unknown semanticEdgeId "${edgeId}" (endpoint swap or stale relation)`,
+      )
+    }
+  }
+  if (renderedConnectors.size !== plan.bindings.length) {
+    issues.push(
+      `connector count mismatch: ${renderedConnectors.size} rendered vs ${plan.bindings.length} planned semantic relations`,
+    )
+  }
+  for (const element of plan.elements) {
+    if (
+      element.semanticMetadata.componentType === 'research-inhibition-bar' &&
+      typeof element.semanticMetadata.semanticEdgeId === 'string' &&
+      !renderedBars.has(element.semanticMetadata.semanticEdgeId)
+    ) {
+      issues.push(
+        `inhibition bar for edge ${element.semanticMetadata.semanticEdgeId} missing on the rebuilt slide`,
+      )
+    }
+  }
+
   for (const defect of plan.defects) {
     if (defect.severity === 'hard') issues.push(`plan defect: ${defect.message}`)
   }
