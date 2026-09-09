@@ -1568,7 +1568,7 @@ export function generateCandidates(
         a.prior.id.localeCompare(b.prior.id),
     )
   // GOAL fourteen (P2): four structurally different candidates for A0; family strategy reorders/filters the pool
-    const wanted = autonomy === 'A0' ? 4 : 1
+  const wanted = autonomy === 'A0' ? 4 : 1
   const selected: Array<{ prior: CompositionPrior; fit: number }> = []
   const usedGrammars = new Set<string>()
   for (const item of ranked) {
@@ -1656,8 +1656,8 @@ export function compositionFingerprint(
   for (const placement of candidate.plan.placements) {
     const cx = (placement.boxHint.x + placement.boxHint.w / 2) * canvasW
     const cy = (placement.boxHint.y + placement.boxHint.h / 2) * canvasH
-    const nx = (placement.boxHint.x + placement.boxHint.w / 2)
-    const ny = (placement.boxHint.y + placement.boxHint.h / 2)
+    const nx = placement.boxHint.x + placement.boxHint.w / 2
+    const ny = placement.boxHint.y + placement.boxHint.h / 2
     quad[(nx < 0.5 ? 0 : 1) + (ny < 0.5 ? 0 : 2)]!++
     radial[Math.min(7, Math.floor(Math.hypot(nx - 0.5, ny - 0.45) * 10))]!++
     void cx
@@ -1677,10 +1677,7 @@ function dedupeByFingerprint(candidates: CompositionCandidate[]): CompositionCan
     let duplicate = false
     for (let j = 0; j < kept.length; j++) {
       const keptIndex = candidates.indexOf(kept[j]!)
-      if (
-        keptIndex >= 0 &&
-        fingerprintDistance(fingerprints[i]!, fingerprints[keptIndex]!) === 0
-      ) {
+      if (keptIndex >= 0 && fingerprintDistance(fingerprints[i]!, fingerprints[keptIndex]!) === 0) {
         duplicate = true
         break
       }

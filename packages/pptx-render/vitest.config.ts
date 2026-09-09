@@ -15,6 +15,10 @@ export default defineConfig({
         here,
         '../pptx-engine/src/research-metadata.ts',
       ),
+      '@genoffice/pptx-engine/animation': resolve(
+        here,
+        '../pptx-engine/src/animation.ts',
+      ),
       '@genoffice/pptx-engine/background-promote': resolve(
         here,
         '../pptx-engine/src/background-promote.ts',

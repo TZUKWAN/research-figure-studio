@@ -122,6 +122,9 @@ describe.skipIf(!HAS_CREDENTIALS)('research model smoke (P1-4, real model)', () 
         'Output ONLY one JSON object satisfying this schema; no prose.',
         renderJsonContract(protocol.spatialPlanSchema),
       ].join('\n')
+      // the designer validator MUST validate against the ids the planner
+      // actually produced (P1-4 review fix) — never a hardcoded a..h list
+      let plannedNodeIds: string[] = []
       const llm = {
         semanticPlan: async (thesis: string, feedback?: string) => {
           const result = await requestStructured(productionTransport, {
@@ -140,6 +143,7 @@ describe.skipIf(!HAS_CREDENTIALS)('research model smoke (P1-4, real model)', () 
           if (!result.ok) {
             throw new Error(result.diagnostics.map((d) => d.message).join('; '))
           }
+          plannedNodeIds = (result.value as { nodes: Array<{ id: string }> }).nodes.map((n) => n.id)
           return result.value
         },
         compose: async (ctx: unknown) => {
@@ -149,16 +153,7 @@ describe.skipIf(!HAS_CREDENTIALS)('research model smoke (P1-4, real model)', () 
             system: designerSystem,
             user: JSON.stringify(ctx),
             validate: (value) => {
-              const parsed = parseSpatialPlanWithDiagnostics(value, [
-                'a',
-                'b',
-                'c',
-                'd',
-                'e',
-                'f',
-                'g',
-                'h',
-              ])
+              const parsed = parseSpatialPlanWithDiagnostics(value, plannedNodeIds)
               if (!parsed.plan) throw new Error(parsed.errors.join('; '))
               return parsed.plan
             },
@@ -170,10 +165,11 @@ describe.skipIf(!HAS_CREDENTIALS)('research model smoke (P1-4, real model)', () 
         },
       }
       const result = await orchestrateFigure({ thesis: THESIS, canvasW: 1280, canvasH: 720 }, llm)
-      // the delivery gate verdict is the honest end state — assert the
-      // pipeline COMPLETED with a verdict rather than erroring out
-      expect(result.ok || result.critic, 'pipeline must complete').toBeTruthy()
-      expect(result.error).toBeUndefined()
+      // FULL smoke means the delivery gate must PASS for this fixture — a
+      // merely-not-crashed pipeline is not a passing smoke (P1-4 review fix)
+      expect(result.ok, `delivery failed: ${result.delivery?.detail ?? result.error}`).toBe(true)
+      expect(result.delivery?.pass).toBe(true)
+      expect(result.critic?.verdict).toBe('PASS')
     },
   )
 })

@@ -419,9 +419,21 @@ export async function executeCreateResearchFigure(deps: {
             vision: {
               renderPreview: (
                 candidate: import('@genoffice/research-harness').CompositionCandidate,
-                planNodes: Array<{ id: string; visible: { title: string } }>,
+                context: import('@genoffice/research-harness').PreviewRenderContext,
               ) =>
-                renderCandidatePreview(candidate, planNodes, slide.widthPx, slide.heightPx),
+                renderCandidatePreview({
+                  candidate,
+                  plan: context.plan,
+                  planNodes: context.planNodes,
+                  visualPlan: context.visualPlan,
+                  domain: context.domain,
+                  canvasW: slide.widthPx,
+                  canvasH: slide.heightPx,
+                  theme: (
+                    getThemeById(String(call.input.themeId ?? 'academic-blue')) ??
+                    getThemeById('academic-blue')!
+                  ).roles,
+                }),
               visionReview: async (
                 _candidate: import('@genoffice/research-harness').CompositionCandidate,
                 screenshotPngBase64: string,

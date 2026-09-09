@@ -228,3 +228,162 @@ describe('connector endpoint binding verification (P0-5)', () => {
     void byEdge
   })
 })
+
+import { verifyFigureWrite } from '../src/renderer/research/transaction'
+import type { FigureRenderPlan } from '../src/renderer/research/native-figure-renderer'
+import type { SemanticMetadata } from '@genoffice/pptx-engine'
+
+const META = (edge: string): SemanticMetadata =>
+  ({
+    role: 'research-connector',
+    themeFill: 'none',
+    themeStroke: 'connector',
+    themeText: 'none',
+    componentType: 'research-connector',
+    semanticEdgeId: edge,
+  }) as unknown as SemanticMetadata
+
+const MODULE_META = (nodeId: string): SemanticMetadata =>
+  ({
+    role: 'process-node',
+    themeFill: 'surface',
+    themeStroke: 'primary',
+    themeText: 'textPrimary',
+    componentType: 'research-module',
+    semanticNodeId: nodeId,
+  }) as unknown as SemanticMetadata
+
+function fakePlan(): FigureRenderPlan {
+  return {
+    elements: [
+      {
+        specId: 'module:a',
+        zTier: 0,
+        kind: 'roundRect',
+        x: 100,
+        y: 200,
+        w: 200,
+        h: 100,
+        paragraphs: [],
+        fillColor: '#fff',
+        stroke: { color: '#000', widthPt: 1 },
+        insetsPx: { l: 0, t: 0, r: 0, b: 0 },
+        semanticMetadata: MODULE_META('a'),
+      },
+      {
+        specId: 'module:b',
+        zTier: 0,
+        kind: 'roundRect',
+        x: 500,
+        y: 200,
+        w: 200,
+        h: 100,
+        paragraphs: [],
+        fillColor: '#fff',
+        stroke: { color: '#000', widthPt: 1 },
+        insetsPx: { l: 0, t: 0, r: 0, b: 0 },
+        semanticMetadata: MODULE_META('b'),
+      },
+      {
+        specId: 'module:c',
+        zTier: 0,
+        kind: 'roundRect',
+        x: 500,
+        y: 500,
+        w: 200,
+        h: 100,
+        paragraphs: [],
+        fillColor: '#fff',
+        stroke: { color: '#000', widthPt: 1 },
+        insetsPx: { l: 0, t: 0, r: 0, b: 0 },
+        semanticMetadata: MODULE_META('c'),
+      },
+      {
+        specId: 'connector:e1',
+        zTier: 1,
+        kind: 'lineArrow',
+        x: 300,
+        y: 250,
+        w: 200,
+        h: 0,
+        paragraphs: [],
+        fillColor: 'none',
+        stroke: { color: '#000', widthPt: 1.5 },
+        insetsPx: { l: 0, t: 0, r: 0, b: 0 },
+        semanticMetadata: META('e1'),
+      },
+    ],
+    bindings: [
+      {
+        specId: 'connector:e1',
+        semanticEdgeId: 'e1',
+        start: { targetSpecId: 'module:a', idx: 3 },
+        end: { targetSpecId: 'module:b', idx: 1 },
+      },
+    ],
+    groups: [],
+    slideMetadata: {
+      schemaVersion: 1,
+      figureRunId: 'fig-x',
+      figureFamily: 'f',
+      domain: 'd',
+      thesis: 't',
+      nodes: [],
+      relations: [],
+    },
+    defects: [],
+  }
+}
+
+function renderedSlide(connectorStartSpid: number, connectorEndSpid: number): { nodes: unknown[] } {
+  // boxes mirror the plan's geometry so bounds checks stay quiet — only the
+  // connector binding varies between the positive and negative cases
+  const boxes: Record<string, { x: number; y: number; w: number; h: number }> = {
+    a: { x: 100, y: 200, w: 200, h: 100 },
+    b: { x: 500, y: 200, w: 200, h: 100 },
+    c: { x: 500, y: 500, w: 200, h: 100 },
+  }
+  const mod = (spid: number, nodeId: string) => ({
+    sourceId: `sp_${spid}`,
+    spid,
+    box: boxes[nodeId]!,
+    semanticMetadata: { componentType: 'research-module', semanticNodeId: nodeId },
+  })
+  return {
+    nodes: [
+      mod(2, 'a'),
+      mod(3, 'b'),
+      mod(4, 'c'),
+      {
+        sourceId: 'sp_9',
+        spid: 9,
+        box: { x: 300, y: 250, w: 200, h: 0 },
+        semanticMetadata: { componentType: 'research-connector', semanticEdgeId: 'e1' },
+        connection: {
+          start: { id: connectorStartSpid, idx: 3 },
+          end: { id: connectorEndSpid, idx: 1 },
+        },
+      },
+    ],
+  }
+}
+
+describe('verifyFigureWrite directional binding check (P0-5)', () => {
+  it('correct direction A→B passes', () => {
+    const v = verifyFigureWrite(renderedSlide(2, 3), fakePlan(), new Map(), [])
+    expect(v.ok).toBe(true)
+  })
+
+  it('a connector wearing e1 metadata but bound to the WRONG END shape FAILS', () => {
+    // start correctly at a (spid 2) but end bound to c (spid 4) — e1 said A→B
+    const v = verifyFigureWrite(renderedSlide(2, 4), fakePlan(), new Map(), [])
+    expect(v.ok).toBe(false)
+    expect(v.issues.some((i) => i.includes('WRONG DIRECTION'))).toBe(true)
+  })
+
+  it('a fully swapped binding (end=a, start=b) FAILS', () => {
+    const v = verifyFigureWrite(renderedSlide(3, 2), fakePlan(), new Map(), [])
+    expect(v.ok).toBe(false)
+    expect(v.issues.some((i) => i.includes('WRONG DIRECTION'))).toBe(true)
+  })
+})

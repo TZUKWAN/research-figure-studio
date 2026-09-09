@@ -19,6 +19,7 @@ import type {
 } from '@genoffice/pptx-render'
 import { patternGrid } from '@genoffice/pptx-render'
 import { classifyCjkScript } from '../shared/cjk-script'
+import { isWideChar } from '@genoffice/pptx-render'
 
 /**
  * Konva container props for a placed box: rotation and flip pivot on the box CENTER
@@ -1278,6 +1279,53 @@ const FONT_STACK: Record<string, string> = {
 // for Mac renders their b="1" runs at regular weight, while Chromium would fake-bold them
 const NO_SYNTHETIC_BOLD = new Set(['lucida sans unicode', 'lucida sans', 'lucida grande'])
 
+/** CJK-capable faces appended when the TEXT itself needs them (P1-5). */
+const CJK_TEXT_FALLBACK =
+  "', 'Noto Sans SC', 'Noto Sans CJK SC', 'WenQuanYi Zen Hei', 'Microsoft YaHei', 'PingFang SC', sans-serif"
+
+/**
+ * P1-5: script-aware font resolution. Same as displayFontFamily(name) for
+ * text whose declared chain can cover it; when the text contains CJK glyphs
+ * and the resolved chain has NO CJK face, the Linux-available Noto faces are
+ * appended so measurement and drawing stay on the same font file.
+ */
+export function displayFontFamilyForText(name: string, text: string): string {
+  const stack = displayFontFamily(name)
+  if (!text) return stack
+  let hasCjk = false
+  for (const ch of text) {
+    if (isWideChar(ch.codePointAt(0)!)) {
+      hasCjk = true
+      break
+    }
+  }
+  if (!hasCjk) return stack
+  const lower = stack.toLowerCase()
+  if (
+    lower.includes('noto sans cjk') ||
+    lower.includes('noto sans sc') ||
+    lower.includes('noto sans jp') ||
+    lower.includes('noto sans tc') ||
+    lower.includes('noto sans kr') ||
+    lower.includes('wenquanyi') ||
+    lower.includes('pingfang') ||
+    lower.includes('yahei') ||
+    lower.includes('simhei') ||
+    lower.includes('hiragino') ||
+    lower.includes('malgun')
+  ) {
+    return stack
+  }
+  // insert the CJK faces just before the generic tail
+  const tailIndex = stack.lastIndexOf(', sans-serif')
+  if (tailIndex < 0) return stack + CJK_TEXT_FALLBACK.slice(1)
+  return (
+    stack.slice(0, tailIndex) +
+    CJK_TEXT_FALLBACK +
+    stack.slice(tailIndex + ', sans-serif'.length - 13)
+  )
+}
+
 export function displayFontFamily(name: string): string {
   const stack = FONT_STACK[name.normalize('NFKC').toLowerCase()]
   if (stack) return stack
@@ -1343,7 +1391,11 @@ export function glyphToDraw(run: GlyphRun): GlyphDraw {
     !!run.bold && !NO_SYNTHETIC_BOLD.has(run.fontFamily.normalize('NFKC').toLowerCase())
   if (effectiveBold) styleParts.push('bold')
   if (run.italic) styleParts.push('italic')
-  const family = displayFontFamily(run.fontFamily)
+  // P1-5 script-aware fallback: the fallback chain must depend on the ACTUAL
+  // TEXT, not just the declared family: Calibri plus CJK text must draw with a
+  // CJK-capable face (Calibri/Carlito have no CJK glyphs → tofu on Linux),
+  // while pure-Latin Calibri stays unchanged.
+  const family = displayFontFamilyForText(run.fontFamily, run.text)
   return {
     text: run.text,
     x: run.x,

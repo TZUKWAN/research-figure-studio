@@ -63,3 +63,16 @@
 3. **MED** `slides:files-add` 的任意路径读(附件):建议引入 capability token(先 pick 后引用 handle)。
 4. **LOW** 打印/导出 PDF 临时 BrowserWindow 均已 sandbox;保持审查新窗口创建点。
 5. **LOW** CodeQL/secret scanning:依赖 GitHub 仓库设置(任务书允许策略化)。
+
+## 5. image-size transitive DoS (production closure 2 disposition)
+
+`image-size@1.2.1` (ICNS/JXL/HEIF parse loops, GHSA-w3rx-r6r6-pgpr /
+GHSA-5p2g-fcmc-qvqq) enters only via `pptxgenjs@4.0.1` inside
+`@genoffice/pptx-engine`. npm's suggested fix is `pptxgenjs@1.1.5`, a 2020-era
+downgrade that breaks the pptx-engine writer API; an npm override to
+`image-size@^2.0.2` violates pptxgenjs's declared range and is ignored by the
+installer. Disposition: **BLOCKED_EXTERNAL** on upstream pptxgenjs adopting
+image-size v2. Attack surface note: image-size only parses image files the
+user explicitly picks locally for insertion (insert picture / image fill);
+the research-figure pipeline never feeds remote bytes into it, so the DoS
+surface is self-inflicted-input only, not remotely triggerable.

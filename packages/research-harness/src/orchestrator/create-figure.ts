@@ -1260,10 +1260,15 @@ export async function orchestrateFigure(
         candidates,
         renderPreview: input.vision.renderPreview,
         visionReview: input.vision.visionReview,
-        planNodes: state.plan.nodes.map((node) => ({
-          id: node.id,
-          visible: { title: node.visible.title },
-        })),
+        context: {
+          plan: state.plan,
+          planNodes: state.plan.nodes.map((node) => ({
+            id: node.id,
+            visible: { title: node.visible.title },
+          })),
+          visualPlan: best.plan.visualPlan ?? { modules: [] },
+          ...(domain ? { domain } : {}),
+        },
       })
       const winner = review.ranked.find(
         (entry) =>

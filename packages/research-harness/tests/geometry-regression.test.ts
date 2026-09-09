@@ -313,7 +313,6 @@ const CASES: CaseSpec[] = [
   },
 ]
 
-
 describe('geometry & semantic regression suite (52 cases, full orchestrator)', () => {
   it('covers the required 50+-case pack', () => {
     expect(CASES.length).toBe(52)

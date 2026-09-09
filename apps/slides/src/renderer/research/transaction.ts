@@ -225,20 +225,44 @@ export function verifyFigureWrite(
   //    planned binding (a connector A→C cannot masquerade as A→B);
   // 3. the counts agree in BOTH directions;
   // 4. inhibition bars exist for their edges.
-  const renderedConnectors = new Map<string, { sourceId: string; componentType?: string }>()
+  const renderedConnectors = new Map<
+    string,
+    {
+      sourceId: string
+      componentType?: string
+      spid?: number
+      connection?: { start?: { id: number; idx: number }; end?: { id: number; idx: number } }
+    }
+  >()
+  const renderedModuleSpid = new Map<string, number>()
   const renderedBars = new Set<string>()
   const collect = (nodes: unknown[]) => {
     for (const raw of nodes) {
       const node = raw as {
         sourceId?: string
+        spid?: number
+        connection?: { start?: { id: number; idx: number }; end?: { id: number; idx: number } }
         semanticMetadata?: Record<string, unknown>
         children?: unknown[]
       }
       const meta = node.semanticMetadata
+      if (
+        meta?.componentType === 'research-module' &&
+        typeof meta.semanticNodeId === 'string' &&
+        node.spid != null
+      ) {
+        renderedModuleSpid.set(meta.semanticNodeId as string, node.spid)
+      }
       if (meta?.componentType === 'research-connector' && typeof meta.semanticEdgeId === 'string') {
         renderedConnectors.set(meta.semanticEdgeId, {
           sourceId: node.sourceId ?? '(unknown)',
           componentType: 'research-connector',
+          ...(node.spid != null || node.connection
+            ? {
+                spid: node.spid,
+                connection: node.connection,
+              }
+            : {}),
         })
       }
       if (
@@ -272,6 +296,32 @@ export function verifyFigureWrite(
     issues.push(
       `connector count mismatch: ${renderedConnectors.size} rendered vs ${plan.bindings.length} planned semantic relations`,
     )
+  }
+  // P0-5 directional check: start spid must be the SEMANTIC FROM shape and end
+  // spid the SEMANTIC TO shape — a connector A→C wearing e1's metadata must
+  // FAIL even though "e1 exists".
+  const specById = new Map(
+    plan.elements.map((element) => [
+      element.specId,
+      {
+        semanticNodeId: element.semanticMetadata.semanticNodeId as string | undefined,
+      },
+    ]),
+  )
+  for (const binding of plan.bindings) {
+    const rendered = renderedConnectors.get(binding.semanticEdgeId)
+    if (!rendered?.connection?.start || !rendered.connection.end) continue
+    const fromNode = specById.get(binding.start.targetSpecId)
+    const toNode = specById.get(binding.end.targetSpecId)
+    if (!fromNode?.semanticNodeId || !toNode?.semanticNodeId) continue
+    const fromSpid = renderedModuleSpid.get(fromNode.semanticNodeId)
+    const toSpid = renderedModuleSpid.get(toNode.semanticNodeId)
+    if (fromSpid == null || toSpid == null) continue
+    if (rendered.connection.start.id !== fromSpid || rendered.connection.end.id !== toSpid) {
+      issues.push(
+        `relation ${binding.semanticEdgeId} is bound in the WRONG DIRECTION or to the wrong shapes (start=${rendered.connection.start.id}, end=${rendered.connection.end.id}; expected start=${fromSpid}, end=${toSpid})`,
+      )
+    }
   }
   for (const element of plan.elements) {
     if (

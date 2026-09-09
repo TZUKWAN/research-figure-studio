@@ -18,6 +18,7 @@ import type {
 // (Node-only imports like node:crypto) would break the browser build
 import { tableRowGridCols } from '@genoffice/pptx-engine/table-grid'
 import { elementDurableId, groupChildDurableId } from '@genoffice/pptx-engine/identity'
+import { elementSpid } from '@genoffice/pptx-engine/animation'
 import { isBackgroundLikeElement } from '@genoffice/pptx-engine/background-promote'
 import { getSlideResearchMetadata } from '@genoffice/pptx-engine/research-metadata'
 import { buildChartNode } from './build-chart'
@@ -380,6 +381,8 @@ function buildShape(
     type: el.type,
     box,
     sourceId: el.id,
+    ...(elementSpid(el) != null ? { spid: elementSpid(el)! } : {}),
+    ...(el.connection ? { connection: el.connection } : {}),
     ...(el.semanticMetadata ? { semanticMetadata: el.semanticMetadata } : {}),
     fill: resolveFill(el.fill, vp, media),
     ...(el.fillOverlay ? { fillOverlay: resolveFill(el.fillOverlay, vp, media) } : {}),

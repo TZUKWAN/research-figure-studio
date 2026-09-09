@@ -17,6 +17,10 @@ export default defineConfig({
         here,
         '../../packages/pptx-engine/src/identity.ts',
       ),
+      '@genoffice/pptx-engine/animation': resolve(
+        here,
+        '../../packages/pptx-engine/src/animation.ts',
+      ),
       '@genoffice/pptx-engine/background-promote': resolve(
         here,
         '../../packages/pptx-engine/src/background-promote.ts',

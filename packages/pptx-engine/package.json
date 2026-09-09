@@ -10,6 +10,7 @@
     "./custgeom": "./src/custgeom.ts",
     "./table-grid": "./src/table-grid.ts",
     "./identity": "./src/identity.ts",
+    "./animation": "./src/animation.ts",
     "./background-promote": "./src/background-promote.ts",
     "./research-metadata": "./src/research-metadata.ts"
   },

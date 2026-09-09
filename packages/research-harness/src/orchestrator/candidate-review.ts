@@ -37,10 +37,20 @@ export type VisionReviewer = (
   screenshotPngBase64: string,
 ) => Promise<VisionReview | null>
 
+export interface PreviewRenderContext {
+  /** the orchestrator's CURRENT FigurePlan (semantic truth) */
+  plan: import('../semantic/figure-plan.js').FigurePlanV2
+  /** node titles for the preview */
+  planNodes: Array<{ id: string; visible: { title: string } }>
+  /** the candidate's own visual decomposition (may be empty) */
+  visualPlan: import('../visual/visualPlan.js').VisualPlan
+  /** resolved scientific domain for domain-specific rendering */
+  domain?: string
+}
+
 export type PreviewRenderer = (
   candidate: CompositionCandidate,
-  /** plan node titles for the preview (the orchestrator's current plan) */
-  planNodes: Array<{ id: string; visible: { title: string } }>,
+  context: PreviewRenderContext,
 ) => Promise<string>
 
 export interface ReviewedCandidate {
@@ -94,8 +104,8 @@ export async function reviewCandidates(input: {
   maxDeliverableNodes?: number
   renderPreview: PreviewRenderer
   visionReview: VisionReviewer
-  /** titles for preview rendering (the orchestrator's current plan) */
-  planNodes?: Array<{ id: string; visible: { title: string } }>
+  /** P1-1 near-final preview context (plan/titles/decomposition/domain) */
+  context?: PreviewRenderContext
 }): Promise<CandidateReviewResult> {
   const rejected: CandidateReviewResult['rejected'] = []
   const survivors: CompositionCandidate[] = []
@@ -122,10 +132,22 @@ export async function reviewCandidates(input: {
 
   // 2) render + vision review on survivors
   const ranked: ReviewedCandidate[] = []
+  const emptyContext: PreviewRenderContext = {
+    plan: {
+      thesis: '',
+      figureType: 'freeform',
+      nodes: [],
+      edges: [],
+      groups: [],
+      globalIntent: { emphasis: [], secondary: [], optional: [] },
+    },
+    planNodes: [],
+    visualPlan: { modules: [] },
+  }
   for (const candidate of survivors) {
     let vision: VisionReview | null = null
     try {
-      const screenshot = await input.renderPreview(candidate, input.planNodes ?? [])
+      const screenshot = await input.renderPreview(candidate, input.context ?? emptyContext)
       if (screenshot) vision = await input.visionReview(candidate, screenshot)
     } catch {
       // vision review is OPTIONAL quality signal; deterministic score still applies

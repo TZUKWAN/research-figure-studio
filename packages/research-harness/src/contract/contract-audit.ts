@@ -93,7 +93,7 @@ export function auditFigureContract(input: ContractAuditInput): ContractAuditIss
   // EQUAL an allowlist entry after normalization. `includes` matching would
   // let an authorized phrase whitewash appended fabricated claims
   // (an authorized phrase must NOT admit that same phrase with an appended
- // fabricated percentage and superiority claim). An entry
+  // fabricated percentage and superiority claim). An entry
   // ending in `*` grants PREFIX composition (token-style) for generated
   // variants of an authorized stem — never for numbers/percent signs. ──
   const allowed = (contract.visibleTextPolicy?.allowed ?? []).map(norm).filter(Boolean)

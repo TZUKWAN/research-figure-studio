@@ -268,6 +268,13 @@ export interface ArrowEndRender {
 
 export interface ShapeRenderNode extends RenderNodeBase {
   type: 'shape' | 'text'
+  /** <p:cNvPr id> of the source element — the id connector stCxn/endCxn bindings reference */
+  spid?: number
+  /** Connector endpoint bindings (from the engine model) for post-write verification */
+  connection?: {
+    start?: { id: number; idx: number }
+    end?: { id: number; idx: number }
+  }
   /** Placeholder type (title/ctrTitle/subTitle/body/…); empty placeholders draw hint text on the canvas */
   placeholder?: string
   /** Insert > Text Box rather than Insert > Shape: the edit overlay must not center a fresh body */
