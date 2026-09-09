@@ -4,13 +4,15 @@
  * NEAR-FINAL preview (review fix): instead of generic colored rectangles, the
  * candidate is rendered through the REAL production pipeline —
  * buildFigureRenderPlan (same primitives, connectors, inhibition bars, micro
- * units, typography SSOT, domain profile as the final write) into a TEMPORARY
- * in-memory deck that is never saved — then rasterized through the same Konva
- * export path and reviewed. Vision judges what the user would actually get,
- * minus the commit.
+ * units, typography SSOT, domain profile as the final write) — and the plan's
+ * elements are mapped 1:1 onto a preview RenderSlide (shapes with real text
+ * runs, polyline connectors with correct z-order), rasterized through the
+ * same Konva export path and reviewed. Vision judges what the user would
+ * actually get, minus the commit. Browser-safe: no node-only engine module is
+ * pulled in.
  */
 import type { CompositionCandidate, FigurePlanV2 } from '@genoffice/research-harness'
-import type { RenderSlide } from '@genoffice/pptx-render'
+import type { RenderSlide, ShapeRenderNode } from '@genoffice/pptx-render'
 import type { AgentImage } from '@genoffice/agent-core'
 import type { ThemeRoles } from '@genoffice/theme-engine'
 
@@ -44,28 +46,18 @@ export interface NearFinalPreviewArgs {
 
 /**
  * Render ONE candidate near-final: run buildFigureRenderPlan over the
- * candidate's own solve, materialize the elements into a temporary in-memory
- * deck, rasterize, return raw base64 PNG. Never touches user files.
+ * candidate's own solve (routes recomputed for this candidate's geometry),
+ * map the plan's elements 1:1 onto preview render nodes, rasterize.
  */
 export async function renderCandidatePreview(args: NearFinalPreviewArgs): Promise<string> {
-  const engine = await import('@genoffice/pptx-engine')
-  const renderMod = await import('../export-render')
-  const { routeEdges } = await import('@genoffice/research-harness')
+  const harness = await import('@genoffice/research-harness')
   const { buildFigureRenderPlan } = await import('./native-figure-renderer')
-  const opened = await engine.openPptx(await engine.createBlankPptx())
-  // size the temp deck to the real canvas so placements map 1:1
-  opened.deck.size = {
-    cx: Math.round((args.canvasW * 9525) / 1),
-    cy: Math.round((args.canvasH * 9525) / 1),
-  }
-  const slide = opened.deck.slides[0]!
-
   const renderPlan = buildFigureRenderPlan({
     plan: args.plan,
     solve: { placements: args.candidate.solve.placements },
     // routes are recomputed for THIS candidate's geometry (lightweight
     // anchor/route pass — no obstacle rerun needed for a preview)
-    routes: routeEdges(
+    routes: harness.routeEdges(
       args.plan.edges.map((edge, index) => ({
         key: edge.id ?? `${edge.from}->${edge.to}`,
         semanticEdgeId: edge.id ?? `${edge.from}->${edge.to}`,
@@ -84,46 +76,61 @@ export async function renderCandidatePreview(args: NearFinalPreviewArgs): Promis
     thesis: args.plan.thesis ?? '',
   })
 
-  const EMU = 9525
-  for (const el of renderPlan.elements) {
-    const isLine = el.kind === 'line' || el.kind === 'lineArrow' || el.kind === 'lineBent'
-    engine.addElement(slide, {
-      kind: el.kind as never,
-      offset: {
-        x: Math.round(el.x * EMU),
-        y: Math.round(el.y * EMU),
-        cx: Math.max(1, Math.round(el.w * EMU)),
-        cy: Math.max(1, Math.round(el.h * EMU)),
-      },
-      ...(el.paragraphs.length > 0 ? { paragraphs: el.paragraphs as never } : {}),
-      ...(isLine ? {} : el.fillColor !== 'none' ? { fillColor: el.fillColor } : {}),
-      stroke: {
-        color: el.stroke.color,
-        widthEmu: Math.round(el.stroke.widthPt * 12700),
-      },
-      ...(el.adjust ? { adjust: el.adjust } : {}),
-      ...(el.paragraphs.length > 0
-        ? {
-            bodyPr: {
-              insetsEmu: {
-                l: Math.round(el.insetsPx.l * EMU),
-                t: Math.round(el.insetsPx.t * EMU),
-                r: Math.round(el.insetsPx.r * EMU),
-                b: Math.round(el.insetsPx.b * EMU),
-              },
-            },
-          }
-        : {}),
+  const nodes = renderPlan.elements.map((el, index) => {
+    const base = {
+      id: `pv_${index}`,
+      sourceId: `preview:${el.specId}`,
+      box: { x: el.x, y: el.y, w: el.w, h: el.h, rot: 0 },
       semanticMetadata: el.semanticMetadata,
-    })
-  }
-
-  const { buildRenderSlide } = await import('@genoffice/pptx-render')
-  const rendered = buildRenderSlide(slide, opened.deck.size, {
-    fitWidthPx: args.canvasW,
+    }
+    if (el.kind === 'line' || el.kind === 'lineArrow' || el.kind === 'lineBent') {
+      // connectors are straight bounding-box lines in preview (arrowhead on
+      // the tail end); bent routing detail is irrelevant at screenshot scale
+      return {
+        ...base,
+        type: 'shape',
+        presetGeometry: 'line',
+        line: { points: [0, 0, el.w, el.h] },
+        stroke: { color: el.stroke.color, width: el.stroke.widthPt },
+        fill: { kind: 'none' },
+      }
+    }
+    const textLines = el.paragraphs.map((para) => ({
+      runs: para.runs.map((run) => ({
+        text: run.text,
+        x: el.x + el.insetsPx.l,
+        widthPx: Math.max(8, el.w - el.insetsPx.l - el.insetsPx.r),
+        fontSizePx: run.fontSize * 1.333,
+        bold: run.bold ?? false,
+        color: run.color,
+      })),
+    }))
+    return {
+      ...base,
+      type: 'shape',
+      presetGeometry: el.kind,
+      cornerRadiusPx: el.adjust?.adj
+        ? Math.round((el.adjust.adj / 100000) * Math.min(el.w, el.h))
+        : undefined,
+      fill: { kind: 'solid', color: el.fillColor },
+      stroke: { color: el.stroke.color, width: el.stroke.widthPt },
+      text: {
+        insets: { l: el.insetsPx.l, t: el.insetsPx.t, r: el.insetsPx.r, b: el.insetsPx.b },
+        contentHeight: el.paragraphs.length * 20,
+        lines: textLines,
+      },
+    }
   })
+
+  const slide: RenderSlide = {
+    widthPx: args.canvasW,
+    heightPx: args.canvasH,
+    scale: 1,
+    background: { kind: 'solid', color: '#FFFFFF' },
+    nodes: nodes as unknown as RenderSlide['nodes'],
+  }
   const render = await rasterize()
-  const [png] = await render([rendered], new Map(), 1)
+  const [png] = await render([slide], new Map(), 1)
   return png.replace(/^data:image\/png;base64,/, '')
 }
 
