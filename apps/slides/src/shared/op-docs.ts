@@ -194,6 +194,10 @@ export const OP_DOCS: Record<string, OpDoc> = {
     aiCallable: false,
   },
   setNotes: { sig: '{text} — speaker notes', group: 'slide' },
+  setSlotParagraphText: {
+    sig: '{paragraph:number, text:string} - template fill: replace ONE paragraph, preserving run-0 format and all sibling paragraphs',
+    group: 'text',
+  },
   setSlideResearchMetadata: {
     sig: '{payload:{schemaVersion,figureRunId,figureFamily,domain,thesis,nodes,relations}} — internal research-figure payload written by create_research_figure',
     group: 'slide',

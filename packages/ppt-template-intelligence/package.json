@@ -1,0 +1,25 @@
+{
+  "name": "@genoffice/ppt-template-intelligence",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./schema": "./src/schema.ts",
+    "./analyzer": "./src/analyzer.ts",
+    "./capacity": "./src/capacity.ts",
+    "./role-classifier": "./src/role-classifier.ts",
+    "./fill": "./src/fill.ts",
+    "./qa": "./src/qa.ts",
+    "./provider": "./src/provider.ts",
+    "./cache": "./src/cache.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@genoffice/pptx-engine": "*",
+    "@genoffice/font-metrics": "*"
+  }
+}

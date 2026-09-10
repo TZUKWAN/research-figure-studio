@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "paths": {
+      "@genoffice/pptx-engine": ["../pptx-engine/src/index.ts"],
+      "@genoffice/pptx-engine/*": ["../pptx-engine/src/*"],
+      "@genoffice/font-metrics": ["../font-metrics/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts"]
+}

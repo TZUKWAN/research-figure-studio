@@ -243,3 +243,51 @@ register({
     return { op, after: format }
   },
 })
+
+// ── setSlotParagraphText ────────────────────────────────────────────────
+// Template-fill slot op (ppt-template-intelligence): replace ONE paragraph's
+// text inside an element, keeping every other paragraph byte-stable in the
+// model (run 0 keeps its format; other runs of that paragraph are cleared —
+// the same convention the Gorden python-pptx writer uses). Addressed by
+// paragraph index; the executor resolves the element via target.el.
+register({
+  name: 'setSlotParagraphText',
+  validate(op, ctx) {
+    if (typeof op.paragraph !== 'number' || op.paragraph < 0) {
+      throw new GuidedError(
+        'op "setSlotParagraphText" needs "paragraph": a 0-based paragraph index.',
+      )
+    }
+    if (typeof op.text !== 'string') {
+      throw new GuidedError('op "setSlotParagraphText" needs "text": a string.')
+    }
+    resolveElement(ctx, op, { types: ['text', 'shape'], allowPart: true })
+  },
+  apply(op, ctx): OpRecord {
+    const { slide, el } = resolveElement(ctx, op, { types: ['text', 'shape'], allowPart: true })
+    const textEl = el as TextElement
+    const body = textEl.text
+    if (!body || !Array.isArray(body.paragraphs)) {
+      throw new GuidedError(`op "setSlotParagraphText": element "${el.id}" has no text body.`)
+    }
+    const idx = op.paragraph as number
+    if (idx >= body.paragraphs.length) {
+      throw new GuidedError(
+        `op "setSlotParagraphText": paragraph ${idx} out of range (${body.paragraphs.length} paragraphs).`,
+      )
+    }
+    const before = body.paragraphs.map((p) => p.runs?.map((r) => r.text).join('') ?? '')
+    const paragraph = body.paragraphs[idx]!
+    const runs = paragraph.runs ?? []
+    if (runs.length === 0) {
+      // empty paragraph: create a single run cloning nothing — plain text
+      paragraph.runs = [{ text: String(op.text) }]
+    } else {
+      runs[0]!.text = String(op.text)
+      for (let i = 1; i < runs.length; i++) runs[i]!.text = ''
+    }
+    el.dirty = true
+    const after = body.paragraphs.map((p) => p.runs?.map((r) => r.text).join('') ?? '')
+    return { op, before: { paragraphs: before }, after: { paragraphs: after } }
+  },
+})
