@@ -15,6 +15,10 @@ const workspaceAlias = {
   ),
   '@genoffice/pptx-engine/identity': resolve(here, '../../packages/pptx-engine/src/identity.ts'),
   '@genoffice/pptx-engine/animation': resolve(here, '../../packages/pptx-engine/src/animation.ts'),
+  '@genoffice/ppt-template-intelligence': resolve(
+    here,
+    '../../packages/ppt-template-intelligence/src/index.ts',
+  ),
   '@genoffice/pptx-engine/research-metadata': resolve(
     here,
     '../../packages/pptx-engine/src/research-metadata.ts',

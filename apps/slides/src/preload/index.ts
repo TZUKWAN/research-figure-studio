@@ -298,6 +298,8 @@ const api: SlidesApi = {
   aiRunEnd: (ownerToken: string) => ipcRenderer.invoke('slides:ai-run-end', ownerToken),
   applyEditScript: (op: ApplyEditScriptOp) => ipcRenderer.invoke('slides:apply-edit-script', op),
   applyTxn: (op: ApplyTxnOp) => ipcRenderer.invoke('slides:apply-txn', op),
+  templateAnalyze: (filePath: string) => ipcRenderer.invoke('slides:template-analyze', filePath),
+  templateFill: (req: unknown) => ipcRenderer.invoke('slides:template-fill', req),
   aiSnapshotRestore: (id: number, ownerToken?: string) =>
     ipcRenderer.invoke('slides:ai-snapshot-restore', id, ownerToken),
   undo: () => ipcRenderer.invoke('slides:undo'),

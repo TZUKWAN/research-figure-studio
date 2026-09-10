@@ -1142,6 +1142,66 @@ const TOOLS: AgentToolDef[] = [
     },
   },
   {
+    name: 'list_available_templates',
+    description:
+      '[Research Figure Mode] List template decks available for presentation generation (user-registered + bundled non-commercial library when present). Returns id/name/slideCount/tags.',
+    inputSchema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'analyze_ppt_template',
+    description:
+      '[Research Figure Mode] Analyze a .pptx template file: extracts page roles, editable text slots with addresses and capacity, theme colors, type scale. Returns a TemplateDefinition summary. Run this ONCE per template file (results are cached by file hash).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        filePath: { type: 'string', description: 'Absolute path to the .pptx template file' },
+        name: { type: 'string', description: 'Optional human-readable name for the template' },
+      },
+      required: ['filePath'],
+    },
+  },
+  {
+    name: 'create_presentation_from_template',
+    description:
+      "[Research Figure Mode] Generate a presentation from a template deck: given the template file, chosen slide numbers (1-based, in order), and per-slot text edits (slot addresses come from analyze_ppt_template), applies everything as ONE atomic transaction and saves to a NEW pptx file. The user's original template file is never modified.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        templatePath: { type: 'string', description: 'Absolute path to the .pptx template' },
+        selectedSlides: {
+          type: 'array',
+          items: { type: 'integer' },
+          description: '1-based template slide numbers to keep, in presentation order',
+        },
+        edits: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              slide: { type: 'integer', description: '1-based template slide number' },
+              address: {
+                type: 'object',
+                properties: {
+                  shapeId: { type: 'integer' },
+                  paragraph: { type: 'integer' },
+                },
+                required: ['shapeId', 'paragraph'],
+              },
+              newText: { type: 'string' },
+              expectedText: { type: 'string' },
+            },
+            required: ['slide', 'address', 'newText'],
+          },
+        },
+        saveTo: {
+          type: 'string',
+          description: 'Absolute output .pptx path (NEW file; never the template)',
+        },
+      },
+      required: ['templatePath', 'selectedSlides', 'edits', 'saveTo'],
+    },
+  },
+  {
     name: 'edit_research_figure',
     description:
       "[Research Figure Mode] Edit an EXISTING generated research figure with ONE structured instruction (works on any model, including weak tool-callers): the figure's semantic graph is recovered from slide metadata, the model returns a validated EditPlan over semantic ids, and a deterministic executor applies it as one atomic transaction (auto-rollback on any failure). Use this for moves, resizes, text edits, adding/removing relations on the current figure. input: {instruction: string}.",
@@ -2061,7 +2121,14 @@ const RESEARCH_MODE_HIDDEN_TOOLS = new Set([
   'create_input_core_output',
   'create_horizontal_pipeline',
 ])
-const RESEARCH_MODE_ONLY_TOOLS = new Set(['plan_research_figure', 'create_research_figure'])
+const RESEARCH_MODE_ONLY_TOOLS = new Set([
+  'plan_research_figure',
+  'create_research_figure',
+  'list_available_templates',
+  'analyze_ppt_template',
+  'create_presentation_from_template',
+  'edit_research_figure',
+])
 
 export type SlidesSkillMode = 'research' | 'presentation'
 
@@ -4070,6 +4137,116 @@ async function executeTool(
       }
     }
 
+    case 'list_available_templates':
+    case 'analyze_ppt_template':
+    case 'create_presentation_from_template': {
+      // P4: template intelligence tools delegate to main-process IPC where
+      // the analyzer + fill compiler run against the real file with the
+      // existing atomic executor.
+      const api = (
+        window as unknown as {
+          slidesApi?: {
+            templateAnalyze?: (filePath: string) => Promise<{
+              definition?: {
+                id: string
+                name: string
+                pages: Array<{
+                  slideId: string
+                  role: string
+                  editableSlots: unknown[]
+                  nonEditableSlots: unknown[]
+                }>
+                style: { typeScale: unknown[]; colors: string[] }
+                pageRoles: Record<string, string[]>
+              }
+              sourceHash?: string
+              error?: string
+            } | null>
+            templateFill?: (req: unknown) => Promise<{ slide?: unknown; error?: string } | null>
+          }
+        }
+      ).slidesApi
+      if (!api?.templateAnalyze || !api.templateFill) {
+        return fail(t('aiFailNewElement'), 'template intelligence API unavailable in this session')
+      }
+      if (call.name === 'list_available_templates') {
+        const dir = process.env.METIS_GORDEN_TEMPLATES_DIR
+        const gorden = dir
+          ? 'A bundled non-commercial CJK template library is available locally at ' +
+            dir +
+            ' (21 decks; non-commercial license - see THIRD_PARTY_NOTICES.md). Use analyze_ppt_template on a deck inside it to register one.'
+          : 'No bundled template library in this install; ask the user for a .pptx template and use analyze_ppt_template.'
+        return {
+          output:
+            'Available templates:\n' +
+            '- user-uploaded templates: register with analyze_ppt_template(filePath).\n' +
+            gorden,
+          mutated: false,
+          summary: t('aiSumReadSlide', { n: 1 }),
+        }
+      }
+      if (call.name === 'analyze_ppt_template') {
+        const filePath = String(call.input.filePath ?? '').trim()
+        if (!filePath) return fail(t('aiFailNewElement'), 'filePath is required')
+        const r = await api.templateAnalyze(filePath)
+        if (!r || 'error' in r || !r.definition) {
+          return fail(t('aiFailNewElement'), (r as { error?: string })?.error ?? 'analysis failed')
+        }
+        const d = r.definition
+        const roleSummary = Object.entries(d.pageRoles)
+          .map(([role, ids]) => `${role}: ${ids.join(', ')}`)
+          .join(' | ')
+        return {
+          output:
+            `Template analyzed (id ${d.id}, ${d.pages.length} pages, sourceHash ${r.sourceHash?.slice(0, 12)}).
+` +
+            `Page roles: ${roleSummary}
+` +
+            `Type scale levels: ${d.style.typeScale.length}. Theme colors: ${d.style.colors.slice(0, 6).join(' ')}
+` +
+            'Per-page editable slot addresses are available via this analysis; use create_presentation_from_template with selectedSlides + edits to fill.',
+          mutated: false,
+          summary: t('aiSumReadSlide', { n: 1 }),
+        }
+      }
+      // create_presentation_from_template
+      const templatePath = String(call.input.templatePath ?? '').trim()
+      const selected = Array.isArray(call.input.selectedSlides)
+        ? (call.input.selectedSlides as unknown[]).map(Number).filter((n) => Number.isInteger(n))
+        : []
+      const edits = Array.isArray(call.input.edits) ? call.input.edits : []
+      const saveTo = String(call.input.saveTo ?? '').trim()
+      if (!templatePath) return fail(t('aiFailNewElement'), 'templatePath is required')
+      if (selected.length === 0) return fail(t('aiFailNewElement'), 'selectedSlides is required')
+      if (!saveTo) {
+        return fail(
+          t('aiFailNewElement'),
+          'saveTo is required: the generated deck must be saved to a NEW file (the template original is never modified)',
+        )
+      }
+      const r = await api.templateFill({
+        templatePath,
+        selectedSlides: selected,
+        edits: edits as Array<{
+          slide: number
+          address: { shapeId: number; paragraph: number }
+          newText: string
+          expectedText?: string
+        }>,
+        saveTo,
+      })
+      if (!r || 'error' in r) {
+        return fail(t('aiFailNewElement'), (r as { error?: string })?.error ?? 'fill failed')
+      }
+      return {
+        output:
+          'Presentation generated from template and saved to ' +
+          saveTo +
+          '. The deck is open on the canvas and fully editable.',
+        mutated: true,
+        summary: t('aiSumNewShape', { n: 1 }),
+      }
+    }
     case 'create_research_figure': {
       // PHASE-0A closure: ONE production implementation lives in
       // renderer/research/create-research-figure-tool.ts (pure render plan →

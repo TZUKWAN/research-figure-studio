@@ -9,11 +9,7 @@
  */
 import type { RenderSlide } from '@genoffice/pptx-render'
 import type { SemanticMetadata, SlideComment, SectionInfo } from '@genoffice/pptx-engine'
-import type {
-  AiSettings,
-  AiStreamChunk,
-  AiStreamRequest,
-} from '@genoffice/ai-provider'
+import type { AiSettings, AiStreamChunk, AiStreamRequest } from '@genoffice/ai-provider'
 
 export type { SlideComment, SectionInfo } from '@genoffice/pptx-engine'
 
@@ -1492,6 +1488,27 @@ export interface SlidesApi {
   ) => Promise<{ slide: RenderSlide } | { error: string } | null>
   /** AI batch surface: apply raw ops as one transaction (atomic/per_op, dry-run supported) */
   applyTxn: (op: ApplyTxnOp) => Promise<ApplyTxnResult | null>
+  /** Template Intelligence: analyze a pptx file into a TemplateDefinition (cached by file hash) */
+  templateAnalyze: (filePath: string) => Promise<
+    | {
+        definition: import('@genoffice/ppt-template-intelligence').TemplateDefinition
+        sourceHash: string
+      }
+    | { error: string }
+    | null
+  >
+  /** Template Intelligence: fill a template deck with content as ONE atomic transaction */
+  templateFill: (req: {
+    templatePath: string
+    selectedSlides: number[]
+    edits: Array<{
+      slide: number
+      address: { shapeId: number; paragraph: number }
+      newText: string
+      expectedText?: string
+    }>
+    saveTo?: string
+  }) => Promise<{ slide?: RenderSlide } | { error: string } | null>
   /** Roll the deck back to an AI rollback point; returns the restored full RenderSlide array, null when the id is unknown */
   aiSnapshotRestore: (id: number, ownerToken?: string) => Promise<RenderSlide[] | null>
   /** Undo/redo (main-process snapshot history): returns the restored full RenderSlide array, null when nothing to undo */
@@ -1567,7 +1584,9 @@ export interface SlidesApi {
   }>
   getPromptOverrides: () => Promise<Record<string, string>>
   /** versioned override records (AI-P0-04); absent on older main processes */
-  getPromptOverrideRecords?: () => Promise<Record<string, import('./prompt-protocol').PromptOverrideRecord>>
+  getPromptOverrideRecords?: () => Promise<
+    Record<string, import('./prompt-protocol').PromptOverrideRecord>
+  >
   /** current editable-policy version the app composes prompts with */
   getPromptPolicyVersion?: () => Promise<number>
   setPromptOverride: (id: string, text: string) => Promise<boolean>

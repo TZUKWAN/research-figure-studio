@@ -108,6 +108,12 @@ import {
   type TextElement,
 } from '@genoffice/pptx-engine'
 import {
+  analyzeTemplateBytes,
+  cacheKey,
+  cachedAnalyze,
+  GordenDirProvider,
+} from '@genoffice/ppt-template-intelligence'
+import {
   buildRenderSlide,
   layoutText,
   makeViewport,
@@ -1445,6 +1451,150 @@ export function registerSlidesIpc(): void {
   // AI batch surface: raw ops arrive as one transaction. The registry validates
   // (guided errors), the executor owns atomicity/rollback/journal; dry-run
   // rehearses the plan without touching the deck or its history.
+
+  // ── Template Intelligence (Gorden integration, production closure 3) ──
+  // analyze_ppt_template: read a pptx file → TemplateDefinition (cached).
+  // create_presentation_from_template: analyze (cached) → compileFillPlan →
+  // ONE atomic sessionTxn (prune + setSlotParagraphText) → rebuilt slide.
+  let templateProvider: import('@genoffice/ppt-template-intelligence').GordenDirProvider | null =
+    null
+  const templateCache = new Map<string, string>()
+  const getTemplateProvider = () => {
+    const dir = process.env.METIS_GORDEN_TEMPLATES_DIR
+    if (!dir) return null
+    if (!templateProvider) {
+      templateProvider = new GordenDirProvider(dir)
+    }
+    return templateProvider
+  }
+
+  ipcMain.handle('slides:template-analyze', async (e, filePath: string) => {
+    const session = sessions.get(e.sender.id)
+    if (!session) return null
+    try {
+      const bytes = new Uint8Array(await readFile(filePath))
+      const hash = createHash('sha256').update(bytes).digest('hex')
+      const { definition } = await cachedAnalyze(
+        {
+          async get(key) {
+            const saved = templateCache.get(key)
+            return saved
+              ? (JSON.parse(saved) as import('@genoffice/ppt-template-intelligence').CacheEntry)
+              : undefined
+          },
+          async set(key, entry) {
+            templateCache.set(key, JSON.stringify(entry))
+          },
+        },
+        hash,
+        async () => analyzeTemplateBytes(bytes, { type: 'user-upload', sourceFile: filePath }),
+      )
+      return { definition, sourceHash: hash }
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  ipcMain.handle(
+    'slides:template-fill',
+    async (
+      e,
+      req: {
+        templatePath: string
+        selectedSlides: number[]
+        edits: Array<{
+          slide: number
+          address: { shapeId: number; paragraph: number }
+          newText: string
+          expectedText?: string
+        }>
+        saveTo?: string
+      },
+    ) => {
+      const session = sessions.get(e.sender.id)
+      if (!session) return null
+      try {
+        const bytes = new Uint8Array(await readFile(req.templatePath))
+        const providerModule =
+          require('@genoffice/ppt-template-intelligence') as typeof import('@genoffice/ppt-template-intelligence')
+        const opened = await openPptx(bytes)
+        const slide0 = opened.deck.slides[0]!
+        const slideElements = new Map<
+          number,
+          Array<{ elementId: string; nvId?: number; paragraphCount: number; text: string }>
+        >()
+        const elementsOf = (slide: (typeof opened.deck.slides)[number]) => {
+          const out: Array<{
+            elementId: string
+            nvId?: number
+            paragraphCount: number
+            text: string
+          }> = []
+          for (const el of slide.elements) {
+            const textObj = (el as { text?: { paragraphs?: unknown[] } }).text
+            out.push({
+              elementId: el.id,
+              nvId: (el as unknown as { nvId?: number }).nvId,
+              paragraphCount: textObj?.paragraphs?.length ?? 0,
+              text:
+                textObj?.paragraphs
+                  ?.map(
+                    (p) =>
+                      (p as { runs?: Array<{ text?: string }> }).runs
+                        ?.map((r) => r.text)
+                        .join('') ?? '',
+                  )
+                  .join('\n') ?? '',
+            })
+          }
+          return out
+        }
+        opened.deck.slides.forEach((s, i) => slideElements.set(i + 1, elementsOf(s)))
+        const compiled = providerModule.compileFillOps(
+          req.edits.map((edit) => ({ ...edit, slide: edit.slide })),
+          {
+            selectedSlides: req.selectedSlides,
+            totalSlides: opened.deck.slides.length,
+            slideElements,
+          },
+        )
+        if (compiled.errors.length > 0) {
+          return { error: compiled.errors.join('; ') }
+        }
+        // The fill compiles against the TEMPLATE file; apply the same plan to
+        // the live session deck as one atomic transaction, then save to a NEW
+        // file (never the user's original).
+        // Compiled ops target the template deck's own slide order (prune
+        // deletes descend, text ops use pruned indices) — the live session
+        // deck was opened from that same file, so they apply 1:1.
+        const result = sessionTxn(session, {
+          ops: compiled.ops as Parameters<typeof sessionTxn>[1]['ops'],
+          isolation: 'atomic',
+        })
+        if (!result) {
+          return { error: 'fill transaction failed' }
+        }
+        if (!result.applied) {
+          return {
+            error:
+              'fill transaction rolled back: ' +
+              (result.failures ?? []).map((f) => f.error).join('; '),
+          }
+        }
+        if (req.saveTo) {
+          const { savePptxToFile } = await import('@genoffice/pptx-engine')
+          await savePptxToFile(session.opened, req.saveTo)
+        }
+        const firstSlide = req.selectedSlides.length
+          ? Math.max(0, Math.min(req.selectedSlides[0]! - 1, session.opened.deck.slides.length - 1))
+          : 0
+        return rebuildSlide(session, firstSlide)
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : String(err) }
+      }
+    },
+  )
+
   ipcMain.handle('slides:apply-txn', (e, req: ApplyTxnOp): ApplyTxnResult | null => {
     const session = sessions.get(e.sender.id)
     if (!session) return null

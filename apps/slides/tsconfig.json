@@ -8,6 +8,12 @@
     "baseUrl": ".",
     "paths": {
       "@genoffice/pptx-engine": ["../../packages/pptx-engine/src/index.ts"],
+      "@genoffice/ppt-template-intelligence": [
+        "../../packages/ppt-template-intelligence/src/index.ts"
+      ],
+      "@genoffice/ppt-template-intelligence/*": [
+        "../../packages/ppt-template-intelligence/src/*.ts"
+      ],
       "@genoffice/pptx-engine/table-grid": ["../../packages/pptx-engine/src/table-grid.ts"],
       "@genoffice/pptx-engine/identity": ["../../packages/pptx-engine/src/identity.ts"],
       "@genoffice/pptx-engine/background-promote": [

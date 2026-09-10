@@ -32,7 +32,7 @@ export function connectorPoints(
   adjust?: Record<string, number>,
   routeY?: number,
 ): number[] {
-  if (routeY != null && (/^bentConnector|^curvedConnector/.test(preset))) {
+  if (routeY != null && /^bentConnector|^curvedConnector/.test(preset)) {
     const startX = flipH ? w : 0
     const endX = flipH ? 0 : w
     const startY = flipV ? h : 0

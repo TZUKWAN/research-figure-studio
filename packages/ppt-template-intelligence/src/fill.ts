@@ -37,31 +37,32 @@ export interface CompiledFill {
 /**
  * Compile slot edits + page selection into executor ops.
  *
- * - `duplicateSlide`-free approach: keep selected slides in order by pruning
- *   unselected slides, then reorder is implicit (selection order preserved by
- *   the caller building `selectedSlides` in presentation order).
- * - Text edits target the element owning the address (shape_id == nvId/cNvPr id).
- * - Paragraph-level replacement: setText with the full paragraph list, where
- *   only the addressed paragraph's text changes and every other paragraph is
- *   re-emitted with its CURRENT text (format-preserving behavior matches the
- *   engine's run-0 convention).
+ * Emission order makes indices valid throughout:
+ *  1. deleteSlide ops in DESCENDING original index (deleting from the end
+ *     never shifts lower indices);
+ *  2. text ops target the slide's PRUNED 0-based index (original minus the
+ *     number of deleted slides before it), and the slide's elements are
+ *     addressed by nvId (== python-pptx shape_id == <p:cNvPr id>).
  */
 export function compileFillOps(edits: SlotEdit[], ctx: FillOpContext): CompiledFill {
   const errors: string[] = []
   const summary: string[] = []
   const ops: Array<Record<string, unknown>> = []
 
-  // 1) prune unselected slides (delete from the end so indices stay valid)
   const keep = new Set(ctx.selectedSlides)
+  const deletedDesc: number[] = []
   for (let n = ctx.totalSlides; n >= 1; n--) {
-    if (!keep.has(n)) {
-      ops.push({ op: 'deleteSlide', target: { slide: n - 1 } })
-      summary.push(`drop slide ${n} (not selected)`)
-    }
+    if (!keep.has(n)) deletedDesc.push(n)
   }
+  for (const n of deletedDesc) {
+    ops.push({ op: 'deleteSlide', target: { slide: n - 1 } })
+    summary.push(`drop slide ${n} (not selected)`)
+  }
+  // pruned 0-based index of a kept original slide number
+  const prunedIndex = new Map<number, number>()
+  const keptAsc = [...ctx.selectedSlides].sort((a, b) => a - b)
+  keptAsc.forEach((n, i) => prunedIndex.set(n, i))
 
-  // 2) group edits per surviving slide, in presentation order
-  const order = ctx.selectedSlides
   const editsBySlide = new Map<number, SlotEdit[]>()
   for (const edit of edits) {
     if (!keep.has(edit.slide)) {
@@ -73,22 +74,12 @@ export function compileFillOps(edits: SlotEdit[], ctx: FillOpContext): CompiledF
     editsBySlide.set(edit.slide, list)
   }
 
-  // after pruning, original slide n maps to output index = number of kept slides before it
-  const outputIndex = new Map<number, number>()
-  let out = 0
-  for (const n of order) {
-    outputIndex.set(n, out)
-    out++
-  }
-
-  for (const slideNumber of order) {
-    const slideEdits = editsBySlide.get(slideNumber) ?? []
+  for (const slideNumber of keptAsc) {
+    const out0 = prunedIndex.get(slideNumber)!
     const elements = ctx.slideElements.get(slideNumber) ?? []
     const byNvId = new Map(elements.filter((e) => e.nvId != null).map((e) => [e.nvId!, e]))
-    for (const edit of slideEdits) {
-      const el =
-        byNvId.get(edit.address.shapeId) ??
-        elements.find((e) => e.text.includes(edit.expectedText ?? '\u0000'))
+    for (const edit of editsBySlide.get(slideNumber) ?? []) {
+      const el = byNvId.get(edit.address.shapeId)
       if (!el) {
         errors.push(`slide ${slideNumber}: no element with shape_id ${edit.address.shapeId}`)
         continue
@@ -103,18 +94,14 @@ export function compileFillOps(edits: SlotEdit[], ctx: FillOpContext): CompiledF
         errors.push(`slide ${slideNumber} shape ${edit.address.shapeId}: expected_text mismatch`)
         continue
       }
-      // Emit a targeted paragraph replacement: the engine's setText replaces
-      // the whole text body, so we pass marker ops that the caller resolves
-      // into full-paragraph lists from the live model (executor resolves at
-      // apply time; the paragraph index rides op field `paragraph`).
       ops.push({
         op: 'setSlotParagraphText',
-        target: { slide: outputIndex.get(slideNumber) ?? 0, el: el.elementId },
+        target: { slide: out0, el: el.elementId },
         paragraph: edit.address.paragraph,
         text: edit.newText,
       })
       summary.push(
-        `slide ${slideNumber} → output ${outputIndex.get(slideNumber)}: shape ${edit.address.shapeId} p${edit.address.paragraph} ← "${edit.newText.slice(0, 24)}"`,
+        `slide ${slideNumber} → output ${out0}: shape ${edit.address.shapeId} p${edit.address.paragraph} ← "${edit.newText.slice(0, 24)}"`,
       )
     }
   }
