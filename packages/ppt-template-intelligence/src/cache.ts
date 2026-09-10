@@ -1,5 +1,5 @@
 /**
- * Template analysis cache (GOAL §二十八): keyed by source-file sha256 +
+ * Template analysis cache (GOAL section 28): keyed by source-file sha256 +
  * parser version. A re-analysis only happens when the file changes, the
  * parser is upgraded, or the user explicitly requests a refresh.
  */

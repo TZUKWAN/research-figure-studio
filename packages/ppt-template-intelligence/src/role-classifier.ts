@@ -3,7 +3,7 @@
  *
  * Heuristics run first (text hints, shape counts, geometry); anything the
  * heuristics cannot decide stays `unknown` with a low confidence — never a
- * fabricated certainty (GOAL §三十二/§三十三).
+ * fabricated certainty (GOAL sections 32/33).
  */
 import type { ObservedTemplateFacts, PageRole } from './schema.js'
 
@@ -34,8 +34,8 @@ const HINTS: Array<{ re: RegExp; role: PageRole; confidence: number; useFor: str
     useFor: ['结束页'],
   },
   {
-    // STRONG signals only: a title merely CONTAINING 模板 (e.g. 「工作计划模板」)
-    // is a legitimate cover — promo pages say things like 模板下载/使用说明/稻壳
+    // STRONG signals only: a title merely containing the word template (e.g. work-plan-template)
+    // is a legitimate cover — promo pages say things like template-download/usage-instructions/Daoke
     re: /稻壳|模板下载|模板使用说明|感谢下载|本模板由|template by|download this template/i,
     role: 'template-promo',
     confidence: 0.9,

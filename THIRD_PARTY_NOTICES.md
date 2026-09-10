@@ -8,7 +8,7 @@
   TypeScript for this repository under the terms of that MIT license.
 - **Templates restriction**: the PowerPoint decks and preview images under
   `templates/<slug>/template.pptx` and `templates/<slug>/preview.png` originate
-  from third-party Chinese PPT-template designers (稻壳儿 / WPS Online Template
+  from third-party Chinese PPT-template designers (Daoke / WPS Online Template
   / public-government channels). Per the project's `NOTICE.md` they are
   licensed for **personal study / research / non-commercial educational use
   only**; commercial use requires permission from the original template

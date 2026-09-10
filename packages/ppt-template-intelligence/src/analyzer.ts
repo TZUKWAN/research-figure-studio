@@ -4,7 +4,7 @@
  * of observed truth; heuristics only ever ADD inference (with confidence),
  * never alter facts.
  */
-import { openPptx } from '@genoffice/pptx-engine'
+import { elementSpid, openPptx } from '@genoffice/pptx-engine'
 import { createHash } from 'node:crypto'
 import {
   PAGE_ROLES,
@@ -82,9 +82,11 @@ export async function observeTemplateFacts(
                 : el.type === 'chart'
                   ? 'chart'
                   : 'other'
-        const spid = (el as unknown as { nvId?: number }).nvId
+        // P0-4/GOAL section 32: shape_id must be the cNvPr id (== python-pptx
+        // shape_id), NOT the element array index — slot addresses depend on it
+        const spid = elementSpid(el) ?? (el as unknown as { nvId?: number }).nvId
         shapes.push({
-          shapeId: spid ?? el.anchor.spIndex,
+          shapeId: spid ?? -1,
           name: el.name,
           kind,
           hasChart: kind === 'chart',

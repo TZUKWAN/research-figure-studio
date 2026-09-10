@@ -9,7 +9,7 @@ Cloned to: `research-figure-studio/gorden-ppt-skill-ref` (reference only, gitign
   including commercial use, with attribution.
 - `NOTICE.md`: **templates/<slug>/template.pptx + preview.png carry a separate
   non-commercial restriction** from the original template designers (sourced
-  from 稻壳/WPS public channels). MIT does NOT cover these third-party assets.
+  from Daoke/WPS public channels). MIT does NOT cover these third-party assets.
 - Decision (product owner directive): all _capabilities_ are fully preserved
   and usable in Metis Diagram; the 21 bundled template decks ship as an
   optional **GordenTemplateProvider** loaded from a local directory

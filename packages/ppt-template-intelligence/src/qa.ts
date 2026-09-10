@@ -157,7 +157,7 @@ export interface ContentFitAuditResult {
   pass: boolean
 }
 
-/** Hard gate: overflow beyond tolerance fails delivery (GOAL §四十八). */
+/** Hard gate: overflow beyond tolerance fails delivery (GOAL section 48). */
 export function auditContentFit(
   fits: Array<{
     slideIndex: number
