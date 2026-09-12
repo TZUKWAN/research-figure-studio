@@ -8812,3 +8812,137 @@ body.show-curtain::after {
 .rb-size-apply:disabled {
   opacity: 0.45;
 }
+
+/* ── Template selection panel (GOAL §29): previews + analyze progress + cancel ── */
+.tpl-panel {
+  margin: 0 12px 8px;
+  border: 1px solid var(--slides-ctl-border, #ccc);
+  border-radius: 8px;
+  padding: 8px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.tpl-panel-title {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: var(--slides-ink, inherit);
+}
+.tpl-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  gap: 8px;
+}
+.tpl-card {
+  border: 1px solid transparent;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.tpl-card[data-selected] {
+  border-color: var(--accent);
+}
+.tpl-thumb {
+  display: block;
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: none;
+  padding: 0;
+  background: var(--surface);
+  cursor: pointer;
+  overflow: hidden;
+}
+.tpl-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.tpl-thumb-pending {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--slides-text-disabled, #999);
+}
+.tpl-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 2px;
+  font-size: 11px;
+}
+.tpl-card-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.tpl-card-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+.tpl-progress {
+  display: inline-block;
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--slides-hover-wash, rgb(0 0 0 / 10%));
+  overflow: hidden;
+}
+.tpl-progress-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+.tpl-progress-label {
+  font-variant-numeric: tabular-nums;
+}
+.tpl-cancel {
+  border: 1px solid var(--slides-ctl-border, #ccc);
+  background: transparent;
+  border-radius: 4px;
+  font-size: 10px;
+  padding: 1px 5px;
+  cursor: pointer;
+}
+.tpl-error {
+  color: var(--slides-error, #c00);
+}
+.tpl-use-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.tpl-roles {
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.tpl-use {
+  margin-left: auto;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  background: transparent;
+  border-radius: 6px;
+  font-size: 11px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+.tpl-use:hover {
+  background: var(--accent);
+  color: #fff;
+}
+.tpl-toggle-on {
+  outline: 1px solid var(--accent);
+}
+.tpl-toggle-glyph {
+  font-size: 13px;
+  line-height: 1;
+}

@@ -299,6 +299,23 @@ const api: SlidesApi = {
   applyEditScript: (op: ApplyEditScriptOp) => ipcRenderer.invoke('slides:apply-edit-script', op),
   applyTxn: (op: ApplyTxnOp) => ipcRenderer.invoke('slides:apply-txn', op),
   templateAnalyze: (filePath: string) => ipcRenderer.invoke('slides:template-analyze', filePath),
+  templateAnalyzeCancel: (filePath: string) =>
+    ipcRenderer.invoke('slides:template-analyze-cancel', filePath),
+  onTemplateAnalyzeProgress: (
+    handler: (p: {
+      filePath: string
+      stage: 'parse' | 'analyze'
+      current: number
+      total: number
+      slideNumber?: number
+    }) => void,
+  ) => {
+    const listener = (_e: unknown, p: Parameters<typeof handler>[0]) => handler(p)
+    ipcRenderer.on('slides:template-analyze-progress', listener)
+    return () => ipcRenderer.removeListener('slides:template-analyze-progress', listener)
+  },
+  templateLibraryList: () => ipcRenderer.invoke('slides:template-library-list'),
+  templateThumb: (filePath: string) => ipcRenderer.invoke('slides:template-thumb', filePath),
   templateFill: (req: unknown) => ipcRenderer.invoke('slides:template-fill', req),
   aiSnapshotRestore: (id: number, ownerToken?: string) =>
     ipcRenderer.invoke('slides:ai-snapshot-restore', id, ownerToken),

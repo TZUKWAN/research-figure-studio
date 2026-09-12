@@ -43,15 +43,26 @@ function inferLanguage(text: string): 'zh' | 'en' | 'mixed' {
   return 'mixed'
 }
 
-/** Parse pptx bytes into raw observed facts (no inference). */
+/** Parse pptx bytes into raw observed facts (no inference). Accepts optional
+    progress reporting and an abort signal (checked between slides). */
 export async function observeTemplateFacts(
   bytes: Uint8Array,
+  opts?: TemplateAnalyzeOpts,
 ): Promise<{ facts: ObservedTemplateFacts; hash: string }> {
   const opened = await openPptx(bytes)
   const hash = createHash('sha256').update(bytes).digest('hex')
   const pages: ObservedTemplateFacts['pages'] = []
+  const total = opened.deck.slides.length
 
-  opened.deck.slides.forEach((slide, slideIndex) => {
+  for (let slideIndex = 0; slideIndex < total; slideIndex++) {
+    throwIfAnalysisAborted(opts?.signal)
+    opts?.onProgress?.({
+      stage: 'parse',
+      current: slideIndex + 1,
+      total,
+      slideNumber: slideIndex + 1,
+    })
+    const slide = opened.deck.slides[slideIndex]!
     const shapes: ObservedTemplateFacts['pages'][number]['shapes'] = []
     let zOrder = 0
     const walk = (elements: typeof slide.elements, groupPath: string[]) => {
@@ -174,7 +185,7 @@ export async function observeTemplateFacts(
       /Type="[^"]*slideLayout"[^>]*Target="([^"]*)"/.exec(relsXml ?? '')?.[1] ??
       /Target="([^"]*)"[^>]*Type="[^"]*slideLayout"/.exec(relsXml ?? '')?.[1]
     pages.push({ slideNumber: slideIndex + 1, shapes, layoutPart })
-  })
+  }
 
   // theme colors from the theme part if present
   const themeColors: string[] = []
@@ -454,12 +465,39 @@ export function analyzeTemplate(
   }
 }
 
+/** GOAL §29: analyzer progress + cancellation surface. `parse` reports one
+    event per slide as the deck is walked; `analyze` reports the inference
+    pass. `signal` aborts between slides with an `AbortError`. */
+export interface TemplateAnalyzeProgress {
+  stage: 'parse' | 'analyze'
+  current: number
+  total: number
+  /** slideNumber being processed, when stage is 'parse' */
+  slideNumber?: number
+}
+
+export interface TemplateAnalyzeOpts {
+  onProgress?: (p: TemplateAnalyzeProgress) => void
+  signal?: AbortSignal
+}
+
+export function throwIfAnalysisAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    const err = new Error('template analysis aborted')
+    err.name = 'AbortError'
+    throw err
+  }
+}
+
 /** One-call analyzer: bytes → TemplateDefinition. */
 export async function analyzeTemplateBytes(
   bytes: Uint8Array,
   source: { type: TemplateDefinition['source']['type']; sourceFile?: string },
   nameHint?: string,
+  opts?: TemplateAnalyzeOpts,
 ): Promise<TemplateDefinition> {
-  const { facts, hash } = await observeTemplateFacts(bytes)
+  const { facts, hash } = await observeTemplateFacts(bytes, opts)
+  throwIfAnalysisAborted(opts?.signal)
+  opts?.onProgress?.({ stage: 'analyze', current: 1, total: 1 })
   return analyzeTemplate(facts, hash, source, nameHint)
 }

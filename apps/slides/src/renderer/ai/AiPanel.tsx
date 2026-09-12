@@ -41,6 +41,7 @@ import {
   settingsSupportVision,
 } from './slide-qc'
 import { useI18n, t as tGlobal, aiLangDirective, type TFunc } from '../i18n/locale'
+import { TemplatePanel } from './TemplatePanel'
 import { Markdown } from '@genoffice/ui'
 import { CopilotMark } from '../components/icons'
 import sendEnterOn from '../assets/send-enter-on.png'
@@ -402,6 +403,8 @@ export function AiPanel({
 }: AiPanelProps) {
   const { t } = useI18n()
   const [input, setInput] = useState('')
+  // GOAL section 29: template selection panel (previews + analyze progress + cancel)
+  const [tplPanelOpen, setTplPanelOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [chat, setChat] = useState<ChatEntry[]>([])
   /** Past conversation restored from JSONL (read-only transcript, not fed to the model) */
@@ -948,7 +951,16 @@ export function AiPanel({
       // the user's own model (no gen-model override) for schema-contract stages.
       // signal: user stop must abort in-flight pipeline LLM calls too (AI-P1-05).
       runLlm: async (system, user, signal, images) => {
-        const result = await runLlmOnce(system, user, undefined, false, signal, undefined, undefined, images)
+        const result = await runLlmOnce(
+          system,
+          user,
+          undefined,
+          false,
+          signal,
+          undefined,
+          undefined,
+          images,
+        )
         return result.ok
           ? { ok: true, text: result.text }
           : { ok: false, error: result.error ?? 'LLM call failed' }
@@ -2450,6 +2462,15 @@ export function AiPanel({
             />
           )}
           {attachNotice && <div className="ai-attach-notice">{attachNotice}</div>}
+          {tplPanelOpen && (
+            <TemplatePanel
+              onUse={(instruction) => {
+                inputEditedSinceRunRef.current = true
+                setInput(instruction)
+                inputRef.current?.focus()
+              }}
+            />
+          )}
           <div className="ai-input-box">
             {attachments.length > 0 && (
               <div className="ai-attachments" onScroll={onAttachmentsScroll}>
@@ -2538,6 +2559,17 @@ export function AiPanel({
               rows={1}
             />
             <div className="ai-input-footer">
+              <button
+                className={`ai-attach-btn${tplPanelOpen ? ' tpl-toggle-on' : ''}`}
+                data-tpl-toggle="true"
+                onClick={() => setTplPanelOpen((v) => !v)}
+                data-tip={t('tplToggle')}
+                aria-label={t('tplToggle')}
+              >
+                <span className="tpl-toggle-glyph" aria-hidden>
+                  ▦
+                </span>
+              </button>
               <button
                 className="ai-attach-btn"
                 onClick={pickAttachments}

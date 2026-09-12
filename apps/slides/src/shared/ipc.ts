@@ -1495,8 +1495,38 @@ export interface SlidesApi {
         sourceHash: string
       }
     | { error: string }
+    | { canceled: true }
     | null
   >
+  /** GOAL §29: abort an in-flight template analysis for the given file */
+  templateAnalyzeCancel: (filePath: string) => Promise<boolean>
+  /** GOAL §29: subscribe to per-slide analysis progress; returns the unsubscribe fn */
+  onTemplateAnalyzeProgress: (
+    handler: (p: {
+      filePath: string
+      stage: 'parse' | 'analyze'
+      current: number
+      total: number
+      slideNumber?: number
+    }) => void,
+  ) => () => void
+  /** GOAL §29: template selection panel data — cheap library listing (no parsing) */
+  templateLibraryList: () => Promise<{
+    entries: Array<{
+      id: string
+      name: string
+      sourceType: 'gorden-local'
+      slideCount: number
+      tags: string[]
+      origin: string
+      previewPath?: string
+    }>
+    dir: string | null
+  }>
+  /** GOAL §29: first-slide render model for a template deck (renderer draws + caches the bitmap) */
+  templateThumb: (
+    filePath: string,
+  ) => Promise<{ renderSlide: RenderSlide; sourceHash: string } | { error: string } | null>
   /** Template Intelligence: fill a template deck with content as ONE atomic transaction */
   templateFill: (req: {
     templatePath: string

@@ -114,6 +114,8 @@ import {
   compileFillPlan,
   analyzeTemplateBytes,
   cachedAnalyze,
+  GordenDirProvider,
+  type TemplateAnalyzeProgress,
 } from '@genoffice/ppt-template-intelligence'
 import {
   buildRenderSlide,
@@ -1463,10 +1465,16 @@ export function registerSlidesIpc(): void {
   // create_presentation_from_template: analyze (cached) → compileFillPlan →
   // ONE atomic sessionTxn (prune + setSlotParagraphText) → rebuilt slide.
   const templateCache = new Map<string, string>()
+  // GOAL §29: in-flight analyses by file path — the cancel IPC aborts the
+  // analyzer's AbortSignal, which surfaces as { canceled: true } to the caller
+  const templateAnalyzeAborts = new Map<string, AbortController>()
 
   ipcMain.handle('slides:template-analyze', async (e, filePath: string) => {
     const session = sessions.get(e.sender.id)
     if (!session) return null
+    const aborts = templateAnalyzeAborts
+    const controller = new AbortController()
+    aborts.set(filePath, controller)
     try {
       const bytes = new Uint8Array(await readFile(filePath))
       const hash = createHash('sha256').update(bytes).digest('hex')
@@ -1483,12 +1491,62 @@ export function registerSlidesIpc(): void {
           },
         },
         hash,
-        async () => analyzeTemplateBytes(bytes, { type: 'user-upload', sourceFile: filePath }),
+        async () =>
+          analyzeTemplateBytes(bytes, { type: 'user-upload', sourceFile: filePath }, undefined, {
+            signal: controller.signal,
+            // GOAL §29: stream per-slide progress to the requesting renderer
+            onProgress: (p: TemplateAnalyzeProgress) => {
+              if (!e.sender.isDestroyed()) {
+                e.sender.send('slides:template-analyze-progress', { filePath, ...p })
+              }
+            },
+          }),
       )
       return { definition, sourceHash: hash }
     } catch (err) {
+      if ((err as { name?: string }).name === 'AbortError') return { canceled: true }
+      return { error: err instanceof Error ? err.message : String(err) }
+    } finally {
+      aborts.delete(filePath)
+    }
+  })
+
+  // ── Template library + previews (GOAL §29): the selection panel's data plane.
+  // The Gorden directory is user-supplied (license: never bundled); entries stay
+  // cheap (no parsing), and thumbnails are first-slide render models the
+  // renderer draws and caches by source hash.
+  const libraryProvider = (): GordenDirProvider | null => {
+    const dir = process.env.METIS_GORDEN_TEMPLATES_DIR
+    return dir && GordenDirProvider.isAvailable(dir) ? new GordenDirProvider(dir) : null
+  }
+
+  ipcMain.handle('slides:template-library-list', async () => {
+    const provider = libraryProvider()
+    if (!provider) return { entries: [], dir: null }
+    return { entries: await provider.list(), dir: process.env.METIS_GORDEN_TEMPLATES_DIR ?? null }
+  })
+
+  ipcMain.handle('slides:template-thumb', async (_e, filePath: string) => {
+    try {
+      const bytes = new Uint8Array(await readFile(filePath))
+      const sourceHash = createHash('sha256').update(bytes).digest('hex')
+      const opened = await openPptx(bytes)
+      const slide = opened.deck.slides[0]
+      if (!slide) return { error: 'template has no slides' }
+      const renderSlide = buildRenderSlide(slide, opened.deck.size, {
+        fitWidthPx: 480,
+        media: makeMediaResolver(opened),
+        metrics: getFontMetrics(),
+      })
+      return { renderSlide, sourceHash }
+    } catch (err) {
       return { error: err instanceof Error ? err.message : String(err) }
     }
+  })
+
+  ipcMain.handle('slides:template-analyze-cancel', (_e, filePath: string) => {
+    templateAnalyzeAborts.get(filePath)?.abort()
+    return true
   })
 
   ipcMain.handle(
