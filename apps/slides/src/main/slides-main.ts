@@ -1533,6 +1533,7 @@ export function registerSlidesIpc(): void {
             nvId?: number
             paragraphCount: number
             text: string
+            groupId?: string
           }>
         >()
         const elementsOf = (slide: (typeof opened.deck.slides)[number]) => {
@@ -1542,25 +1543,42 @@ export function registerSlidesIpc(): void {
             nvId?: number
             paragraphCount: number
             text: string
+            groupId?: string
           }> = []
-          for (const el of slide.elements) {
-            const textObj = (el as { text?: { paragraphs?: unknown[] } }).text
-            out.push({
-              elementId: el.id,
-              durableId: elementDurableId(el) ?? undefined,
-              nvId: canonicalPptShapeId(el) ?? undefined,
-              paragraphCount: textObj?.paragraphs?.length ?? 0,
-              text:
-                textObj?.paragraphs
-                  ?.map(
-                    (p) =>
-                      (p as { runs?: Array<{ text?: string }> }).runs
-                        ?.map((r) => r.text)
-                        .join('') ?? '',
-                  )
-                  .join('\n') ?? '',
-            })
+          // mirrors the analyzer's walk: group-internal slots are fillable
+          // via op.group + the child's durable element id
+          const walk = (
+            elements: (typeof opened.deck.slides)[number]['elements'],
+            groupId?: string,
+          ) => {
+            for (const el of elements) {
+              if (el.type === 'group') {
+                walk(
+                  (el as unknown as { children: typeof elements }).children,
+                  elementDurableId(el) ?? el.id,
+                )
+                continue
+              }
+              const textObj = (el as { text?: { paragraphs?: unknown[] } }).text
+              out.push({
+                elementId: el.id,
+                durableId: elementDurableId(el) ?? undefined,
+                nvId: canonicalPptShapeId(el) ?? undefined,
+                paragraphCount: textObj?.paragraphs?.length ?? 0,
+                text:
+                  textObj?.paragraphs
+                    ?.map(
+                      (p) =>
+                        (p as { runs?: Array<{ text?: string }> }).runs
+                          ?.map((r) => r.text)
+                          .join('') ?? '',
+                    )
+                    .join('\n') ?? '',
+                ...(groupId ? { groupId } : {}),
+              })
+            }
           }
+          walk(slide.elements)
           return out
         }
         opened.deck.slides.forEach((s, i) => slideElements.set(i + 1, elementsOf(s)))
