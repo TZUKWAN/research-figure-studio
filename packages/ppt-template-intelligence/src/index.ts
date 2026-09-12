@@ -1,4 +1,5 @@
 export * from './schema.js'
+export * from './migrate.js'
 export * from './capacity.js'
 export * from './role-classifier.js'
 export * from './analyzer.js'

@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { analyzeTemplateBytes, compileFillOps } from '../src/index.js'
+import { analyzeTemplateBytes, compileFillOps, compileFillPlan } from '../src/index.js'
 import {
   canonicalPptShapeId,
   commitSaved,
@@ -195,6 +195,70 @@ describe('fill outputSequence (GOAL §九)', () => {
       )
       expect(texts).toContain('ORIGINAL-INSTANCE')
       expect(texts).toContain('CLONE-INSTANCE')
+    },
+  )
+
+  it.skipIf(!HAS_GORDEN)(
+    'compileFillPlan: slotId-only plan compiles without physical addresses',
+    async () => {
+      const templatePath = join(GORDEN_DIR!, 'minimal-business-summary', 'template.pptx')
+      const bytes = readFileSync(templatePath)
+      const def = await analyzeTemplateBytes(bytes, { type: 'gorden-local' })
+      const live = await openPptx(bytes)
+      const slideIds = slideIdsOf(live)
+      const slideElements = elementsOf(live)
+
+      const coverPage = def.pages.find((p) => p.role === 'cover') ?? def.pages[0]!
+      const endingPage =
+        def.pages.find((p) => p.role === 'ending') ?? def.pages[def.pages.length - 1]!
+      const coverSlot = coverPage.editableSlots[0]!
+      const plan = {
+        templateId: def.id,
+        slides: [
+          {
+            sourceSlideId: endingPage.slideId,
+            outputOrder: 0,
+            purpose: 'reordered ending first proves reorder',
+            slotValues: [],
+          },
+          {
+            sourceSlideId: coverPage.slideId,
+            outputOrder: 1,
+            purpose: 'cover with filled title',
+            slotValues: [{ slotId: coverSlot.id, text: 'PLAN-FILLED' }],
+          },
+        ],
+      }
+      const compiled = compileFillPlan(def, plan, {
+        totalSlides: def.pages.length,
+        slideIds,
+        slideElements,
+      })
+      expect(compiled.errors).toEqual([])
+      // one text op, addressed by durable element id — no physical addr leaked
+      const fills = compiled.ops.filter((o) => o.op === 'setSlotParagraphText')
+      expect(fills).toHaveLength(1)
+      expect(String((fills[0]!.target as { el: string }).el)).toMatch(/^e_/)
+      expect(String((fills[0]!.target as { slide: string }).slide)).toMatch(/^s_/)
+
+      // unknown slotId → compile error, nothing emitted
+      const bad = compileFillPlan(
+        def,
+        {
+          templateId: def.id,
+          slides: [
+            {
+              sourceSlideId: coverPage.slideId,
+              outputOrder: 0,
+              purpose: 'x',
+              slotValues: [{ slotId: 'nope', text: 'x' }],
+            },
+          ],
+        },
+        { totalSlides: def.pages.length, slideIds, slideElements },
+      )
+      expect(bad.errors.join(' ')).toMatch(/unknown slotId/)
+      expect(bad.ops).toHaveLength(0)
     },
   )
 })

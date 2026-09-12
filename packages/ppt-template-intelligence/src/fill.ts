@@ -215,3 +215,73 @@ export function compileFillOps(edits: SlotEdit[], ctx: FillOpContext): CompiledF
 
   return { ops, summary, errors }
 }
+
+/**
+ * GOAL §十: TemplateFillPlan → executor ops. THE production path — consumers
+ * name template slots (slotId) and template pages (slideId); every physical
+ * address (slide number, shape id, paragraph index) is resolved HERE against
+ * the analyzed TemplateDefinition and never crosses the API boundary.
+ *
+ * outputOrder entries form the outputSequence (reorder + clone); an unknown
+ * slotId or a non-editable slot is a compile ERROR, never silently skipped.
+ */
+export function compileFillPlan(
+  def: import('./schema.js').TemplateDefinition,
+  plan: import('./schema.js').TemplateFillPlan,
+  ctx: {
+    totalSlides: number
+    slideIds?: Map<number, string>
+    slideElements: FillOpContext['slideElements']
+  },
+): CompiledFill {
+  const errors: string[] = []
+  const summary: string[] = []
+  const pagesBySlideId = new Map(def.pages.map((p) => [p.slideId, p]))
+
+  const ordered = [...plan.slides].sort((a, b) => a.outputOrder - b.outputOrder)
+  const outputSequence: number[] = []
+  const edits: SlotEdit[] = []
+  const occurrenceBySource = new Map<string, number>()
+  for (const entry of ordered) {
+    const page = pagesBySlideId.get(entry.sourceSlideId)
+    if (!page) {
+      errors.push(`plan references unknown slide "${entry.sourceSlideId}"`)
+      continue
+    }
+    // instance defaults to the running occurrence among same-source entries
+    const instance = entry.instance ?? occurrenceBySource.get(entry.sourceSlideId) ?? 0
+    occurrenceBySource.set(entry.sourceSlideId, instance + 1)
+    outputSequence.push(page.originalSlideIndex)
+    if (entry.slotValues.length === 0) continue
+    const allSlots = [...page.editableSlots, ...page.nonEditableSlots]
+    const byId = new Map(allSlots.map((s) => [s.id, s]))
+    for (const value of entry.slotValues) {
+      const slot = byId.get(value.slotId)
+      if (!slot) {
+        errors.push(`unknown slotId "${value.slotId}" on ${entry.sourceSlideId}`)
+        continue
+      }
+      if (!slot.editable) {
+        errors.push(`slot "${value.slotId}" on ${entry.sourceSlideId} is not editable`)
+        continue
+      }
+      edits.push({
+        slide: page.originalSlideIndex,
+        address: slot.address,
+        newText: value.text,
+        expectedText: slot.currentText || undefined,
+        instance,
+      })
+    }
+    if (entry.chartUpdates?.length) {
+      errors.push(
+        `chartUpdates on ${entry.sourceSlideId} are not compiled yet — native chart editing ships separately (GOAL §18)`,
+      )
+    }
+  }
+  if (errors.length > 0) return { ops: [], summary, errors }
+
+  const compiled = compileFillOps(edits, { ...ctx, outputSequence })
+  summary.unshift(`plan ${plan.templateId}: ${outputSequence.length} output slides`)
+  return { ...compiled, summary: [...summary, ...compiled.summary], errors: compiled.errors }
+}

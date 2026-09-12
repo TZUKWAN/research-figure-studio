@@ -99,3 +99,77 @@ export function estimateTextFit(
     confidence: slot.capacity.confidence,
   }
 }
+
+/**
+ * GOAL §十五: REAL_LAYOUT_MEASURE tier — wrap computed from ACTUAL glyph
+ * advances of the named installed family (@genoffice/font-metrics hmtx/cmap),
+ * not the 0.5/1.0 em approximations. Returns null (caller keeps the fast
+ * estimate) when the family is unknown to the OS or no box geometry exists;
+ * the tier field in the slot's capacity records which path produced the
+ * numbers — never claim measured precision for an estimate.
+ *
+ * font-metrics is loaded lazily: it reads system font files (node:fs), so it
+ * must never enter a renderer bundle.
+ */
+export async function measureTextFitReal(
+  text: string,
+  slot: Pick<TemplateSlot, 'capacity' | 'typography'>,
+  opts?: {
+    boxEmu?: { cx: number; cy: number }
+    insetsEmu?: { l: number; t: number; r: number; b: number }
+    fontPt?: number
+    family?: string
+    lineHeightPct?: number
+  },
+): Promise<TextFitResult | null> {
+  const family = opts?.family ?? slot.typography.fontFamily
+  if (!family) return null
+  const fontPt = opts?.fontPt ?? slot.typography.fontSizePt ?? 18
+  const insets = opts?.insetsEmu ?? { l: 91440, t: 45720, r: 91440, b: 45720 }
+  const box = opts?.boxEmu
+    ? {
+        w: (opts.boxEmu.cx - insets.l - insets.r) / 12700,
+        h: (opts.boxEmu.cy - insets.t - insets.b) / 12700,
+      }
+    : slot.capacity.boxEmu
+      ? {
+          w: (slot.capacity.boxEmu.cx - insets.l - insets.r) / 12700,
+          h: (slot.capacity.boxEmu.cy - insets.t - insets.b) / 12700,
+        }
+      : undefined
+  if (!box || box.w <= 0 || box.h <= 0) return null
+
+  let widths: number[] | null = null
+  try {
+    // lazy: keeps node:fs out of renderer bundles
+    const { advanceWidths } = await import('@genoffice/font-metrics')
+    widths = advanceWidths(family, text, fontPt, { bold: slot.typography.bold })
+  } catch {
+    widths = null
+  }
+  if (!widths) return null
+
+  // greedy wrap on measured advances (twips → pt at /20)
+  const lines: number[] = [0]
+  for (const tw of widths) {
+    const w = tw / 20
+    const current = lines[lines.length - 1]!
+    if (current + w > box.w && current > 0) lines.push(w)
+    else lines[lines.length - 1] = current + w
+  }
+  const estimatedLines = lines.length
+  const lineHeightPt = fontPt * 1.2 * ((opts?.lineHeightPct ?? 100) / 100)
+  const maxLines = Math.max(1, Math.floor(box.h / lineHeightPt))
+  const overflowY = Math.max(0, (estimatedLines - maxLines) * lineHeightPt)
+  const pressure =
+    maxLines > 0 ? Math.min(2, estimatedLines / maxLines) : estimatedLines > 1 ? 1.2 : 0.8
+  return {
+    fits: overflowY <= 0.05,
+    overflowX: 0,
+    overflowY: Math.round(overflowY * 100) / 100,
+    estimatedLines,
+    maxLines,
+    pressure: Math.round(pressure * 100) / 100,
+    confidence: 0.95,
+  }
+}

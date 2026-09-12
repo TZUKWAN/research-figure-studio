@@ -15,7 +15,7 @@ import {
   type TypeScaleEntry,
 } from './schema.js'
 import { classifyPageRole } from './role-classifier.js'
-import type { SlotRole } from './schema.js'
+import type { SlotRole, TemplateFontProfile } from './schema.js'
 
 function inferSlotRole(
   text: string,
@@ -53,23 +53,47 @@ export async function observeTemplateFacts(
 
   opened.deck.slides.forEach((slide, slideIndex) => {
     const shapes: ObservedTemplateFacts['pages'][number]['shapes'] = []
-    const walk = (elements: typeof slide.elements) => {
+    let zOrder = 0
+    const walk = (elements: typeof slide.elements, groupPath: string[]) => {
       for (const el of elements) {
         if (el.type === 'group') {
-          walk((el as unknown as { children: typeof slide.elements }).children)
+          walk(
+            (el as unknown as { children: typeof slide.elements }).children,
+            [...groupPath, el.id],
+          )
           continue
         }
-        const textObj = (el as { text?: { paragraphs?: unknown[] } }).text
-        const paragraphs = (
-          textObj as
-            | {
-                paragraphs?: Array<{
-                  runs?: Array<{ text: string; fontSize?: number; bold?: boolean }>
-                  fontSize?: number
-                }>
-              }
-            | undefined
-        )?.paragraphs
+        const elObj = el as unknown as {
+          name?: string
+          transform: { offset: { x: number; y: number; cx: number; cy: number }; rot?: number }
+          fill?: { type: string; color?: string }
+          stroke?: { color?: string }
+          opacity?: number
+          mediaRef?: string
+          text?: {
+            paragraphs?: Array<{
+              runs?: Array<{
+                text: string
+                fontSize?: number
+                bold?: boolean
+                fontFamily?: string
+                italic?: boolean
+                underline?: boolean
+                color?: string
+              }>
+              fontSize?: number
+              align?: string
+              lineHeight?: number
+              level?: number
+              bullet?: { type: string }
+            }>
+            anchor?: 'top' | 'middle' | 'bottom'
+            insets?: { l: number; t: number; r: number; b: number }
+            autofit?: 'none' | 'shrink' | 'resize'
+          }
+        }
+        const textObj = elObj.text
+        const paragraphs = textObj?.paragraphs
         const kind: 'text' | 'picture' | 'table' | 'chart' | 'group' | 'other' =
           el.type === 'text' || (el.type === 'shape' && textObj)
             ? 'text'
@@ -80,13 +104,19 @@ export async function observeTemplateFacts(
                 : el.type === 'chart'
                   ? 'chart'
                   : 'other'
-        // P0-4/GOAL §八: the canonical cross-parse identity — the cNvPr id
+        // GOAL §八: the canonical cross-parse identity — the cNvPr id
         // (== python-pptx shape_id), never the element array index; slot
         // addresses and fill ops must agree on this one function
         const spid = canonicalPptShapeId(el)
+        // placeholder type lives only in the raw bytes (p:ph type=...)
+        const rawXml = (el as unknown as { anchor?: { originalXml?: string } }).anchor
+          ?.originalXml
+        const phType = rawXml
+          ? /<p:ph[^>]*?type="([a-zA-Z]+)"/.exec(rawXml)?.[1]
+          : undefined
         shapes.push({
           shapeId: spid ?? -1,
-          name: el.name,
+          name: elObj.name,
           kind,
           hasChart: kind === 'chart',
           text: paragraphs?.map((p) => p.runs?.map((r) => r.text).join('') ?? '').join('\n'),
@@ -97,45 +127,107 @@ export async function observeTemplateFacts(
               text: r.text,
               fontSizePt: r.fontSize,
               bold: r.bold,
+              fontFamily: r.fontFamily,
+              italic: r.italic,
+              underline: r.underline,
+              color: r.color,
             })),
-            fontSizePt: p.fontSize,
+            fontSizePt: p.fontSize ?? p.runs?.[0]?.fontSize,
+            fontFamily: p.runs?.find((r) => r.fontFamily)?.fontFamily,
+            align: p.align as 'left' | 'center' | 'right' | 'justify' | undefined,
+            lineSpacingPct: p.lineHeight,
+            bulletLevel: p.level,
+            hasBullet: p.bullet != null && p.bullet.type !== 'none',
           })),
           boxEmu: {
-            x: el.transform.offset.x,
-            y: el.transform.offset.y,
-            cx: el.transform.offset.cx,
-            cy: el.transform.offset.cy,
+            x: elObj.transform.offset.x,
+            y: elObj.transform.offset.y,
+            cx: elObj.transform.offset.cx,
+            cy: elObj.transform.offset.cy,
           },
+          rotationDeg:
+            elObj.transform.rot != null ? elObj.transform.rot / 60000 : undefined,
+          zOrder: zOrder++,
+          verticalAnchor: textObj?.anchor,
+          insetsEmu: textObj?.insets,
+          autofit: textObj?.autofit,
+          fillColor:
+            elObj.fill?.type === 'solid' && typeof elObj.fill.color === 'string'
+              ? elObj.fill.color
+              : undefined,
+          strokeColor:
+            typeof elObj.stroke?.color === 'string' ? elObj.stroke.color : undefined,
+          opacity: elObj.opacity,
+          placeholderType: phType,
+          ...(groupPath.length ? { groupPath: [...groupPath] } : {}),
         })
       }
     }
-    walk(slide.elements)
-    pages.push({ slideNumber: slideIndex + 1, shapes })
+    walk(slide.elements, [])
+    // GOAL §十二: the layout part this slide inherits chrome from
+    const relsPath = slide.path.replace(/(slide\d+\.xml)$/, '_rels/$1.rels')
+    const relsXml =
+      opened.archive.readText?.(relsPath) ??
+      (() => {
+        try {
+          return new TextDecoder().decode(
+            opened.archive.entries.get(relsPath) as Uint8Array,
+          )
+        } catch {
+          return ''
+        }
+      })()
+    const layoutPart =
+      /Type="[^"]*slideLayout"[^>]*Target="([^"]*)"/.exec(relsXml ?? '')?.[1] ??
+      /Target="([^"]*)"[^>]*Type="[^"]*slideLayout"/.exec(relsXml ?? '')?.[1]
+    pages.push({ slideNumber: slideIndex + 1, shapes, layoutPart })
   })
 
   // theme colors from the theme part if present
   const themeColors: string[] = []
-  const themeXml =
-    opened.archive.readText?.('ppt/theme/theme1.xml') ??
-    (() => {
-      try {
-        return new TextDecoder().decode(
-          opened.archive.entries.get('ppt/theme/theme1.xml') as Uint8Array,
-        )
-      } catch {
-        return ''
-      }
-    })()
+  const readArchiveText = (part: string): string => {
+    try {
+      return (
+        opened.archive.readText?.(part) ??
+        new TextDecoder().decode(opened.archive.entries.get(part) as Uint8Array)
+      )
+    } catch {
+      return ''
+    }
+  }
+  const themeXml = readArchiveText('ppt/theme/theme1.xml')
   for (const m of themeXml.matchAll(/<a:srgbClr val="([0-9A-Fa-f]{6})"\/>/g)) {
     if (themeColors.length < 12) themeColors.push(`#${m[1]!.toUpperCase()}`)
   }
+  // GOAL §十三: theme font scheme (major = headings, minor = body; latin + ea)
+  const themeFontOf = (scheme: 'major' | 'minor', script: 'latin' | 'ea'): string | undefined => {
+    const block = new RegExp(
+      `<a:${scheme}Font><a:latin typeface="([^"]*)"[^>]*/><a:ea typeface="([^"]*)"[^>]*/>`,
+    ).exec(themeXml)
+    if (block) return script === 'latin' ? block[1] || undefined : block[2] || undefined
+    const single = new RegExp(`<a:${scheme}Font>[\\s\\S]*?<a:${script} typeface="([^"]*)"`).exec(
+      themeXml,
+    )
+    return single?.[1] || undefined
+  }
+  const themeFonts = {
+    majorLatin: themeFontOf('major', 'latin'),
+    majorEa: themeFontOf('major', 'ea'),
+    minorLatin: themeFontOf('minor', 'latin'),
+    minorEa: themeFontOf('minor', 'ea'),
+  }
+  // observed background: first solid fill on the first slide's bg
+  const bgXml = readArchiveText('ppt/slides/slide1.xml')
+  const bgMatch = /<p:bg>[\s\S]*?<a:srgbClr val="([0-9A-Fa-f]{6})"/.exec(bgXml)
 
   return {
     facts: {
       slideCount: opened.deck.slides.length,
       slideSizeEmu: opened.deck.size,
       themeColors,
+      themeFonts,
       fonts: {},
+      ...(bgMatch ? { background: `#${bgMatch[1]!.toUpperCase()}` } : {}),
       pages,
     },
     hash,
@@ -171,6 +263,34 @@ function levelForSize(sizePt: number | undefined, scale: TypeScaleEntry[]): numb
   return entry?.level
 }
 
+/** GOAL §十三: observed font usage profile from run-level families. */
+export function observeFontProfile(facts: ObservedTemplateFacts): TemplateFontProfile {
+  const counts = new Map<string, number>()
+  let ea = 0
+  let latin = 0
+  for (const page of facts.pages) {
+    for (const shape of page.shapes) {
+      for (const para of shape.paragraphs ?? []) {
+        for (const run of para.runs) {
+          if (!run.fontFamily || !run.text.trim()) continue
+          counts.set(run.fontFamily, (counts.get(run.fontFamily) ?? 0) + 1)
+          if (/[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]/.test(run.text)) ea++
+          else latin++
+        }
+      }
+    }
+  }
+  const observed = [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 12)
+    .map(([family, usageCount]) => ({
+      family,
+      usageCount,
+      script: (ea >= latin ? 'ea' : 'latin') as 'latin' | 'ea' | 'mixed',
+    }))
+  return { theme: facts.themeFonts, observed }
+}
+
 /** Compile observed facts into a usable TemplateDefinition (inference included). */
 export function analyzeTemplate(
   facts: ObservedTemplateFacts,
@@ -192,6 +312,36 @@ export function analyzeTemplate(
 
     for (const shape of page.shapes) {
       if (shape.hasChart) chartShapeIds.push(shape.shapeId)
+      // GOAL §十九: picture/chart shapes become figure slots so plans can
+      // address them (image replacement / chart data updates) by slotId
+      if (shape.kind === 'picture' || shape.kind === 'chart') {
+        const figureSlot: TemplateSlot = {
+          id: `s${page.slideNumber}_sh${shape.shapeId}_fig`,
+          slideId: `slide-${page.slideNumber}`,
+          role: 'figure',
+          address: { shapeId: shape.shapeId, paragraph: 0 },
+          currentText: shape.kind === 'chart' ? '[chart]' : '[image]',
+          editable: true,
+          guidance:
+            shape.kind === 'chart'
+              ? 'Embedded chart: replace its data, never redraw it as text.'
+              : 'Image slot: replace the picture, keep the frame geometry.',
+          capacity: {
+            ...(shape.boxEmu
+              ? {
+                  boxWidthPx: Math.round(shape.boxEmu.cx / 9525),
+                  boxHeightPx: Math.round(shape.boxEmu.cy / 9525),
+                  boxEmu: { cx: shape.boxEmu.cx, cy: shape.boxEmu.cy },
+                }
+              : {}),
+            tier: 'fast-estimate',
+            confidence: 0.9,
+          },
+          typography: {},
+        }
+        nonEditableSlots.push(figureSlot)
+        continue
+      }
       const paragraphs = shape.paragraphs ?? []
       for (const para of paragraphs) {
         const text = para.runs.map((r) => r.text).join('')
@@ -199,6 +349,15 @@ export function analyzeTemplate(
         const level = levelForSize(para.fontSizePt ?? para.runs[0]?.fontSizePt, typeScale)
         const { role } = inferSlotRole(text, para.fontSizePt, level, page.slideNumber)
         const decorative = /^[0-9]{1,2}$/.test(text.trim()) && (para.fontSizePt ?? 0) >= 40
+        // GOAL §十四: geometry-accurate capacity from the box + insets
+        const fontPt = para.fontSizePt ?? para.runs[0]?.fontSizePt ?? 18
+        const insets = shape.insetsEmu ?? { l: 91440, t: 45720, r: 91440, b: 45720 }
+        const usableWEmu = Math.max(0, (shape.boxEmu?.cx ?? 0) - insets.l - insets.r)
+        const usableHEmu = Math.max(0, (shape.boxEmu?.cy ?? 0) - insets.t - insets.b)
+        const usableWPt = usableWEmu / 12700
+        const usableHPt = usableHEmu / 12700
+        const charsPerLine = usableWPt > 0 ? usableWPt / fontPt : undefined
+        const maxLines = usableHPt > 0 ? Math.max(1, Math.floor(usableHPt / (fontPt * 1.2))) : undefined
         const slot: TemplateSlot = {
           id: `s${page.slideNumber}_sh${shape.shapeId}_p${para.index}`,
           slideId: `slide-${page.slideNumber}`,
@@ -208,10 +367,28 @@ export function analyzeTemplate(
           editable: !decorative,
           language: inferLanguage(text),
           capacity: {
-            confidence: 0.7,
+            ...(charsPerLine != null
+              ? {
+                  charsPerLine: Math.round(charsPerLine * 10) / 10,
+                  maxLines,
+                  maxChars:
+                    charsPerLine != null && maxLines != null
+                      ? Math.round(charsPerLine * maxLines)
+                      : undefined,
+                  boxWidthPx: Math.round((shape.boxEmu?.cx ?? 0) / 9525),
+                  boxHeightPx: Math.round((shape.boxEmu?.cy ?? 0) / 9525),
+                  boxEmu:
+                    shape.boxEmu != null
+                      ? { cx: shape.boxEmu.cx, cy: shape.boxEmu.cy }
+                      : undefined,
+                  textInsetsEmu: insets,
+                }
+              : {}),
+            tier: 'fast-estimate',
+            confidence: charsPerLine != null ? 0.7 : 0.35,
           },
           typography: {
-            fontFamily: undefined,
+            fontFamily: para.fontFamily ?? para.runs[0]?.fontFamily,
             fontSizePt: para.fontSizePt ?? para.runs[0]?.fontSizePt,
             bold: para.runs[0]?.bold,
             level,
@@ -258,6 +435,7 @@ export function analyzeTemplate(
       tags: [],
       colors: facts.themeColors,
       fonts: facts.fonts,
+      fontProfile: observeFontProfile(facts),
       typeScale,
       density:
         pages.filter((p) => p.density === 'dense').length > pages.length / 2 ? 'dense' : 'medium',

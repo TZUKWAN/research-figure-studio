@@ -10,7 +10,7 @@
  *    confidence score.
  */
 
-export const TEMPLATE_SCHEMA_VERSION = '1.0'
+export const TEMPLATE_SCHEMA_VERSION = '1.1'
 
 export type PageRole =
   | 'cover'
@@ -87,6 +87,11 @@ export interface TemplateSlot {
     maxChars?: number
     boxWidthPx?: number
     boxHeightPx?: number
+    /** GOAL §十四: raw geometry the estimates derive from */
+    boxEmu?: { cx: number; cy: number }
+    textInsetsEmu?: { l: number; t: number; r: number; b: number }
+    /** GOAL §十五: how the numbers were derived */
+    tier: CapacityTier
     confidence: number
   }
   typography: {
@@ -104,14 +109,41 @@ export interface TypeScaleEntry {
   slotCount: number
 }
 
+/** GOAL §十三: template font profile — theme scheme + observed usage. */
+export interface TemplateFontProfile {
+  theme: {
+    /** major = heading scheme, minor = body scheme; latin + ea (CJK) */
+    majorLatin?: string
+    majorEa?: string
+    minorLatin?: string
+    minorEa?: string
+  }
+  /** families actually observed on shapes, by usage (descending) */
+  observed: Array<{ family: string; usageCount: number; script: 'latin' | 'ea' | 'mixed' }>
+}
+
+/** GOAL §十五: how capacity numbers were derived. */
+export type CapacityTier = 'fast-estimate' | 'real-layout-measure'
+
 /** Facts measured directly from the pptx bytes — no inference. */
 export interface ObservedTemplateFacts {
   slideCount: number
   slideSizeEmu: { cx: number; cy: number }
   themeColors: string[]
+  /** GOAL §十三: theme font scheme (major = headings, minor = body) */
+  themeFonts: {
+    majorLatin?: string
+    majorEa?: string
+    minorLatin?: string
+    minorEa?: string
+  }
   fonts: { cn?: string; en?: string }
+  /** first solid slide background color, observed (absent = derived/none) */
+  background?: string
   pages: Array<{
     slideNumber: number
+    /** layout part this slide inherits its chrome from (GOAL §十二) */
+    layoutPart?: string
     shapes: Array<{
       shapeId: number
       name?: string
@@ -120,10 +152,36 @@ export interface ObservedTemplateFacts {
       text?: string
       paragraphs?: Array<{
         index: number
-        runs: Array<{ index: number; text: string; fontSizePt?: number; bold?: boolean }>
+        runs: Array<{
+          index: number
+          text: string
+          fontSizePt?: number
+          bold?: boolean
+          fontFamily?: string
+          italic?: boolean
+          underline?: boolean
+          color?: string
+        }>
         fontSizePt?: number
+        fontFamily?: string
+        align?: 'left' | 'center' | 'right' | 'justify'
+        lineSpacingPct?: number
+        bulletLevel?: number
+        hasBullet?: boolean
       }>
       boxEmu?: { x: number; y: number; cx: number; cy: number }
+      /** GOAL §十二: observed layout facts beyond geometry */
+      rotationDeg?: number
+      zOrder?: number
+      verticalAnchor?: 'top' | 'middle' | 'bottom'
+      insetsEmu?: { l: number; t: number; r: number; b: number }
+      autofit?: 'none' | 'shrink' | 'resize'
+      fillColor?: string
+      strokeColor?: string
+      opacity?: number
+      placeholderType?: string
+      /** owning group chain (outermost → immediate parent element ids) */
+      groupPath?: string[]
     }>
   }>
 }
@@ -156,6 +214,8 @@ export interface TemplateDefinition {
     tags: string[]
     colors: string[]
     fonts: { cn?: string; en?: string }
+    /** GOAL §十三: full font profile (theme scheme + observed usage) */
+    fontProfile?: TemplateFontProfile
     typeScale: TypeScaleEntry[]
     density: 'sparse' | 'medium' | 'dense'
   }
@@ -166,14 +226,20 @@ export interface TemplateDefinition {
   sourceHash?: string
 }
 
-/** Content → template mapping contract (produced by the fill compiler's planner). */
+/** Content → template mapping contract (produced by the fill compiler's planner).
+    GOAL §十: the production SSOT for filling — consumers name TEMPLATE SLOTS
+    (slotId), never physical addresses; slotId → shape/paragraph resolution
+    happens inside compileFillPlan against the analyzed TemplateDefinition. */
 export interface TemplateFillPlan {
   templateId: string
   slides: Array<{
     sourceSlideId: string
+    /** position of this entry in the final deck (0-based) */
     outputOrder: number
     purpose: string
     slotValues: Array<{ slotId: string; text: string; source?: string }>
+    /** 0-based occurrence among entries sharing sourceSlideId (clones) */
+    instance?: number
     chartUpdates?: Array<{
       shapeId: number
       categories: string[]
