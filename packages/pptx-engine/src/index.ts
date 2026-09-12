@@ -165,6 +165,7 @@ export {
 export { createBlankPptx } from './blank'
 export {
   elementCNvPrId,
+  canonicalPptShapeId,
   elementDurableId,
   ensureCreationId,
   groupChildDurableId,

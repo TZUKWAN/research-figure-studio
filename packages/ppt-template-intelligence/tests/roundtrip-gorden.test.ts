@@ -10,7 +10,14 @@ import { describe, expect, it } from 'vitest'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { analyzeTemplateBytes, compileFillOps } from '../src/index.js'
-import { commitSaved, elementSpid, openPptx, savePptx, slideDurableId } from '@genoffice/pptx-engine'
+import {
+  commitSaved,
+  elementDurableId,
+  elementSpid,
+  openPptx,
+  savePptx,
+  slideDurableId,
+} from '@genoffice/pptx-engine'
 
 const GORDEN_DIR = process.env.GORDEN_TEMPLATES_DIR
 const HAS_GORDEN = Boolean(GORDEN_DIR && existsSync(join(GORDEN_DIR, 'minimal-business-summary')))
@@ -68,6 +75,7 @@ describe('gorden deck full roundtrip (P5)', () => {
       live.deck.slides.forEach((slide, i) => {
         const out: Array<{
           elementId: string
+          durableId?: string
           nvId?: number
           paragraphCount: number
           text: string
@@ -80,6 +88,7 @@ describe('gorden deck full roundtrip (P5)', () => {
           ).text
           out.push({
             elementId: el.id,
+            durableId: elementDurableId(el as never) ?? undefined,
             nvId: elementSpid(el as never) ?? undefined,
             paragraphCount: textObj?.paragraphs?.length ?? 0,
             text:

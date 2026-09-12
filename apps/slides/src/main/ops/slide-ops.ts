@@ -87,7 +87,8 @@ register({
     const slide = duplicateSlide(ctx.opened, index, { clearText: op.clearText === true })
     if (!slide)
       throw new GuidedError(`op "duplicateSlide": slide ${index} could not be duplicated.`)
-    return { op, after: { index: index + 1 } }
+    // created: later ops in the same txn address the copy via "$txn:<n>"
+    return { op, created: [slideDurableId(slide)], after: { index: index + 1 } }
   },
 })
 

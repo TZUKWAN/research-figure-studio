@@ -141,6 +141,11 @@ export interface ResolveOpts {
   allowPart?: boolean
 }
 
+/** Synthetic plan-phase pass-through for $txn forward slide references: the
+    executor substitutes the creating op's durable slide id before apply, so
+    validation only needs resolution to succeed, never to find a real slide. */
+const SYNTHETIC_TXN_SLIDE = { elements: [] } as unknown as Slide
+
 export function resolveSlide(
   ctx: OpContext,
   op: Op,
@@ -158,6 +163,10 @@ export function resolveSlide(
   const ref = op.target?.slide
   const slides = ctx.opened.deck.slides
   if (typeof ref === 'string') {
+    // Forward reference to a slide a $txn:<n> op created (e.g. duplicateSlide):
+    // plan-phase gets the synthetic pass-through; at apply time the executor
+    // has already substituted the real durable id.
+    if (isTxnRef(ref)) return { index: -1, slide: SYNTHETIC_TXN_SLIDE }
     const index = slides.findIndex((s) => slideDurableId(s) === ref)
     if (index < 0) {
       throw new GuidedError(
@@ -195,6 +204,12 @@ export function resolveElement(
     // Forward reference: the element materializes when the executor substitutes
     // the creating op's id at apply time. Plan-phase sees a synthetic element.
     return { index, slide, el: { id, type: 'shape' } as SlideElement }
+  }
+  if (slide === SYNTHETIC_TXN_SLIDE) {
+    // The slide itself is a $txn forward reference (created earlier in this
+    // transaction, e.g. duplicateSlide): plan-phase cannot know its elements —
+    // the compiler asserts them. Apply-phase resolves against the real slide.
+    return { index, slide, el: { id, type: 'shape' } as unknown as SlideElement }
   }
   const el = slide.elements.find((x) => matchesElementRef(x, id))
   if (!el) {

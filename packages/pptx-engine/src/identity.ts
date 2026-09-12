@@ -154,6 +154,34 @@ export function slideDurableId(slide: Slide): string {
 }
 
 /**
+ * THE canonical cross-layer shape identity (single source — GOAL §八-P0).
+ *
+ * The numeric <p:cNvPr id> (python-pptx's shape_id): persisted in the part
+ * XML, unique within a slide, and IDENTICAL across parse cycles — the only
+ * id that means the same shape to the analyzer, the fill compiler, the
+ * executor addressing and post-write verification. Layers must never
+ * re-derive their own notion of "shape id" from element indices or nv*
+ * containers; they call this.
+ *
+ * Group children resolve through their own group-local byte slice when the
+ * parser sliced one, falling back to the parsed nvId when slicing failed
+ * (same number either way — both read the child's own cNvPr).
+ */
+export function canonicalPptShapeId(el: SlideElement): number | null {
+  const raw = el.anchor?.originalXml
+  if (raw) {
+    const m = /<p:cNvPr\s[^>]*\bid="(\d+)"/.exec(raw)
+    if (m) return Number(m[1])
+  }
+  const nvId = (el as { nvId?: number | string }).nvId
+  if (nvId != null) {
+    const n = Number(nvId)
+    if (Number.isFinite(n)) return n
+  }
+  return null
+}
+
+/**
  * The pre-upgrade fallback form ("e_<cNvPr id>"), independent of whether a
  * creationId exists. Kept resolvable as an ALIAS after ensureCreationId mints
  * a GUID, so refs held across the upgrade keep working.

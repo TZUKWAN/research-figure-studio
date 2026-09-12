@@ -84,6 +84,8 @@ import {
   getSlideNotes,
   getSlideTransition,
   elementSpid,
+  elementDurableId,
+  canonicalPptShapeId,
   getSlideAnimations,
   openPptx,
   mergeSlideFromPptx,
@@ -1507,11 +1509,18 @@ export function registerSlidesIpc(): void {
         const opened = await openPptx(bytes)
         const slideElements = new Map<
           number,
-          Array<{ elementId: string; nvId?: number; paragraphCount: number; text: string }>
+          Array<{
+            elementId: string
+            durableId?: string
+            nvId?: number
+            paragraphCount: number
+            text: string
+          }>
         >()
         const elementsOf = (slide: (typeof opened.deck.slides)[number]) => {
           const out: Array<{
             elementId: string
+            durableId?: string
             nvId?: number
             paragraphCount: number
             text: string
@@ -1520,7 +1529,8 @@ export function registerSlidesIpc(): void {
             const textObj = (el as { text?: { paragraphs?: unknown[] } }).text
             out.push({
               elementId: el.id,
-              nvId: (el as unknown as { nvId?: number }).nvId,
+              durableId: elementDurableId(el) ?? undefined,
+              nvId: canonicalPptShapeId(el) ?? undefined,
               paragraphCount: textObj?.paragraphs?.length ?? 0,
               text:
                 textObj?.paragraphs
