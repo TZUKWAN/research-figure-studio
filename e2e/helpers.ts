@@ -39,6 +39,14 @@ export interface LaunchedApp {
   userDataDir: string
 }
 
+/**
+ * Every live ElectronApplication this worker launched. Serial workers own at
+ * most one app at a time; a sweep at close time guarantees no instance ever
+ * dangles into Playwright's worker teardown (a lingering instance wedges the
+ * worker for 90 s and fails the whole run as "1 error was not a part of any
+ * test" even when every test passed).
+ */
+
 export async function launchShell(options: LaunchOptions): Promise<LaunchedApp> {
   if (!existsSync(SHELL_MAIN)) {
     throw new Error(`Missing build output at ${SHELL_MAIN} — run \`npm run build:all\` first`)
@@ -139,37 +147,52 @@ export async function closeAndSaveVideo(
   name: string,
 ): Promise<string | undefined> {
   const video = launched.page.video()
-  await launched.app
-    .evaluate(({ dialog }) => {
-      dialog.showMessageBox = (async () => ({
-        response: 1,
-        checkboxChecked: false,
-      })) as typeof dialog.showMessageBox
-    })
-    .catch(() => {})
-  // Teardown fix (P1-7, hardened after CI): app.close() can HANG forever on
-  // Linux even after the test finishes (a lingering print-manager/printToPDF
-  // webContents blocks the graceful browser close), and a hanging close()
-  // leaves the Playwright ElectronApplication undisposed — the worker then
-  // re-closes it at teardown and blows the 90 s worker teardown timeout with
-  // "1 error was not a part of any test". So: SIGKILL the process FIRST,
-  // wait (bounded) for exit, and only then call close() — on a dead process
-  // it resolves immediately and releases the Playwright handle.
-  const proc = launched.app.process()
-  try {
-    proc.kill('SIGKILL')
-  } catch {
-    // already gone
-  }
-  await new Promise<void>((resolvePromise) => {
-    if (!proc || proc.exitCode !== null || proc.signalCode !== null) {
+  // Dialog stub + handshake: stub "Don't Save" on dirty-editor close, and —
+  // empirically load-bearing — give the app's main loop one bounded round-trip
+  // before app.close(). Skipping the round-trip entirely leaves Playwright's
+  // internal close state wedged and the WORKER teardown times out (90 s) even
+  // when every test passed. A wedged main process must never hang this path,
+  // so the round-trip is capped at 3 s; the SIGKILL fallback below still
+  // guarantees termination when close() itself cannot proceed.
+  await Promise.race([
+    launched.app
+      .evaluate(({ dialog }) => {
+        dialog.showMessageBox = (async () => ({
+          response: 1,
+          checkboxChecked: false,
+        })) as typeof dialog.showMessageBox
+      })
+      .catch(() => {}),
+    new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 3_000)),
+  ])
+  // P1-7 teardown pattern: a Promise.race alone leaves the losing close()
+  // promise pending forever, keeping the ElectronApplication undisposed —
+  // the worker then re-closes it at teardown and blows the 90 s worker
+  // teardown timeout ("1 error was not a part of any test" even when every
+  // test passed). So RACE close() with a force kill, then await THE SAME
+  // close() promise — it resolves once the process is gone, and Playwright's
+  // internal close state settles with it.
+  let killTimer: NodeJS.Timeout | undefined
+  const gracefulClose = launched.app.close().catch(() => {})
+  const forceKill = new Promise<void>((resolvePromise) => {
+    killTimer = setTimeout(() => {
+      console.log(`[teardown] force-killing electron pid=${launched.app.process()?.pid}`)
+      try {
+        launched.app.process().kill('SIGKILL')
+      } catch {
+        // already gone
+      }
       resolvePromise()
-      return
-    }
-    proc.once('exit', () => resolvePromise())
-    setTimeout(resolvePromise, 10_000)
+    }, 20_000)
   })
-  await launched.app.close().catch(() => {})
+  await Promise.race([gracefulClose, forceKill])
+  if (killTimer) clearTimeout(killTimer)
+  // Bounded second await on the SAME close promise: it resolves once the
+  // process is gone (gracefully or via the SIGKILL above).
+  await Promise.race([
+    gracefulClose,
+    new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 10_000)),
+  ])
   if (!video) return undefined
   const target = join(ARTIFACTS_DIR, 'videos', `${name}.webm`)
   try {

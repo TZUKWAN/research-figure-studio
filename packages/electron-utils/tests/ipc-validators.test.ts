@@ -150,7 +150,10 @@ describe('checkFilePath', () => {
 
   it('rejects control characters and overlong paths', () => {
     expect(checkFilePath(`${file}\0`)).toEqual({ ok: false, reason: 'bad-type' })
-    expect(checkFilePath(`C:\\${'x'.repeat(5000)}.pptx`)).toEqual({ ok: false, reason: 'too-long' })
+    // platform-absolute overlong path: a hardcoded C:\ drive path is not
+    // absolute on Linux and hits 'not-absolute' before the length gate
+    const overlong = path.resolve(path.sep, `${'x'.repeat(5000)}.pptx`)
+    expect(checkFilePath(overlong)).toEqual({ ok: false, reason: 'too-long' })
   })
 
   it('follows symlinks to a real file (documented behavior)', () => {
