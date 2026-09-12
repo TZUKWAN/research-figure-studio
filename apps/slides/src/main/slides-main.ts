@@ -108,10 +108,9 @@ import {
   type TextElement,
 } from '@genoffice/pptx-engine'
 import {
+  compileFillOps,
   analyzeTemplateBytes,
-  cacheKey,
   cachedAnalyze,
-  GordenDirProvider,
 } from '@genoffice/ppt-template-intelligence'
 import {
   buildRenderSlide,
@@ -1456,17 +1455,7 @@ export function registerSlidesIpc(): void {
   // analyze_ppt_template: read a pptx file → TemplateDefinition (cached).
   // create_presentation_from_template: analyze (cached) → compileFillPlan →
   // ONE atomic sessionTxn (prune + setSlotParagraphText) → rebuilt slide.
-  let templateProvider: import('@genoffice/ppt-template-intelligence').GordenDirProvider | null =
-    null
   const templateCache = new Map<string, string>()
-  const getTemplateProvider = () => {
-    const dir = process.env.METIS_GORDEN_TEMPLATES_DIR
-    if (!dir) return null
-    if (!templateProvider) {
-      templateProvider = new GordenDirProvider(dir)
-    }
-    return templateProvider
-  }
 
   ipcMain.handle('slides:template-analyze', async (e, filePath: string) => {
     const session = sessions.get(e.sender.id)
@@ -1515,10 +1504,7 @@ export function registerSlidesIpc(): void {
       if (!session) return null
       try {
         const bytes = new Uint8Array(await readFile(req.templatePath))
-        const providerModule =
-          require('@genoffice/ppt-template-intelligence') as typeof import('@genoffice/ppt-template-intelligence')
         const opened = await openPptx(bytes)
-        const slide0 = opened.deck.slides[0]!
         const slideElements = new Map<
           number,
           Array<{ elementId: string; nvId?: number; paragraphCount: number; text: string }>
@@ -1550,7 +1536,7 @@ export function registerSlidesIpc(): void {
           return out
         }
         opened.deck.slides.forEach((s, i) => slideElements.set(i + 1, elementsOf(s)))
-        const compiled = providerModule.compileFillOps(
+        const compiled = compileFillOps(
           req.edits.map((edit) => ({ ...edit, slide: edit.slide })),
           {
             selectedSlides: req.selectedSlides,

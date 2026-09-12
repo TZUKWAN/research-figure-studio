@@ -12,7 +12,7 @@
  * pulled in.
  */
 import type { CompositionCandidate, FigurePlanV2 } from '@genoffice/research-harness'
-import type { RenderSlide, ShapeRenderNode } from '@genoffice/pptx-render'
+import type { RenderSlide } from '@genoffice/pptx-render'
 import type { AgentImage } from '@genoffice/agent-core'
 import type { ThemeRoles } from '@genoffice/theme-engine'
 
@@ -58,7 +58,7 @@ export async function renderCandidatePreview(args: NearFinalPreviewArgs): Promis
     // routes are recomputed for THIS candidate's geometry (lightweight
     // anchor/route pass — no obstacle rerun needed for a preview)
     routes: harness.routeEdges(
-      args.plan.edges.map((edge, index) => ({
+      args.plan.edges.map((edge) => ({
         key: edge.id ?? `${edge.from}->${edge.to}`,
         semanticEdgeId: edge.id ?? `${edge.from}->${edge.to}`,
         fromId: edge.from,

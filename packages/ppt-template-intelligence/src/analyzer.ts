@@ -17,8 +17,6 @@ import {
 import { classifyPageRole } from './role-classifier.js'
 import type { SlotRole } from './schema.js'
 
-const EMU_PER_PX = 9525
-
 function inferSlotRole(
   text: string,
   fontSizePt?: number,
@@ -198,7 +196,7 @@ export function analyzeTemplate(
         const text = para.runs.map((r) => r.text).join('')
         if (!text.trim()) continue
         const level = levelForSize(para.fontSizePt ?? para.runs[0]?.fontSizePt, typeScale)
-        const { role, confidence } = inferSlotRole(text, para.fontSizePt, level, page.slideNumber)
+        const { role } = inferSlotRole(text, para.fontSizePt, level, page.slideNumber)
         const decorative = /^[0-9]{1,2}$/.test(text.trim()) && (para.fontSizePt ?? 0) >= 40
         const slot: TemplateSlot = {
           id: `s${page.slideNumber}_sh${shape.shapeId}_p${para.index}`,

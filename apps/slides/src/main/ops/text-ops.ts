@@ -264,7 +264,7 @@ register({
     resolveElement(ctx, op, { types: ['text', 'shape'], allowPart: true })
   },
   apply(op, ctx): OpRecord {
-    const { slide, el } = resolveElement(ctx, op, { types: ['text', 'shape'], allowPart: true })
+    const { el } = resolveElement(ctx, op, { types: ['text', 'shape'], allowPart: true })
     const textEl = el as TextElement
     const body = textEl.text
     if (!body || !Array.isArray(body.paragraphs)) {
