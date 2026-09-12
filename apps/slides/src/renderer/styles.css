@@ -8910,7 +8910,7 @@ body.show-curtain::after {
   cursor: pointer;
 }
 .tpl-error {
-  color: var(--slides-error, #c00);
+  color: var(--slides-error);
 }
 .tpl-use-row {
   display: flex;
@@ -8937,7 +8937,7 @@ body.show-curtain::after {
 }
 .tpl-use:hover {
   background: var(--accent);
-  color: #fff;
+  color: var(--slides-on-accent);
 }
 .tpl-toggle-on {
   outline: 1px solid var(--accent);
