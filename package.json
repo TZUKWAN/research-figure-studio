@@ -24,8 +24,8 @@
     "check:english-comments": "node tools/check-english-comments.mjs",
     "lint": "eslint .",
     "fixtures": "npm run fixtures -w @genoffice/docx-engine",
-    "test": "npm run test -w @genoffice/i18n && npm run test -w @genoffice/electron-utils && npm run test -w @genoffice/font-metrics && npm run test -w @genoffice/docx-engine && npm run test -w @genoffice/file-parse && npm run test -w @genoffice/pptx-engine && npm run test -w @genoffice/pptx-render && npm run test -w @genoffice/ai-search && npm run test -w @genoffice/agent-core && npm run test -w @genoffice/ai-provider && npm run test -w @genoffice/project-store && npm run test -w @genoffice/research-harness && npm run test -w @genoffice/theme-engine && npm run test -w @genoffice/shell && npm run test -w @genoffice/slides",
-    "typecheck": "npm run typecheck -w @genoffice/i18n && npm run typecheck -w @genoffice/electron-utils && npm run typecheck -w @genoffice/font-metrics && npm run typecheck -w @genoffice/docx-engine && npm run typecheck -w @genoffice/file-parse && npm run typecheck -w @genoffice/pptx-engine && npm run typecheck -w @genoffice/pptx-render && npm run typecheck -w @genoffice/ai-search && npm run typecheck -w @genoffice/agent-core && npm run typecheck -w @genoffice/ai-provider && npm run typecheck -w @genoffice/project-store && npm run typecheck -w @genoffice/ui && npm run typecheck -w @genoffice/research-harness && npm run typecheck -w @genoffice/theme-engine && npm run typecheck -w @genoffice/shell && npm run typecheck -w @genoffice/slides",
+    "test": "npm run test -w @genoffice/i18n && npm run test -w @genoffice/electron-utils && npm run test -w @genoffice/font-metrics && npm run test -w @genoffice/docx-engine && npm run test -w @genoffice/file-parse && npm run test -w @genoffice/pptx-engine && npm run test -w @genoffice/pptx-render && npm run test -w @genoffice/ppt-template-intelligence && npm run test -w @genoffice/ai-search && npm run test -w @genoffice/agent-core && npm run test -w @genoffice/ai-provider && npm run test -w @genoffice/project-store && npm run test -w @genoffice/research-harness && npm run test -w @genoffice/theme-engine && npm run test -w @genoffice/shell && npm run test -w @genoffice/slides",
+    "typecheck": "npm run typecheck -w @genoffice/i18n && npm run typecheck -w @genoffice/electron-utils && npm run typecheck -w @genoffice/font-metrics && npm run typecheck -w @genoffice/docx-engine && npm run typecheck -w @genoffice/file-parse && npm run typecheck -w @genoffice/pptx-engine && npm run typecheck -w @genoffice/pptx-render && npm run typecheck -w @genoffice/ppt-template-intelligence && npm run typecheck -w @genoffice/ai-search && npm run typecheck -w @genoffice/agent-core && npm run typecheck -w @genoffice/ai-provider && npm run typecheck -w @genoffice/project-store && npm run typecheck -w @genoffice/ui && npm run typecheck -w @genoffice/research-harness && npm run typecheck -w @genoffice/theme-engine && npm run typecheck -w @genoffice/shell && npm run typecheck -w @genoffice/slides",
     "predev": "node tools/build-stale-preloads.mjs",
     "dev": "concurrently -k -n slides,shell -c yellow,magenta \"npm run dev:renderer -w @genoffice/slides\" \"SLIDES_RENDERER_URL=http://localhost:5175 npm run dev -w @genoffice/shell\"",
     "dev:slides": "npm run dev -w @genoffice/slides",
@@ -37,7 +37,8 @@
     "licenses": "node tools/check-licenses.mjs",
     "dist:mac": "npm run notices && npm run build:all && npm run dist:mac -w @genoffice/shell",
     "dist:win": "npm run notices && npm run build:all && npm run dist:win -w @genoffice/shell",
-    "dist:linux": "npm run notices && npm run build:all && npm run dist:linux -w @genoffice/shell"
+    "dist:linux": "npm run notices && npm run build:all && npm run dist:linux -w @genoffice/shell",
+    "audit:security": "node scripts/security-audit-gate.mjs"
   },
   "dependencies": {
     "ws": "^8.21.1"

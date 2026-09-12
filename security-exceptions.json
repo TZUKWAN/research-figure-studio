@@ -1,0 +1,14 @@
+[
+  {
+    "package": "image-size",
+    "installed": "1.2.1",
+    "severity": "high",
+    "advisory": "ReDoS / infinite loop in image-size bitmap header parsing",
+    "reason": "Pinned transitively by pptxgenjs@4.0.1 via its own dependency range; no upstream release of pptxgenjs yet declares a fixed image-size. Upstream block, not fixable from this repo.",
+    "exploitability": "The vulnerable path parses attacker-supplied image bytes. In Metis Diagram, image bytes come from the local user's own files and from figures rendered by our own pipeline — never from untrusted network input. No remote attacker surface is exposed by default.",
+    "mitigation": "Files processed are local, user-authored decks; renderer extracts images only after our own type sniffing. Gorden template imports (untrusted PPTX) are parsed by our own analyzer which does not invoke image-size. Advised upgrade path tracked: bump pptxgenjs when upstream lands the fixed image-size range.",
+    "owner": "platform-security",
+    "created": "2026-08-30",
+    "expiry": "2027-01-01"
+  }
+]

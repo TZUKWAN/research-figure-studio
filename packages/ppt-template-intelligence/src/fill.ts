@@ -16,6 +16,15 @@ export interface FillOpContext {
     number,
     Array<{ elementId: string; nvId?: number; paragraphCount: number; text: string }>
   >
+  /**
+   * map: original slide number → durable slide id (`s_<n>`). When present,
+   * every emitted op targets the durable id instead of a computed index:
+   * the executor validates the whole plan against PRE-transaction state, so
+   * fill ops addressing post-prune indices would fail validation (the deck
+   * still has the original slides at those positions). Durable ids resolve
+   * identically before and after the deletes.
+   */
+  slideIds?: Map<number, string>
 }
 
 export interface SlotEdit {
@@ -43,6 +52,10 @@ export interface CompiledFill {
  *  2. text ops target the slide's PRUNED 0-based index (original minus the
  *     number of deleted slides before it), and the slide's elements are
  *     addressed by nvId (== python-pptx shape_id == <p:cNvPr id>).
+ *
+ * When ctx.slideIds is supplied, BOTH kinds target durable slide ids
+ * (`s_<n>`) instead: the executor's plan phase validates against the
+ * pre-transaction deck, where pruned indices do not exist yet.
  */
 export function compileFillOps(edits: SlotEdit[], ctx: FillOpContext): CompiledFill {
   const errors: string[] = []
@@ -50,15 +63,17 @@ export function compileFillOps(edits: SlotEdit[], ctx: FillOpContext): CompiledF
   const ops: Array<Record<string, unknown>> = []
 
   const keep = new Set(ctx.selectedSlides)
+  const slideTarget = (originalSlideNumber: number): string | number =>
+    ctx.slideIds?.get(originalSlideNumber) ?? originalSlideNumber - 1
   const deletedDesc: number[] = []
   for (let n = ctx.totalSlides; n >= 1; n--) {
     if (!keep.has(n)) deletedDesc.push(n)
   }
   for (const n of deletedDesc) {
-    ops.push({ op: 'deleteSlide', target: { slide: n - 1 } })
+    ops.push({ op: 'deleteSlide', target: { slide: slideTarget(n) } })
     summary.push(`drop slide ${n} (not selected)`)
   }
-  // pruned 0-based index of a kept original slide number
+  // pruned 0-based index of a kept original slide number (fallback addressing)
   const prunedIndex = new Map<number, number>()
   const keptAsc = [...ctx.selectedSlides].sort((a, b) => a - b)
   keptAsc.forEach((n, i) => prunedIndex.set(n, i))
@@ -75,7 +90,7 @@ export function compileFillOps(edits: SlotEdit[], ctx: FillOpContext): CompiledF
   }
 
   for (const slideNumber of keptAsc) {
-    const out0 = prunedIndex.get(slideNumber)!
+    const out0 = ctx.slideIds?.get(slideNumber) ?? prunedIndex.get(slideNumber)!
     const elements = ctx.slideElements.get(slideNumber) ?? []
     const byNvId = new Map(elements.filter((e) => e.nvId != null).map((e) => [e.nvId!, e]))
     for (const edit of editsBySlide.get(slideNumber) ?? []) {

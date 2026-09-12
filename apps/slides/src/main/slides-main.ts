@@ -1536,12 +1536,16 @@ export function registerSlidesIpc(): void {
           return out
         }
         opened.deck.slides.forEach((s, i) => slideElements.set(i + 1, elementsOf(s)))
+        const slideIds = new Map(
+          opened.deck.slides.map((s, i) => [i + 1, slideDurableId(s)]),
+        )
         const compiled = compileFillOps(
           req.edits.map((edit) => ({ ...edit, slide: edit.slide })),
           {
             selectedSlides: req.selectedSlides,
             totalSlides: opened.deck.slides.length,
             slideElements,
+            slideIds,
           },
         )
         if (compiled.errors.length > 0) {

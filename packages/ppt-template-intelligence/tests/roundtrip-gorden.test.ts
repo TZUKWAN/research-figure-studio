@@ -10,13 +10,12 @@ import { describe, expect, it } from 'vitest'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { analyzeTemplateBytes, compileFillOps } from '../src/index.js'
-import { commitSaved, elementSpid, openPptx, savePptx } from '@genoffice/pptx-engine'
+import { commitSaved, elementSpid, openPptx, savePptx, slideDurableId } from '@genoffice/pptx-engine'
 
 const GORDEN_DIR = process.env.GORDEN_TEMPLATES_DIR
 const HAS_GORDEN = Boolean(GORDEN_DIR && existsSync(join(GORDEN_DIR, 'minimal-business-summary')))
 
 describe('gorden deck full roundtrip (P5)', () => {
-  it.skip(true) // TODO: debug slide-index mapping in prune+fill; compile/analyzer/qa logic verified by other suites
   it.skipIf(!HAS_GORDEN)(
     'analyze → select → fill → save → reopen keeps replaced slots and bindings',
     async () => {
@@ -59,8 +58,12 @@ describe('gorden deck full roundtrip (P5)', () => {
       expect(edits.length).toBeGreaterThan(0)
 
       // compile against the LIVE parse — element ids must belong to the
-      // same parse instance the ops are applied to
+      // same parse instance the ops are applied to; durable slide ids keep
+      // the ops valid across the executor's pre-transaction plan validation
       const live = await openPptx(bytes)
+      const slideIds = new Map(
+        live.deck.slides.map((s, i) => [i + 1, slideDurableId(s as never)]),
+      )
       const slideElements = new Map()
       live.deck.slides.forEach((slide, i) => {
         const out: Array<{
@@ -92,6 +95,7 @@ describe('gorden deck full roundtrip (P5)', () => {
         selectedSlides: selected,
         totalSlides: def.pages.length,
         slideElements,
+        slideIds,
       })
 
       // apply through the REAL executor — deleteSlide removes parts +
