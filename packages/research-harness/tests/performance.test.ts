@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { orchestrateFigure, type FigurePlanV2 } from '../src/index.js'
 
 /**
- * Performance benchmark harness (§32). Records per-stage wall time of the
+ * Performance benchmark harness (section 32). Records per-stage wall time of the
  * deterministic pipeline at 5 / 15 / 30 nodes and 60 edges. Thresholds are
  * deliberately GENEROUS ABSOLUTE ceilings — this guards against order-of-
  * magnitude regressions (e.g. an accidental O(n²) critic loop), not against

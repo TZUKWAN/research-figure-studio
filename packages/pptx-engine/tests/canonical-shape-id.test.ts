@@ -1,16 +1,10 @@
 /**
- * GOAL §八-P0: canonicalPptShapeId is THE cross-layer shape identity.
+ * GOAL section 8 P0: canonicalPptShapeId is THE cross-layer shape identity.
  * Same bytes → same id across parse cycles; group children resolve to their
  * own cNvPr id (not the group's); missing child slices fall back to nvId.
  */
 import { describe, expect, it } from 'vitest'
-import {
-  addElement,
-  canonicalPptShapeId,
-  createBlankPptx,
-  openPptx,
-  savePptx,
-} from '../src/index'
+import { addElement, canonicalPptShapeId, createBlankPptx, openPptx, savePptx } from '../src/index'
 
 function shapeXml(id: number, name: string): string {
   return (
@@ -23,7 +17,7 @@ function shapeXml(id: number, name: string): string {
   )
 }
 
-describe('canonicalPptShapeId (GOAL §八)', () => {
+describe('canonicalPptShapeId (GOAL section 8)', () => {
   it('is stable across save → reopen for the same shape', async () => {
     const opened = await openPptx(await createBlankPptx())
     const slide = opened.deck.slides[0]!

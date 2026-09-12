@@ -1,5 +1,5 @@
 /**
- * GOAL §二十 theme bridge + §24 fidelity mode.
+ * GOAL section 20 theme bridge + section 24 fidelity mode.
  */
 import { describe, expect, it } from 'vitest'
 import { bridgeTemplateTheme } from '../src/theme-bridge.js'
@@ -10,11 +10,12 @@ import { join } from 'node:path'
 const GORDEN_DIR = process.env.GORDEN_TEMPLATES_DIR
 const HAS_GORDEN = Boolean(GORDEN_DIR && existsSync(join(GORDEN_DIR, 'minimal-business-summary')))
 
-describe('bridgeTemplateTheme (GOAL §二十)', () => {
+describe('bridgeTemplateTheme (GOAL section 20)', () => {
   it('assigns roles by luminance: dark → text, mids → structure, light → surface', () => {
     const bridge = bridgeTemplateTheme({
       style: {
-        tags: [], colors: ['#1F3864', '#C55A11', '#F2F2F2', '#7F7F7F'],
+        tags: [],
+        colors: ['#1F3864', '#C55A11', '#F2F2F2', '#7F7F7F'],
         fonts: {},
         typeScale: [],
         density: 'medium',
@@ -44,7 +45,7 @@ describe('bridgeTemplateTheme (GOAL §二十)', () => {
   })
 })
 
-describe('fidelity mode (GOAL §24)', () => {
+describe('fidelity mode (GOAL section 24)', () => {
   const makeDef = (currentText: string) => ({
     id: 'tpl',
     schemaVersion: '1.1',
@@ -97,7 +98,9 @@ describe('fidelity mode (GOAL §24)', () => {
   const ctx = (liveText: string) => ({
     totalSlides: 1,
     slideIds: new Map([[1, 's_1']]),
-    slideElements: new Map([[1, [{ elementId: 'el', durableId: 'e_7', nvId: 7, paragraphCount: 1, text: liveText }]]]),
+    slideElements: new Map([
+      [1, [{ elementId: 'el', durableId: 'e_7', nvId: 7, paragraphCount: 1, text: liveText }]],
+    ]),
   })
 
   it('preserve-template (default) fails on drifted slot text', () => {
@@ -107,7 +110,11 @@ describe('fidelity mode (GOAL §24)', () => {
   })
 
   it('adaptive tolerates drift and compiles the fill', () => {
-    const r = compileFillPlan(makeDef('template original'), planEntry('adaptive'), ctx('user edited this'))
+    const r = compileFillPlan(
+      makeDef('template original'),
+      planEntry('adaptive'),
+      ctx('user edited this'),
+    )
     expect(r.errors).toEqual([])
     expect(r.ops.filter((o) => o.op === 'setSlotParagraphText')).toHaveLength(1)
   })

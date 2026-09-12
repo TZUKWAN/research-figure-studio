@@ -231,21 +231,40 @@ export function resolveElement(
   return { index, slide, el }
 }
 
-/** Group ops carry the group's top-level id (parse-time or durable); returns the
+/** Depth-first group search — real template decks nest groups several levels
+    deep, and slots recorded by the analyzer live at any level. */
+function findGroupDeep(
+  elements: SlideElement[],
+  match: (g: SlideElement) => boolean,
+): SlideElement | undefined {
+  for (const el of elements) {
+    if (el.type !== 'group') continue
+    if (match(el)) return el
+    const nested = findGroupDeep((el as { children?: SlideElement[] }).children ?? [], match)
+    if (nested) return nested
+  }
+  return undefined
+}
+
+/** Group ops carry the group's id (parse-time or durable); returns the
     parse-time id the engine matches, with a guided listing on a miss. */
 export function resolveGroup(op: Op, slideIdx: number, groups: SlideElement[]): string {
   const groupId = op.group
   if (typeof groupId !== 'string' || !groupId) {
     throw new GuidedError(`op "${op.op}": "group" must be the group element's id.`)
   }
-  const grp = groups.find((g) => g.type === 'group' && matchesElementRef(g, groupId))
+  const grp = findGroupDeep(groups, (g) => matchesElementRef(g, groupId))
   if (!grp) {
-    const available = groups
-      .filter((g) => g.type === 'group')
-      .map((g) => {
-        const durable = elementDurableId(g)
-        return durable ? `${g.id} (${durable})` : g.id
-      })
+    const collect = (elements: SlideElement[]): SlideElement[] =>
+      elements.flatMap((g) =>
+        g.type === 'group'
+          ? [g, ...collect((g as { children?: SlideElement[] }).children ?? [])]
+          : [],
+      )
+    const available = collect(groups).map((g) => {
+      const durable = elementDurableId(g)
+      return durable ? `${g.id} (${durable})` : g.id
+    })
     throw new GuidedError(
       `op "${op.op}": no group "${groupId}" on slide ${slideIdx}. Available groups: [${available.join(', ')}].`,
     )
@@ -257,7 +276,7 @@ export function resolveGroup(op: Op, slideIdx: number, groups: SlideElement[]): 
     id (what the engine matches) by walking the group's children. Unknown refs pass
     through unchanged — the engine call then fails with its own guided error. */
 export function resolveGroupChildId(slide: Slide, groupId: string, ref: string): string {
-  const grp = slide.elements.find((x) => x.id === groupId && x.type === 'group')
+  const grp = findGroupDeep(slide.elements, (x) => x.id === groupId)
   const children = (grp as { children?: SlideElement[] } | undefined)?.children
   const child = children?.find(
     (c) =>

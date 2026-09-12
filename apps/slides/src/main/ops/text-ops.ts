@@ -249,7 +249,9 @@ register({
 // text inside an element, keeping every other paragraph byte-stable in the
 // model (run 0 keeps its format; other runs of that paragraph are cleared —
 // the same convention the Gorden python-pptx writer uses). Addressed by
-// paragraph index; the executor resolves the element via target.el.
+// paragraph index; the executor resolves the element via target.el — either a
+// top-level element or, with op.group set, a child of that group (the analyzer
+// records group-internal text slots, so template fill must reach them too).
 register({
   name: 'setSlotParagraphText',
   validate(op, ctx) {
@@ -261,12 +263,38 @@ register({
     if (typeof op.text !== 'string') {
       throw new GuidedError('op "setSlotParagraphText" needs "text": a string.')
     }
+    if (op.group) {
+      const { index, slide } = resolveSlide(ctx, op)
+      // a $txn clone slide cannot resolve groups at plan phase — apply-phase
+      // resolves against the real copy (identical child ids by construction)
+      if (slide.elements.length === 0) return
+      resolveGroup(op, index, slide.elements)
+      return
+    }
     resolveElement(ctx, op, { types: ['text', 'shape'], allowPart: true })
   },
   apply(op, ctx): OpRecord {
-    const { el } = resolveElement(ctx, op, { types: ['text', 'shape'], allowPart: true })
-    const textEl = el as TextElement
-    const body = textEl.text
+    let el: TextElement
+    let groupPatch:
+      | { slide: ReturnType<typeof resolveSlide>['slide']; groupId: string; index: number }
+      | undefined
+    if (op.group) {
+      const { index, slide } = resolveSlide(ctx, op)
+      const groupId = resolveGroup(op, index, slide.elements)
+      const id = resolveGroupChildId(slide, groupId, String(op.target?.el ?? ''))
+      const found = findGroupChild(slide, groupId, id)
+      const child = found?.child
+      if (!child || (child.type !== 'text' && child.type !== 'shape')) {
+        throw new GuidedError(
+          `op "setSlotParagraphText": no text child "${id}" in group "${groupId}".`,
+        )
+      }
+      el = child as TextElement
+      groupPatch = { slide, groupId, index }
+    } else {
+      el = resolveElement(ctx, op, { types: ['text', 'shape'], allowPart: true }).el as TextElement
+    }
+    const body = el.text
     if (!body || !Array.isArray(body.paragraphs)) {
       throw new GuidedError(`op "setSlotParagraphText": element "${el.id}" has no text body.`)
     }
@@ -287,6 +315,13 @@ register({
       for (let i = 1; i < runs.length; i++) runs[i]!.text = ''
     }
     el.dirty = true
+    // group children carry no byte slice of their own: flush the mutated text
+    // back into the owning group's XML, or save would regenerate the old bytes
+    if (groupPatch && !patchGroupChildText(groupPatch.slide, groupPatch.groupId, el)) {
+      throw new GuidedError(
+        `op "setSlotParagraphText": the child slice for "${el.id}" could not be located inside group "${groupPatch.groupId}".`,
+      )
+    }
     const after = body.paragraphs.map((p) => p.runs?.map((r) => r.text).join('') ?? '')
     return { op, before: { paragraphs: before }, after: { paragraphs: after } }
   },

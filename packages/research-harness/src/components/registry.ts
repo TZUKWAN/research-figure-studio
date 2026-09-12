@@ -1,7 +1,7 @@
 /**
  * ResearchComponentRegistry — code-level spec of every research figure component.
  *
- * Layer contract (see docs/2026-08-26-genoffice-slides-refactor-map.md §3):
+ * Layer contract (see docs/2026-08-26-genoffice-slides-refactor-map.md section 3):
  *   HARNESS decides  "this slot needs a mechanism-module"
  *   THIS registry decides  "what a mechanism-module looks like and how it behaves"
  *

@@ -3887,7 +3887,7 @@ function themeLangEaSlotFont(fonts: ThemeFonts, eaRef: string | undefined): stri
 }
 
 /** w:rFonts with theme references resolved: theme attrs supersede same-slot literal
- * values (ECMA-376 §17.3.2.26). Unresolvable references fall back to the literal,
+ * values (ECMA-376 section 17.3.2.26). Unresolvable references fall back to the literal,
  * except an empty eastAsia theme slot: Word keeps the theme's authority and renders
  * the theme language's default face, never the leftover literal name (eaSlotEmpty marks this). */
 function themedRFonts(

@@ -57,12 +57,12 @@ function toRoman(value: number): string {
   return out
 }
 
-const CN_DIGITS = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九']
+const CN_DIGITS = ['零', '一', '二', '三', '四', '五', '六', '七', '8', '9']
 
 function toChinese(value: number): string {
   if (value <= 0 || value > 9999) return String(value)
   if (value < 10) return CN_DIGITS[value]
-  const units = ['', '十', '百', '千']
+  const units = ['', '10', '百', '千']
   const digits = String(value).split('').map(Number)
   let out = ''
   for (let i = 0; i < digits.length; i++) {
@@ -76,7 +76,7 @@ function toChinese(value: number): string {
   }
   out = out.replace(/零+$/, '')
   // 10-19 drop the leading "one" digit: read as "shi x" rather than "yi shi x"
-  return out.replace(/^一十/, '十')
+  return out.replace(/^一10/, '10')
 }
 
 /** w14 custom numFmt enumeration ("α, β, γ, ..."): comma-separated items, a trailing "..." marks continuation */

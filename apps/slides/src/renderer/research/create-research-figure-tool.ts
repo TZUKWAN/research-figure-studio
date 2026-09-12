@@ -503,7 +503,7 @@ export async function executeCreateResearchFigure(deps: {
   }
 
   // ── PURE render plan: exact geometry, content policy, z-order, typography SSOT ──
-  // GOAL §二十 theme bridge: when the caller supplies a template's analyzed
+  // GOAL section 20 theme bridge: when the caller supplies a template's analyzed
   // theme (template-fill flow), it wins over the preset themeId — figures
   // rendered INTO a template deck inherit the template palette/fonts.
   const bridged = (call.input as { templateTheme?: BridgedTheme }).templateTheme

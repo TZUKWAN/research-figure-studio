@@ -336,7 +336,7 @@ function buildNodeInner(
 
 /**
  * ArrowEnd (OOXML Stroke model) → ArrowEndRender (px sizes).
- * PowerPoint arrow sizing rules (ECMA-376 §20.1.8.27):
+ * PowerPoint arrow sizing rules (ECMA-376 section 20.1.8.27):
  *   sm / med / lg map to approximate multiples of line width (empirically):
  *   width:  sm≈2×lw, med≈3×lw, lg≈5×lw
  *   length: sm≈2×lw, med≈3×lw, lg≈5×lw
@@ -615,7 +615,7 @@ function buildGroup(
   // at placement time (position/size converted to group-local px by scale), while font
   // size and stroke width keep their declared values unscaled -- group scaling only
   // affects geometry, and text lays out in the scaled box at the
-  // original font size (MS-OE376 §2.1.1360/2.1.1364). The render container no longer
+  // original font size (MS-OE376 section 2.1.1360/2.1.1364). The render container no longer
   // stretches as a whole (which would make line-wrap widths wrong and distort glyphs
   // non-uniformly). childScaleX/Y are still written on the node so the edit pipeline can
   // convert between group-local px and child EMU.

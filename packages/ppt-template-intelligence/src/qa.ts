@@ -42,13 +42,13 @@ export interface AuditableSlide {
     editable?: boolean
     explicitUnused?: boolean
     slotRole?: string
-    /** GOAL §16: the template's original text — equality means "never filled" */
+    /** GOAL section 16: the template's original text — equality means "never filled" */
     currentText?: string
   }>
 }
 
 /**
- * GOAL §16, three gates, no silent placeholders:
+ * GOAL section 16, three gates, no silent placeholders:
  *  1. PLACEHOLDER_TEXT — the text matches a known placeholder pattern;
  *  2. EMPTY_EDITABLE   — an editable slot left empty (unless explicitly unused);
  *  3. UNCHANGED        — the text still EQUALS the slot's template currentText,

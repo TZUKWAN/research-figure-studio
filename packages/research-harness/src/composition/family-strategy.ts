@@ -196,7 +196,7 @@ export const FAMILY_STRATEGIES: Record<FigureFamily, FigureFamilyStrategy> = {
 /**
  * Resolve the strategy for a family. `null` means "no declared family —
  * general priors apply". Unsupported families throw the typed error instead
- * of silently falling back (audit §31).
+ * of silently falling back (audit section 31).
  */
 export function familyStrategyFor(family?: string): FigureFamilyStrategy | null {
   if (!family) return null

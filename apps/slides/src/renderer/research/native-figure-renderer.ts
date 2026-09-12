@@ -101,7 +101,7 @@ export const Z_TIERS = {
   annotation: 4,
 } as const
 
-/** §24: length of the native inhibition bar at the target end (px). */
+/** section 24: length of the native inhibition bar at the target end (px). */
 export const INHIBITION_BAR_LEN_PX = 12
 
 function anchorPointOf(
@@ -505,7 +505,7 @@ export function buildFigureRenderPlan(input: FigureRenderInput): FigureRenderPla
       },
       ...(route.routeY !== undefined ? { routeYPx: route.routeY } : {}),
     })
-    // §24 inhibition semantics: a flat-ended inhibition is realised as a
+    // section 24 inhibition semantics: a flat-ended inhibition is realised as a
     // native short perpendicular bar at the TARGET end, bound to the
     // connector via semanticEdgeId (editable, never rasterized).
     if (route.presentation === 'inhibition') {

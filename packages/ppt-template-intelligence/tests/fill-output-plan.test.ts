@@ -1,5 +1,5 @@
 /**
- * GOAL §九: outputSequence — page reorder + clone/duplicate in the fill plan.
+ * GOAL section 9: outputSequence — page reorder + clone/duplicate in the fill plan.
  * Compiler emits delete/duplicate/move + per-instance text ops; the real
  * executor applies the whole plan as ONE atomic transaction on a real Gorden
  * deck and save→reopen preserves the arrangement.
@@ -25,9 +25,7 @@ function slideIdsOf(opened: Awaited<ReturnType<typeof openPptx>>): Map<number, s
   return new Map(opened.deck.slides.map((s, i) => [i + 1, slideDurableId(s as never)]))
 }
 
-function elementsOf(
-  opened: OpenedPptx,
-): Map<
+function elementsOf(opened: OpenedPptx): Map<
   number,
   Array<{
     elementId: string
@@ -37,13 +35,16 @@ function elementsOf(
     text: string
   }>
 > {
-  const map = new Map<number, Array<{
-    elementId: string
-    durableId?: string
-    nvId?: number
-    paragraphCount: number
-    text: string
-  }>>()
+  const map = new Map<
+    number,
+    Array<{
+      elementId: string
+      durableId?: string
+      nvId?: number
+      paragraphCount: number
+      text: string
+    }>
+  >()
   opened.deck.slides.forEach((slide, i) => {
     const out: Array<{
       elementId: string
@@ -53,8 +54,9 @@ function elementsOf(
       text: string
     }> = []
     for (const el of slide.elements) {
-      const textObj = (el as unknown as { text?: { paragraphs?: Array<{ runs?: Array<{ text: string }> }> } })
-        .text
+      const textObj = (
+        el as unknown as { text?: { paragraphs?: Array<{ runs?: Array<{ text: string }> }> } }
+      ).text
       out.push({
         elementId: (el as unknown as { id: string }).id,
         durableId: elementDurableId(el as never) ?? undefined,
@@ -70,7 +72,7 @@ function elementsOf(
   return map
 }
 
-describe('fill outputSequence (GOAL §九)', () => {
+describe('fill outputSequence (GOAL section 9)', () => {
   it('requires slideIds', () => {
     const compiled = compileFillOps([], {
       outputSequence: [1],
@@ -112,9 +114,7 @@ describe('fill outputSequence (GOAL §九)', () => {
         paragraphCount: number
         text: string
       }>
-    >([
-      [1, [{ elementId: 'elA', nvId: 5, paragraphCount: 2, text: 'hello' }]],
-    ])
+    >([[1, [{ elementId: 'elA', nvId: 5, paragraphCount: 2, text: 'hello' }]]])
     const compiled = compileFillOps(
       [
         { slide: 1, address: { shapeId: 5, paragraph: 0 }, newText: 'first' },

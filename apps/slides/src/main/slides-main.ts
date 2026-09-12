@@ -1494,7 +1494,7 @@ export function registerSlidesIpc(): void {
       req: {
         templatePath: string
         selectedSlides?: number[]
-        /** GOAL §十: slotId-based plan — the production SSOT input. When
+        /** GOAL section 10: slotId-based plan — the production SSOT input. When
             present, selectedSlides/edits are ignored and all physical
             addresses are resolved from the analyzed TemplateDefinition. */
         plan?: {
@@ -1560,12 +1560,10 @@ export function registerSlidesIpc(): void {
           return out
         }
         opened.deck.slides.forEach((s, i) => slideElements.set(i + 1, elementsOf(s)))
-        const slideIds = new Map(
-          opened.deck.slides.map((s, i) => [i + 1, slideDurableId(s)]),
-        )
+        const slideIds = new Map(opened.deck.slides.map((s, i) => [i + 1, slideDurableId(s)]))
         let compiled
         if (req.plan) {
-          // §十: slotId-based — resolve addresses from the analyzed template
+          // section 10: slotId-based — resolve addresses from the analyzed template
           const def = await analyzeTemplateBytes(bytes, {
             type: 'user-upload',
             sourceFile: req.templatePath,
@@ -1577,7 +1575,10 @@ export function registerSlidesIpc(): void {
           })
         } else {
           if (!req.edits || req.selectedSlides === undefined) {
-            return { error: 'template-fill needs either `plan` (slotId-based) or `edits` + `selectedSlides`' }
+            return {
+              error:
+                'template-fill needs either `plan` (slotId-based) or `edits` + `selectedSlides`',
+            }
           }
           compiled = compileFillOps(
             req.edits.map((edit) => ({ ...edit, slide: edit.slide })),

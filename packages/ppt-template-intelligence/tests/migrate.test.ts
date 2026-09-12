@@ -1,5 +1,5 @@
 /**
- * GOAL §十一: TemplateDefinition versioning — stepwise migration, additive
+ * GOAL section 11: TemplateDefinition versioning — stepwise migration, additive
  * forward-compat, hard error on unmigratable payloads. Never silently current.
  */
 import { describe, expect, it } from 'vitest'
@@ -13,7 +13,7 @@ const BASE = {
   pages: [{ slideId: 'slide-1', originalSlideIndex: 1, editableSlots: [] }],
 }
 
-describe('migrateTemplateDefinition (GOAL §十一)', () => {
+describe('migrateTemplateDefinition (GOAL section 11)', () => {
   it('returns current-version payloads unchanged', () => {
     const r = migrateTemplateDefinition({
       ...BASE,

@@ -123,6 +123,11 @@ export const OP_DOCS: Record<string, OpDoc> = {
     group: 'insert',
   },
   addSmartArt: { sig: '{layout,items:[…],offset}', group: 'insert' },
+  updateChartData: {
+    sig: '{data:{categories:[…],series:[{name,values:[…]}]}} — replace the cached data of an embedded chart (series/category counts must match)',
+    group: 'insert',
+    aiCallable: false,
+  },
   addMedia: {
     sig: '{kind:"video"|"audio",bytes,ext,offset} — bytes payload',
     group: 'insert',

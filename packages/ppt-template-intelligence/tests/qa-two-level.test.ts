@@ -1,5 +1,5 @@
 /**
- * GOAL §16-18: QA gates (placeholder/empty/unchanged + allowlist semantics),
+ * GOAL section 16-18: QA gates (placeholder/empty/unchanged + allowlist semantics),
  * layout-aware type scale and the two-level role classifier.
  */
 import { describe, expect, it } from 'vitest'
@@ -16,7 +16,7 @@ const shape = (over: Partial<ObservedTemplateFacts['pages'][number]['shapes'][nu
     ...over,
   }) as ObservedTemplateFacts['pages'][number]['shapes'][number]
 
-describe('auditPlaceholders (GOAL §16)', () => {
+describe('auditPlaceholders (GOAL section 16)', () => {
   const slide = {
     slideIndex: 0,
     elements: [
@@ -33,11 +33,7 @@ describe('auditPlaceholders (GOAL §16)', () => {
     const r = auditPlaceholders([slide])
     expect(r.pass).toBe(false)
     const kinds = r.issues.map((i) => `${i.elementId}:${i.kind}`).sort()
-    expect(kinds).toEqual([
-      'b:EMPTY_EDITABLE',
-      'c:UNCHANGED_TEMPLATE_TEXT',
-      'd:PLACEHOLDER_TEXT',
-    ])
+    expect(kinds).toEqual(['b:EMPTY_EDITABLE', 'c:UNCHANGED_TEMPLATE_TEXT', 'd:PLACEHOLDER_TEXT'])
     expect(r.explicitlyUnused).toBe(1) // f counts as unused, never as an issue
   })
 
@@ -60,7 +56,7 @@ describe('auditPlaceholders (GOAL §16)', () => {
   })
 })
 
-describe('layout-aware type scale (GOAL §17)', () => {
+describe('layout-aware type scale (GOAL section 17)', () => {
   const factsWith = (cy: number, sizePt: number): ObservedTemplateFacts =>
     ({
       slideSizeEmu: { cx: 9144000, cy },
@@ -93,10 +89,12 @@ describe('layout-aware type scale (GOAL §17)', () => {
   })
 })
 
-describe('two-level role classifier (GOAL §18)', () => {
+describe('two-level role classifier (GOAL section 18)', () => {
   const ambiguousPage = {
     slideNumber: 3,
-    shapes: [shape({ text: '杂项', paragraphs: [{ index: 0, runs: [{ index: 0, text: '杂项' }] }] })],
+    shapes: [
+      shape({ text: '杂项', paragraphs: [{ index: 0, runs: [{ index: 0, text: '杂项' }] }] }),
+    ],
   } as ObservedTemplateFacts['pages'][number]
   const slideCount = 10
 

@@ -125,7 +125,7 @@ export function classifyPageRole(facts: PageFacts, slideCount: number): RoleInfe
 }
 
 /**
- * GOAL §18: two-level role classification. Level 1 is the deterministic
+ * GOAL section 18: two-level role classification. Level 1 is the deterministic
  * heuristic above. When its confidence falls below `threshold` (default 0.55)
  * and the caller supplies a vision fallback, level 2 consults it; the vision
  * answer only REPLACES the heuristic when it returns a valid role with

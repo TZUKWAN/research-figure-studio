@@ -1,5 +1,5 @@
 /**
- * Composition Priors (Phase 3, GOAL §17-18; P0 rewrite).
+ * Composition Priors (Phase 3, GOAL section 17-18; P0 rewrite).
  *
  * A prior is a TENDENCY with an explicit SPATIAL GRAMMAR family. Two priors
  * sharing a grammar produce the same layout family; `generateCandidates`

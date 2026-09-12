@@ -26,6 +26,8 @@ export interface FillOpContext {
       nvId?: number
       paragraphCount: number
       text: string
+      /** immediate parent group's parse-time element id (group-child slots) */
+      groupId?: string
     }>
   >
   /**
@@ -38,14 +40,14 @@ export interface FillOpContext {
    */
   slideIds?: Map<number, string>
   /**
-   * GOAL §九: full output page plan — the final deck as a sequence of
+   * GOAL section 9: full output page plan — the final deck as a sequence of
    * ORIGINAL slide numbers. An original may appear multiple times (clone)
    * and in any order (reorder); originals absent from the sequence are
    * deleted. Supersedes selectedSlides; requires slideIds.
    */
   outputSequence?: number[]
   /**
-   * GOAL §21-23: ops targeting an ELEMENT of a (possibly cloned) slide
+   * GOAL section 21-23: ops targeting an ELEMENT of a (possibly cloned) slide
    * instance — chart data updates, picture replacement, table cells. The
    * slide/instance/shapeId triple resolves exactly like a text edit; `build`
    * then receives the resolved {slide, el} target and returns the final op.
@@ -68,7 +70,7 @@ export interface SlotEdit {
   /** optional sanity check against the template's current text */
   expectedText?: string
   /**
-   * GOAL §九: with outputSequence, which occurrence of `slide` in the final
+   * GOAL section 9: with outputSequence, which occurrence of `slide` in the final
    * deck this edit applies to (0 = first). Defaults to 0; clones of the same
    * original can thus receive identical or per-instance text.
    */
@@ -105,9 +107,7 @@ export function compileFillOps(edits: SlotEdit[], ctx: FillOpContext): CompiledF
     return { ops, summary, errors }
   }
   if (seq) {
-    const valid = new Set(
-      Array.from({ length: ctx.totalSlides }, (_, i) => i + 1),
-    )
+    const valid = new Set(Array.from({ length: ctx.totalSlides }, (_, i) => i + 1))
     for (const n of seq) {
       if (!valid.has(n)) {
         errors.push(`outputSequence references slide ${n}, outside 1-${ctx.totalSlides}`)
@@ -132,7 +132,7 @@ export function compileFillOps(edits: SlotEdit[], ctx: FillOpContext): CompiledF
   const keptAsc = [...keep].sort((a, b) => a - b)
   keptAsc.forEach((n, i) => prunedIndex.set(n, i))
 
-  // ── §九: arrange the exact output sequence (reorder + clone) ──
+  // ── section 9: arrange the exact output sequence (reorder + clone) ──
   // W mirrors the live deck after the deletes: kept originals ascending.
   // Each token is an instance; clones remember the duplicateSlide op index so
   // later ops can address them via the executor's `$txn:<n>` substitution.
@@ -183,17 +183,15 @@ export function compileFillOps(edits: SlotEdit[], ctx: FillOpContext): CompiledF
     const elements = ctx.slideElements.get(slideNumber) ?? []
     const byNvId = new Map(elements.filter((e) => e.nvId != null).map((e) => [e.nvId!, e]))
     // resolve a (slide, instance, shapeId) triple to a target — shared by
-    // text edits and §21-23 element ops
+    // text edits and section 21-23 element ops
     const resolveTarget = (
       slideNumber: number,
       instance: number | undefined,
       shapeId: number,
-    ): { slide: string | number; el: string } | { error: string } => {
+    ): { slide: string | number; el: string; group?: string } | { error: string } => {
       let out0: string | number
       if (seq) {
-        const occurrences = working
-          .slice(0, seq.length)
-          .filter((t) => t.orig === slideNumber)
+        const occurrences = working.slice(0, seq.length).filter((t) => t.orig === slideNumber)
         const tok = occurrences[instance ?? 0]
         if (!tok) {
           return {
@@ -208,16 +206,21 @@ export function compileFillOps(edits: SlotEdit[], ctx: FillOpContext): CompiledF
       if (!el) {
         return { error: `slide ${slideNumber}: no element with shape_id ${shapeId}` }
       }
-      return { slide: out0, el: el.durableId ?? el.elementId }
+      return {
+        slide: out0,
+        el: el.durableId ?? el.elementId,
+        ...(el.groupId ? { group: el.groupId } : {}),
+      }
     }
 
     for (const edit of editsBySlide.get(slideNumber) ?? []) {
-      // resolve the target slide instance (§九 occurrence semantics)
-      const target = resolveTarget(slideNumber, edit.instance, edit.address.shapeId)
-      if ('error' in target) {
-        errors.push(target.error)
+      // resolve the target slide instance (section 9 occurrence semantics)
+      const resolved = resolveTarget(slideNumber, edit.instance, edit.address.shapeId)
+      if ('error' in resolved) {
+        errors.push(resolved.error)
         continue
       }
+      const { group, ...target } = resolved
       const out0 = target.slide
       const el = byNvId.get(edit.address.shapeId)!
       if (edit.address.paragraph >= el.paragraphCount) {
@@ -233,6 +236,7 @@ export function compileFillOps(edits: SlotEdit[], ctx: FillOpContext): CompiledF
       ops.push({
         op: 'setSlotParagraphText',
         target,
+        ...(group ? { group } : {}),
         paragraph: edit.address.paragraph,
         text: edit.newText,
       })
@@ -241,15 +245,17 @@ export function compileFillOps(edits: SlotEdit[], ctx: FillOpContext): CompiledF
       )
     }
 
-    // §21-23 element ops on this slide
+    // section 21-23 element ops on this slide
     for (const visual of ctx.elementOps ?? []) {
       if (visual.slide !== slideNumber) continue
-      const target = resolveTarget(visual.slide, visual.instance, visual.shapeId)
-      if ('error' in target) {
-        errors.push(target.error)
+      const resolved = resolveTarget(visual.slide, visual.instance, visual.shapeId)
+      if ('error' in resolved) {
+        errors.push(resolved.error)
         continue
       }
-      ops.push(visual.build(target))
+      const { group, ...target } = resolved
+      const built = visual.build(target)
+      ops.push(group ? { ...built, group } : built)
     }
   }
 
@@ -257,7 +263,7 @@ export function compileFillOps(edits: SlotEdit[], ctx: FillOpContext): CompiledF
 }
 
 /**
- * GOAL §十: TemplateFillPlan → executor ops. THE production path — consumers
+ * GOAL section 10: TemplateFillPlan → executor ops. THE production path — consumers
  * name template slots (slotId) and template pages (slideId); every physical
  * address (slide number, shape id, paragraph index) is resolved HERE against
  * the analyzed TemplateDefinition and never crosses the API boundary.
@@ -278,7 +284,7 @@ export function compileFillPlan(
   const summary: string[] = []
   const pagesBySlideId = new Map(def.pages.map((p) => [p.slideId, p]))
   const elementOps: NonNullable<FillOpContext['elementOps']> = []
-  // GOAL §24: strict (default) treats analysis↔deck text drift as a hard
+  // GOAL section 24: strict (default) treats analysis↔deck text drift as a hard
   // stop; adaptive relaxes the expected-text gate for user-modified decks
   const strict = (plan.fidelity ?? 'preserve-template') === 'preserve-template'
 

@@ -1,6 +1,6 @@
 /**
  * FigurePlan v2 (Phase 1/2 semantic schema). Separates semantic meaning from
- * visible text (GOAL §9) and makes relation-typed edges the sole topology.
+ * visible text (GOAL section 9) and makes relation-typed edges the sole topology.
  */
 import { parseSemanticEdgesDetailed, type SemanticEdge } from './schema.js'
 import type { VisibleText } from '../measurement/measure.js'

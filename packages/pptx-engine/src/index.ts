@@ -182,11 +182,7 @@ export {
   type ResearchNodeRecord,
   type ResearchRelationRecord,
 } from './research-metadata'
-export {
-  patchChartData,
-  updateChartPart,
-  type ChartDataUpdate,
-} from './chart-update'
+export { patchChartData, updateChartPart, type ChartDataUpdate } from './chart-update'
 export { promoteSlideBackground, isBackgroundLikeElement } from './background-promote'
 export {
   applyThemeToArchive,
@@ -4265,10 +4261,22 @@ export function findGroupChild(
   groupId: string,
   childId: string,
 ): { grp: GroupElement; child: SlideElement } | null {
-  const grp = slide.elements.find((e) => e.id === groupId && e.type === 'group') as
-    GroupElement | undefined
-  const child = grp?.children.find((c) => c.id === childId)
-  return grp && child ? { grp, child } : null
+  // depth-first: template decks nest groups several levels deep, and ops
+  // address children of ANY nested group by (groupId, childId)
+  const search = (elements: SlideElement[]): { grp: GroupElement; child: SlideElement } | null => {
+    for (const e of elements) {
+      if (e.type !== 'group') continue
+      const grp = e as GroupElement
+      if (grp.id === groupId) {
+        const child = grp.children.find((c) => c.id === childId)
+        if (child) return { grp, child }
+      }
+      const nested = search(grp.children)
+      if (nested) return nested
+    }
+    return null
+  }
+  return search(slide.elements)
 }
 
 /** Group-child geometry editing (offset is in the child EMU coordinate system, incl. chOff). */
@@ -4293,12 +4301,46 @@ export function editGroupChildTransform(
   return true
 }
 
-/** Group-child text editing: called after model paragraphs are updated; regenerates the slice's txBody. */
+/** Group-child text editing: called after model paragraphs are updated; regenerates the slice's txBody.
+    Works at ANY nesting depth: nested groups carry EMPTY anchors at parse time — the whole
+    subtree's bytes live inside the TOP-level ancestor group's originalXml. The child's slice is
+    located by descending the nvId chain (top group → intermediate groups → child) and the fresh
+    bytes are spliced into the top group's originalXml, which save regenerates from. */
 export function patchGroupChildText(slide: Slide, groupId: string, child: TextElement): boolean {
-  const grp = slide.elements.find((e) => e.id === groupId && e.type === 'group') as
-    GroupElement | undefined
+  const found = findGroupChild(slide, groupId, child.id)
+  const grp = found?.grp
   if (!grp) return false
-  if (!patchGroupChildXml(grp, child, (xml) => patchTextElementXml(child, xml))) return false
+  const parentOf = (elements: SlideElement[], id: string): GroupElement | null => {
+    for (const e of elements) {
+      if (e.type !== 'group') continue
+      const g = e as GroupElement
+      if (g.children.some((c) => c.id === id)) return g
+      const deeper = parentOf(g.children, id)
+      if (deeper) return deeper
+    }
+    return null
+  }
+  const chain: GroupElement[] = [grp]
+  for (;;) {
+    const parent = parentOf(slide.elements, chain[0]!.id)
+    if (!parent) break
+    chain.unshift(parent)
+  }
+  const top = chain[0]!
+  // narrow top's bytes: slice of chain[1] → … → slice of grp → child's slice
+  let base = { xml: top.anchor.originalXml, offset: 0 }
+  for (const nv of [...chain.slice(1).map((g) => g.nvId), child.nvId]) {
+    if (nv == null) return false
+    const slices = groupChildSlices(base.xml)
+    const s = slices.find((x) => x.nvId === String(nv))
+    if (!s) return false
+    base = { xml: s.xml, offset: base.offset + s.start }
+  }
+  const patched = patchTextElementXml(child, base.xml)
+  top.anchor.originalXml =
+    top.anchor.originalXml.slice(0, base.offset) +
+    patched +
+    top.anchor.originalXml.slice(base.offset + base.xml.length)
   slide.structureDirty = true
   return true
 }

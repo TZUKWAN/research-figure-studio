@@ -1,5 +1,5 @@
 /**
- * §29 Fuzz / property tests. A deterministic seeded generator produces the
+ * section 29 Fuzz / property tests. A deterministic seeded generator produces the
  * required graph shapes; every shape runs through the FULL orchestrator.
  *
  * Invariants (per shape, every run):

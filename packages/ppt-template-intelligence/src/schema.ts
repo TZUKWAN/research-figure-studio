@@ -87,10 +87,10 @@ export interface TemplateSlot {
     maxChars?: number
     boxWidthPx?: number
     boxHeightPx?: number
-    /** GOAL §十四: raw geometry the estimates derive from */
+    /** GOAL section 14: raw geometry the estimates derive from */
     boxEmu?: { cx: number; cy: number }
     textInsetsEmu?: { l: number; t: number; r: number; b: number }
-    /** GOAL §十五: how the numbers were derived */
+    /** GOAL section 15: how the numbers were derived */
     tier: CapacityTier
     confidence: number
   }
@@ -109,7 +109,7 @@ export interface TypeScaleEntry {
   slotCount: number
 }
 
-/** GOAL §十三: template font profile — theme scheme + observed usage. */
+/** GOAL section 13: template font profile — theme scheme + observed usage. */
 export interface TemplateFontProfile {
   theme: {
     /** major = heading scheme, minor = body scheme; latin + ea (CJK) */
@@ -122,7 +122,7 @@ export interface TemplateFontProfile {
   observed: Array<{ family: string; usageCount: number; script: 'latin' | 'ea' | 'mixed' }>
 }
 
-/** GOAL §十五: how capacity numbers were derived. */
+/** GOAL section 15: how capacity numbers were derived. */
 export type CapacityTier = 'fast-estimate' | 'real-layout-measure'
 
 /** Facts measured directly from the pptx bytes — no inference. */
@@ -130,7 +130,7 @@ export interface ObservedTemplateFacts {
   slideCount: number
   slideSizeEmu: { cx: number; cy: number }
   themeColors: string[]
-  /** GOAL §十三: theme font scheme (major = headings, minor = body) */
+  /** GOAL section 13: theme font scheme (major = headings, minor = body) */
   themeFonts: {
     majorLatin?: string
     majorEa?: string
@@ -142,7 +142,7 @@ export interface ObservedTemplateFacts {
   background?: string
   pages: Array<{
     slideNumber: number
-    /** layout part this slide inherits its chrome from (GOAL §十二) */
+    /** layout part this slide inherits its chrome from (GOAL section 12) */
     layoutPart?: string
     shapes: Array<{
       shapeId: number
@@ -170,7 +170,7 @@ export interface ObservedTemplateFacts {
         hasBullet?: boolean
       }>
       boxEmu?: { x: number; y: number; cx: number; cy: number }
-      /** GOAL §十二: observed layout facts beyond geometry */
+      /** GOAL section 12: observed layout facts beyond geometry */
       rotationDeg?: number
       zOrder?: number
       verticalAnchor?: 'top' | 'middle' | 'bottom'
@@ -214,7 +214,7 @@ export interface TemplateDefinition {
     tags: string[]
     colors: string[]
     fonts: { cn?: string; en?: string }
-    /** GOAL §十三: full font profile (theme scheme + observed usage) */
+    /** GOAL section 13: full font profile (theme scheme + observed usage) */
     fontProfile?: TemplateFontProfile
     typeScale: TypeScaleEntry[]
     density: 'sparse' | 'medium' | 'dense'
@@ -227,12 +227,12 @@ export interface TemplateDefinition {
 }
 
 /** Content → template mapping contract (produced by the fill compiler's planner).
-    GOAL §十: the production SSOT for filling — consumers name TEMPLATE SLOTS
+    GOAL section 10: the production SSOT for filling — consumers name TEMPLATE SLOTS
     (slotId), never physical addresses; slotId → shape/paragraph resolution
     happens inside compileFillPlan against the analyzed TemplateDefinition. */
 export interface TemplateFillPlan {
   templateId: string
-  /** GOAL §24: runtime fidelity policy. 'preserve-template' (default) fails
+  /** GOAL section 24: runtime fidelity policy. 'preserve-template' (default) fails
       compilation when a slot's current text drifted from the analysis
       (state drift = hard stop); 'adaptive' tolerates drift in user-modified
       decks and relies on post-fill QA instead. */
@@ -245,20 +245,20 @@ export interface TemplateFillPlan {
     slotValues: Array<{ slotId: string; text: string; source?: string }>
     /** 0-based occurrence among entries sharing sourceSlideId (clones) */
     instance?: number
-    /** GOAL §21: replace embedded chart data (categories + series values) */
+    /** GOAL section 21: replace embedded chart data (categories + series values) */
     chartUpdates?: Array<{
       shapeId: number
       categories: string[]
       series: Array<{ name: string; values: number[] }>
     }>
-    /** GOAL §23: replace picture-slot media (base64 payload) */
+    /** GOAL section 23: replace picture-slot media (base64 payload) */
     imageSlots?: Array<{
       shapeId: number
       imageBase64: string
       ext: string
       keepSrcRect?: boolean
     }>
-    /** GOAL §22: rewrite table cell text (paragraph runs per cell) */
+    /** GOAL section 22: rewrite table cell text (paragraph runs per cell) */
     tableUpdates?: Array<{
       shapeId: number
       cells: Array<{ row: number; col: number; paragraphs: string[] }>

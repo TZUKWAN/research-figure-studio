@@ -1,4 +1,4 @@
-/** Execution Event Layer — semantic-action granularity live feedback (v1.1 §7). */
+/** Execution Event Layer — semantic-action granularity live feedback (v1.1 section 7). */
 
 export type ResearchActionEvent =
   | { type: 'researchActionStarted'; actionId: string; label: string }

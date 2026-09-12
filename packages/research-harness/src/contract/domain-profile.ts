@@ -1,5 +1,5 @@
 /**
- * Domain Profiles (P1, GOAL §6; P4 domain masters).
+ * Domain Profiles (P1, GOAL section 6; P4 domain masters).
  *
  * A domain decides the SCIENTIFIC VISUAL LANGUAGE — preferred primitives,
  * relation presentation defaults, palette discipline, text density — never

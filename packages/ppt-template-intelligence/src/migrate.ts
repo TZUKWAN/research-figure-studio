@@ -1,5 +1,5 @@
 /**
- * TemplateDefinition versioning + migration (GOAL §十一).
+ * TemplateDefinition versioning + migration (GOAL section 11).
  *
  * Persisted analyses may predate the current schema. Migration is STEPWISE
  * (each version upgrades exactly one step) and ADDITIVE: unknown fields from
@@ -35,8 +35,7 @@ function isDefinitionLike(d: unknown): d is RawDefinition {
 }
 
 export type MigrationResult =
-  | { ok: true; definition: TemplateDefinition; migratedFrom?: string }
-  | { ok: false; error: string }
+  { ok: true; definition: TemplateDefinition; migratedFrom?: string } | { ok: false; error: string }
 
 /**
  * Validate + migrate an unknown persisted payload to TEMPLATE_SCHEMA_VERSION.
@@ -62,7 +61,11 @@ export function migrateTemplateDefinition(raw: unknown): MigrationResult {
     const migration = from === '(none)' ? undefined : MIGRATIONS[from]
     if (migration) d = migration(d)
     d.schemaVersion = TEMPLATE_SCHEMA_VERSION
-    return { ok: true, definition: d as unknown as TemplateDefinition, migratedFrom: from === '(none)' ? undefined : from }
+    return {
+      ok: true,
+      definition: d as unknown as TemplateDefinition,
+      migratedFrom: from === '(none)' ? undefined : from,
+    }
   }
   return { ok: true, definition: d as unknown as TemplateDefinition }
 }

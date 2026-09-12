@@ -1,5 +1,5 @@
 /**
- * Native chart data update (GOAL §21): patch the cached values of an embedded
+ * Native chart data update (GOAL section 21): patch the cached values of an embedded
  * chart part in place — categories (c:cat), per-series values (c:val) and
  * series names (c:tx) — while keeping every styling node (colors, axes,
  * layout, data labels) byte-identical. PowerPoint renders from these caches;
@@ -20,11 +20,7 @@ export interface ChartDataUpdate {
 }
 
 const escapeXml = (s: string): string =>
-  s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
 function numCacheXml(values: number[]): string {
   const pts = values
@@ -34,9 +30,7 @@ function numCacheXml(values: number[]): string {
 }
 
 function strCacheXml(values: string[]): string {
-  const pts = values
-    .map((v, i) => `<c:pt idx="${i}"><c:v>${escapeXml(v)}</c:v></c:pt>`)
-    .join('')
+  const pts = values.map((v, i) => `<c:pt idx="${i}"><c:v>${escapeXml(v)}</c:v></c:pt>`).join('')
   return `<c:strCache><c:ptCount val="${values.length}"/>${pts}</c:strCache>`
 }
 
@@ -46,12 +40,19 @@ function replaceCache(block: string, cache: string): string | null {
   // replaced in kind. Multi-level category refs (multiLvlStrRef) are rewritten
   // to a single-level strRef — PowerPoint accepts the flattened form.
   if (/<c:numRef>[\s\S]*?<\/c:numRef>/.test(block)) {
-    return block.replace(/(<c:numRef>[\s\S]*?)<c:numCache>[\s\S]*?<\/c:numCache>([\s\S]*?<\/c:numRef>)/, `$1${cache}$2`)
+    return block.replace(
+      /(<c:numRef>[\s\S]*?)<c:numCache>[\s\S]*?<\/c:numCache>([\s\S]*?<\/c:numRef>)/,
+      `$1${cache}$2`,
+    )
   }
   if (/<c:strRef>[\s\S]*?<\/c:strRef>/.test(block)) {
-    return block.replace(/(<c:strRef>[\s\S]*?)<c:strCache>[\s\S]*?<\/c:strCache>([\s\S]*?<\/c:strRef>)/, `$1${cache}$2`)
+    return block.replace(
+      /(<c:strRef>[\s\S]*?)<c:strCache>[\s\S]*?<\/c:strCache>([\s\S]*?<\/c:strRef>)/,
+      `$1${cache}$2`,
+    )
   }
-  if (/<c:numLit>[\s\S]*?<\/c:numLit>/.test(block)) return block.replace(/<c:numLit>[\s\S]*?<\/c:numLit>/, cache)
+  if (/<c:numLit>[\s\S]*?<\/c:numLit>/.test(block))
+    return block.replace(/<c:numLit>[\s\S]*?<\/c:numLit>/, cache)
   if (/<c:multiLvlStrRef>[\s\S]*?<\/c:multiLvlStrRef>/.test(block)) {
     return block.replace(/<c:multiLvlStrRef>[\s\S]*?<\/c:multiLvlStrRef>/, cache)
   }
@@ -135,9 +136,7 @@ export function updateChartPart(
     new RegExp(`Id="${rid}"[^>]*Target="([^"]*)"`).exec(relsXml ?? '')?.[1] ??
     new RegExp(`Target="([^"]*)"[^>]*Id="${rid}"`).exec(relsXml ?? '')?.[1]
   if (!target) return false
-  const base = slide.path.includes('/')
-    ? slide.path.slice(0, slide.path.lastIndexOf('/') + 1)
-    : ''
+  const base = slide.path.includes('/') ? slide.path.slice(0, slide.path.lastIndexOf('/') + 1) : ''
   // resolve the rel target relative to the slide's directory
   const parts = (base + target).split('/')
   const resolved: string[] = []
@@ -150,9 +149,6 @@ export function updateChartPart(
   if (!chartXml) return false
   const patched = patchChartData(chartXml, update)
   if (!patched) return false
-  ;(opened.archive.entries as Map<string, unknown>).set(
-    chartPath,
-    Buffer.from(patched, 'utf8'),
-  )
+  ;(opened.archive.entries as Map<string, unknown>).set(chartPath, Buffer.from(patched, 'utf8'))
   return true
 }

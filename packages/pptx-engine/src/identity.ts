@@ -154,7 +154,7 @@ export function slideDurableId(slide: Slide): string {
 }
 
 /**
- * THE canonical cross-layer shape identity (single source — GOAL §八-P0).
+ * THE canonical cross-layer shape identity (single source — GOAL section 8 P0).
  *
  * The numeric <p:cNvPr id> (python-pptx's shape_id): persisted in the part
  * XML, unique within a slide, and IDENTICAL across parse cycles — the only

@@ -101,7 +101,7 @@ export function estimateTextFit(
 }
 
 /**
- * GOAL §十五: REAL_LAYOUT_MEASURE tier — wrap computed from ACTUAL glyph
+ * GOAL section 15: REAL_LAYOUT_MEASURE tier — wrap computed from ACTUAL glyph
  * advances of the named installed family (@genoffice/font-metrics hmtx/cmap),
  * not the 0.5/1.0 em approximations. Returns null (caller keeps the fast
  * estimate) when the family is unknown to the OS or no box geometry exists;
@@ -139,13 +139,13 @@ export async function measureTextFitReal(
       : undefined
   if (!box || box.w <= 0 || box.h <= 0) return null
 
-  let widths: number[] | null = null
+  let widths: number[] | null
   try {
     // lazy: keeps node:fs out of renderer bundles
     const { advanceWidths } = await import('@genoffice/font-metrics')
     widths = advanceWidths(family, text, fontPt, { bold: slot.typography.bold })
   } catch {
-    widths = null
+    return null
   }
   if (!widths) return null
 

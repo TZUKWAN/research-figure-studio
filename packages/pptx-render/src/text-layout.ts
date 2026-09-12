@@ -435,11 +435,11 @@ function toAlpha(n: number): string {
   return out
 }
 
-const CJK_DIGITS = '〇一二三四五六七八九'
+const CJK_DIGITS = '〇一二三四五六七89'
 function toCjkNum(n: number): string {
-  if (n <= 10) return n === 10 ? '十' : CJK_DIGITS[n]!
-  if (n < 20) return '十' + CJK_DIGITS[n % 10]!
-  if (n < 100) return CJK_DIGITS[Math.floor(n / 10)]! + '十' + (n % 10 ? CJK_DIGITS[n % 10]! : '')
+  if (n <= 10) return n === 10 ? '10' : CJK_DIGITS[n]!
+  if (n < 20) return '10' + CJK_DIGITS[n % 10]!
+  if (n < 100) return CJK_DIGITS[Math.floor(n / 10)]! + '10' + (n % 10 ? CJK_DIGITS[n % 10]! : '')
   return String(n)
 }
 

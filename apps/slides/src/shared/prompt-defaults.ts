@@ -132,7 +132,7 @@ STRICTLY FORBIDDEN: regenerating or redesigning the page, changing the theme or 
 Final reply: one short line (under 15 words) stating what you fixed, or exactly "OK" if nothing needed fixing.`
 
 /**
- * Orchestrator role prompts (GOAL §61-64). Protocol-style: INPUT / TASK /
+ * Orchestrator role prompts (GOAL section 61-64). Protocol-style: INPUT / TASK /
  * MAY CHANGE / MUST NOT CHANGE / OUTPUT SCHEMA / FAILURE POLICY — no persona
  * prose, so weak and strong models produce the same JSON contract.
  *

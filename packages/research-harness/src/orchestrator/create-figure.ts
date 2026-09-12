@@ -1,5 +1,5 @@
 /**
- * Creation Orchestrator (Phase 3, GOAL §23/§65) with the Visual Quality
+ * Creation Orchestrator (Phase 3, GOAL section 23/section 65) with the Visual Quality
  * Stabilization repair hierarchy: ROUTE_FIX re-runs the orthogonal router,
  * LOCAL_LAYOUT_FIX promotes the next-ranked candidate, RECOMPOSE (≤2) redraws
  * composition intent, and SEMANTIC_REPLAN (bounded) replaces the FigurePlan

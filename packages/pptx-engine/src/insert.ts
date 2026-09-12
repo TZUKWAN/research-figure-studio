@@ -552,7 +552,7 @@ export function calcBoundingBox(elements: SlideElement[]): EmuRect {
 /**
  * Build the <p:grpSp> XML fragment.
  *
- * OOXML conventions (ECMA 376 §19.3.1.22):
+ * OOXML conventions (ECMA 376 section 19.3.1.22):
  *  - grpSpPr/xfrm describes the group's position and size on the slide (<a:off>/<a:ext>)
  *  - grpSpPr/xfrm/chOff + chExt define the child coordinate system's origin and size
  *  - This implementation sets chOff == bbox.xy and chExt == bbox.cxcy, i.e. the child

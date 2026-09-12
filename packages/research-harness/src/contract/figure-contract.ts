@@ -1,5 +1,5 @@
 /**
- * Figure Contract (P1, GOAL §5/§8/§21/§22/§24).
+ * Figure Contract (P1, GOAL section 5/section 8/section 21/section 22/section 24).
  *
  * The pipeline's first layer is no longer User → FigurePlan; it is
  * User/Document → FigureContract → FigurePlan. The contract pins WHAT the
@@ -269,7 +269,7 @@ export function parseFigureContract(raw: unknown): FigureContract | null {
 }
 
 /**
- * Venue-aware soft quality threshold (GOAL §18). Hard gates always apply
+ * Venue-aware soft quality threshold (GOAL section 18). Hard gates always apply
  * regardless of this number.
  */
 export function qualityThresholdFor(contract?: Pick<FigureContract, 'venue' | 'output'>): number {

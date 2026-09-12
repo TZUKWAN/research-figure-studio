@@ -1,5 +1,5 @@
 /**
- * Capability Profile + Autonomy Controller (Phase 3, GOAL §19-22).
+ * Capability Profile + Autonomy Controller (Phase 3, GOAL section 19-22).
  * Model-agnostic: no per-vendor design logic — only capability metadata and
  * deterministic autonomy selection from profile × graph complexity.
  */

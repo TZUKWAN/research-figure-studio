@@ -1,5 +1,5 @@
 /**
- * Theme Bridge (GOAL §20): map an analyzed template's theme onto the
+ * Theme Bridge (GOAL section 20): map an analyzed template's theme onto the
  * research-figure pipeline's semantic roles, so a figure generated INTO a
  * template-based deck inherits the template's palette/fonts instead of the
  * academic defaults.
@@ -64,9 +64,7 @@ export function bridgeTemplateTheme(
   const opaque = palette.filter((c) => !/[0-9a-fA-F]{2}$/.test(c) || luminance(c) !== null)
   const unique = [...new Set(opaque)]
 
-  const byLum = [...unique].sort(
-    (a, b) => (luminance(a) ?? 0.5) - (luminance(b) ?? 0.5),
-  )
+  const byLum = [...unique].sort((a, b) => (luminance(a) ?? 0.5) - (luminance(b) ?? 0.5))
   const darkest = byLum[0]
   const lightest = byLum[byLum.length - 1]
   const mids = byLum.slice(1, Math.max(1, byLum.length - 1))
