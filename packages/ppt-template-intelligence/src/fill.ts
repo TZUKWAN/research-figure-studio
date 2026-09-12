@@ -44,6 +44,20 @@ export interface FillOpContext {
    * deleted. Supersedes selectedSlides; requires slideIds.
    */
   outputSequence?: number[]
+  /**
+   * GOAL §21-23: ops targeting an ELEMENT of a (possibly cloned) slide
+   * instance — chart data updates, picture replacement, table cells. The
+   * slide/instance/shapeId triple resolves exactly like a text edit; `build`
+   * then receives the resolved {slide, el} target and returns the final op.
+   * Emitted in the same late phase as text ops, so `$txn:<n>` references to
+   * earlier duplicateSlide ops are valid.
+   */
+  elementOps?: Array<{
+    slide: number
+    instance?: number
+    shapeId: number
+    build: (target: { slide: string | number; el: string }) => Record<string, unknown>
+  }>
 }
 
 export interface SlotEdit {
@@ -168,29 +182,44 @@ export function compileFillOps(edits: SlotEdit[], ctx: FillOpContext): CompiledF
   for (const slideNumber of keptAsc) {
     const elements = ctx.slideElements.get(slideNumber) ?? []
     const byNvId = new Map(elements.filter((e) => e.nvId != null).map((e) => [e.nvId!, e]))
-    for (const edit of editsBySlide.get(slideNumber) ?? []) {
-      // resolve the target slide instance (§九 occurrence semantics)
+    // resolve a (slide, instance, shapeId) triple to a target — shared by
+    // text edits and §21-23 element ops
+    const resolveTarget = (
+      slideNumber: number,
+      instance: number | undefined,
+      shapeId: number,
+    ): { slide: string | number; el: string } | { error: string } => {
       let out0: string | number
       if (seq) {
         const occurrences = working
           .slice(0, seq.length)
           .filter((t) => t.orig === slideNumber)
-        const tok = occurrences[edit.instance ?? 0]
+        const tok = occurrences[instance ?? 0]
         if (!tok) {
-          errors.push(
-            `slide ${slideNumber}: no output occurrence ${edit.instance ?? 0} in outputSequence`,
-          )
-          continue
+          return {
+            error: `slide ${slideNumber}: no output occurrence ${instance ?? 0} in outputSequence`,
+          }
         }
         out0 = tok.op !== undefined ? `$txn:${tok.op}` : slideTarget(slideNumber)
       } else {
         out0 = ctx.slideIds?.get(slideNumber) ?? prunedIndex.get(slideNumber)!
       }
-      const el = byNvId.get(edit.address.shapeId)
+      const el = byNvId.get(shapeId)
       if (!el) {
-        errors.push(`slide ${slideNumber}: no element with shape_id ${edit.address.shapeId}`)
+        return { error: `slide ${slideNumber}: no element with shape_id ${shapeId}` }
+      }
+      return { slide: out0, el: el.durableId ?? el.elementId }
+    }
+
+    for (const edit of editsBySlide.get(slideNumber) ?? []) {
+      // resolve the target slide instance (§九 occurrence semantics)
+      const target = resolveTarget(slideNumber, edit.instance, edit.address.shapeId)
+      if ('error' in target) {
+        errors.push(target.error)
         continue
       }
+      const out0 = target.slide
+      const el = byNvId.get(edit.address.shapeId)!
       if (edit.address.paragraph >= el.paragraphCount) {
         errors.push(
           `slide ${slideNumber} shape ${edit.address.shapeId}: paragraph ${edit.address.paragraph} out of range (${el.paragraphCount} paragraphs)`,
@@ -203,13 +232,24 @@ export function compileFillOps(edits: SlotEdit[], ctx: FillOpContext): CompiledF
       }
       ops.push({
         op: 'setSlotParagraphText',
-        target: { slide: out0, el: el.durableId ?? el.elementId },
+        target,
         paragraph: edit.address.paragraph,
         text: edit.newText,
       })
       summary.push(
         `slide ${slideNumber} → output ${typeof out0 === 'string' ? out0 : `#${out0}`}: shape ${edit.address.shapeId} p${edit.address.paragraph} ← "${edit.newText.slice(0, 24)}"`,
       )
+    }
+
+    // §21-23 element ops on this slide
+    for (const visual of ctx.elementOps ?? []) {
+      if (visual.slide !== slideNumber) continue
+      const target = resolveTarget(visual.slide, visual.instance, visual.shapeId)
+      if ('error' in target) {
+        errors.push(target.error)
+        continue
+      }
+      ops.push(visual.build(target))
     }
   }
 
@@ -237,6 +277,10 @@ export function compileFillPlan(
   const errors: string[] = []
   const summary: string[] = []
   const pagesBySlideId = new Map(def.pages.map((p) => [p.slideId, p]))
+  const elementOps: NonNullable<FillOpContext['elementOps']> = []
+  // GOAL §24: strict (default) treats analysis↔deck text drift as a hard
+  // stop; adaptive relaxes the expected-text gate for user-modified decks
+  const strict = (plan.fidelity ?? 'preserve-template') === 'preserve-template'
 
   const ordered = [...plan.slides].sort((a, b) => a.outputOrder - b.outputOrder)
   const outputSequence: number[] = []
@@ -252,7 +296,6 @@ export function compileFillPlan(
     const instance = entry.instance ?? occurrenceBySource.get(entry.sourceSlideId) ?? 0
     occurrenceBySource.set(entry.sourceSlideId, instance + 1)
     outputSequence.push(page.originalSlideIndex)
-    if (entry.slotValues.length === 0) continue
     const allSlots = [...page.editableSlots, ...page.nonEditableSlots]
     const byId = new Map(allSlots.map((s) => [s.id, s]))
     for (const value of entry.slotValues) {
@@ -269,19 +312,57 @@ export function compileFillPlan(
         slide: page.originalSlideIndex,
         address: slot.address,
         newText: value.text,
-        expectedText: slot.currentText || undefined,
+        expectedText: strict ? slot.currentText || undefined : undefined,
         instance,
       })
     }
-    if (entry.chartUpdates?.length) {
-      errors.push(
-        `chartUpdates on ${entry.sourceSlideId} are not compiled yet — native chart editing ships separately (GOAL §18)`,
-      )
+    for (const chart of entry.chartUpdates ?? []) {
+      elementOps.push({
+        slide: page.originalSlideIndex,
+        instance,
+        shapeId: chart.shapeId,
+        build: (target) => ({
+          op: 'updateChartData',
+          target,
+          data: { categories: chart.categories, series: chart.series },
+        }),
+      })
+    }
+    for (const image of entry.imageSlots ?? []) {
+      const bytes = Buffer.from(image.imageBase64, 'base64')
+      elementOps.push({
+        slide: page.originalSlideIndex,
+        instance,
+        shapeId: image.shapeId,
+        build: (target) => ({
+          op: 'replacePicture',
+          target,
+          bytes,
+          ext: image.ext,
+          ...(image.keepSrcRect ? { keepSrcRect: true } : {}),
+        }),
+      })
+    }
+    for (const table of entry.tableUpdates ?? []) {
+      for (const cell of table.cells) {
+        elementOps.push({
+          slide: page.originalSlideIndex,
+          instance,
+          shapeId: table.shapeId,
+          build: (target) => ({
+            op: 'setTableCell',
+            target,
+            row: cell.row,
+            col: cell.col,
+            paragraphs: cell.paragraphs.map((text) => ({ runs: [{ text }] })),
+          }),
+        })
+      }
     }
   }
   if (errors.length > 0) return { ops: [], summary, errors }
 
-  const compiled = compileFillOps(edits, { ...ctx, outputSequence })
+  const compiled = compileFillOps(edits, { ...ctx, outputSequence, elementOps })
   summary.unshift(`plan ${plan.templateId}: ${outputSequence.length} output slides`)
   return { ...compiled, summary: [...summary, ...compiled.summary], errors: compiled.errors }
 }

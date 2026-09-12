@@ -234,15 +234,24 @@ export async function observeTemplateFacts(
   }
 }
 
-/** Build the type scale from observed font sizes (largest tier = level 1). */
+/** Build the type scale from observed font sizes (largest tier = level 1).
+    GOAL §十七: sizes are normalized against a 16:9 reference slide height
+    before clustering, so the SAME deck layout on a 4:3 canvas yields the
+    same level assignment instead of a shifted scale. */
 export function inferTypeScale(facts: ObservedTemplateFacts): TypeScaleEntry[] {
+  const REFERENCE_HEIGHT_EMU = 6858000 // 16:9 12192000×6858000
+  const k =
+    facts.slideSizeEmu.cy > 0 && facts.slideSizeEmu.cy !== REFERENCE_HEIGHT_EMU
+      ? REFERENCE_HEIGHT_EMU / facts.slideSizeEmu.cy
+      : 1
   const sizeCounts = new Map<number, number>()
   for (const page of facts.pages) {
     for (const shape of page.shapes) {
       for (const para of shape.paragraphs ?? []) {
         for (const run of para.runs) {
           if (run.fontSizePt && run.text.trim()) {
-            const key = Math.round(run.fontSizePt * 2) / 2
+            const normalized = run.fontSizePt * k
+            const key = Math.round(normalized * 2) / 2
             sizeCounts.set(key, (sizeCounts.get(key) ?? 0) + 1)
           }
         }

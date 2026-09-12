@@ -232,6 +232,11 @@ export interface TemplateDefinition {
     happens inside compileFillPlan against the analyzed TemplateDefinition. */
 export interface TemplateFillPlan {
   templateId: string
+  /** GOAL §24: runtime fidelity policy. 'preserve-template' (default) fails
+      compilation when a slot's current text drifted from the analysis
+      (state drift = hard stop); 'adaptive' tolerates drift in user-modified
+      decks and relies on post-fill QA instead. */
+  fidelity?: 'preserve-template' | 'adaptive'
   slides: Array<{
     sourceSlideId: string
     /** position of this entry in the final deck (0-based) */
@@ -240,10 +245,23 @@ export interface TemplateFillPlan {
     slotValues: Array<{ slotId: string; text: string; source?: string }>
     /** 0-based occurrence among entries sharing sourceSlideId (clones) */
     instance?: number
+    /** GOAL §21: replace embedded chart data (categories + series values) */
     chartUpdates?: Array<{
       shapeId: number
       categories: string[]
       series: Array<{ name: string; values: number[] }>
+    }>
+    /** GOAL §23: replace picture-slot media (base64 payload) */
+    imageSlots?: Array<{
+      shapeId: number
+      imageBase64: string
+      ext: string
+      keepSrcRect?: boolean
+    }>
+    /** GOAL §22: rewrite table cell text (paragraph runs per cell) */
+    tableUpdates?: Array<{
+      shapeId: number
+      cells: Array<{ row: number; col: number; paragraphs: string[] }>
     }>
   }>
 }

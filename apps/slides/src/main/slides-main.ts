@@ -111,6 +111,7 @@ import {
 } from '@genoffice/pptx-engine'
 import {
   compileFillOps,
+  compileFillPlan,
   analyzeTemplateBytes,
   cachedAnalyze,
 } from '@genoffice/ppt-template-intelligence'
@@ -1492,8 +1493,21 @@ export function registerSlidesIpc(): void {
       e,
       req: {
         templatePath: string
-        selectedSlides: number[]
-        edits: Array<{
+        selectedSlides?: number[]
+        /** GOAL §十: slotId-based plan — the production SSOT input. When
+            present, selectedSlides/edits are ignored and all physical
+            addresses are resolved from the analyzed TemplateDefinition. */
+        plan?: {
+          templateId: string
+          slides: Array<{
+            sourceSlideId: string
+            outputOrder: number
+            purpose: string
+            slotValues: Array<{ slotId: string; text: string; source?: string }>
+            instance?: number
+          }>
+        }
+        edits?: Array<{
           slide: number
           address: { shapeId: number; paragraph: number }
           newText: string
@@ -1549,15 +1563,32 @@ export function registerSlidesIpc(): void {
         const slideIds = new Map(
           opened.deck.slides.map((s, i) => [i + 1, slideDurableId(s)]),
         )
-        const compiled = compileFillOps(
-          req.edits.map((edit) => ({ ...edit, slide: edit.slide })),
-          {
-            selectedSlides: req.selectedSlides,
+        let compiled
+        if (req.plan) {
+          // §十: slotId-based — resolve addresses from the analyzed template
+          const def = await analyzeTemplateBytes(bytes, {
+            type: 'user-upload',
+            sourceFile: req.templatePath,
+          })
+          compiled = compileFillPlan(def, req.plan, {
             totalSlides: opened.deck.slides.length,
             slideElements,
             slideIds,
-          },
-        )
+          })
+        } else {
+          if (!req.edits || req.selectedSlides === undefined) {
+            return { error: 'template-fill needs either `plan` (slotId-based) or `edits` + `selectedSlides`' }
+          }
+          compiled = compileFillOps(
+            req.edits.map((edit) => ({ ...edit, slide: edit.slide })),
+            {
+              selectedSlides: req.selectedSlides,
+              totalSlides: opened.deck.slides.length,
+              slideElements,
+              slideIds,
+            },
+          )
+        }
         if (compiled.errors.length > 0) {
           return { error: compiled.errors.join('; ') }
         }
@@ -1585,8 +1616,11 @@ export function registerSlidesIpc(): void {
           const { savePptxToFile } = await import('@genoffice/pptx-engine')
           await savePptxToFile(session.opened, req.saveTo)
         }
-        const firstSlide = req.selectedSlides.length
-          ? Math.max(0, Math.min(req.selectedSlides[0]! - 1, session.opened.deck.slides.length - 1))
+        const firstSelected = req.plan
+          ? 1 // plan mode: output position 0 is the plan's first slide
+          : req.selectedSlides?.[0]
+        const firstSlide = firstSelected
+          ? Math.max(0, Math.min(firstSelected - 1, session.opened.deck.slides.length - 1))
           : 0
         return rebuildSlide(session, firstSlide)
       } catch (err) {

@@ -14,6 +14,7 @@ import {
   addTable,
   pasteElements,
   replacePictureBytes,
+  updateChartPart,
   type NewChartKind,
   type NewChartOptions,
   type NewElementOptions,
@@ -158,6 +159,29 @@ register({
 })
 
 // ── addTable / addChart / addSmartArt ───────────────────────────────────
+register({
+  name: 'updateChartData',
+  validate(op, ctx) {
+    resolveElement(ctx, op)
+    const data = op.data as { categories?: unknown; series?: unknown } | undefined
+    if (!data || !Array.isArray(data.categories) || !Array.isArray(data.series)) {
+      throw new GuidedError(
+        'op "updateChartData" needs "data": { categories: string[], series: [{ name, values }] }.',
+      )
+    }
+  },
+  apply(op, ctx): OpRecord {
+    const { slide, el } = resolveElement(ctx, op)
+    const ok = updateChartPart(ctx.opened, slide, el, op.data as never)
+    if (!ok) {
+      throw new GuidedError(
+        `op "updateChartData": element "${el.id}" is not an embedded chart, its part could not be resolved, or the data shape does not match the chart (series count / category count must agree).`,
+      )
+    }
+    return { op }
+  },
+})
+
 register({
   name: 'addTable',
   validate(op, ctx) {

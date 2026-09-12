@@ -182,6 +182,11 @@ export {
   type ResearchNodeRecord,
   type ResearchRelationRecord,
 } from './research-metadata'
+export {
+  patchChartData,
+  updateChartPart,
+  type ChartDataUpdate,
+} from './chart-update'
 export { promoteSlideBackground, isBackgroundLikeElement } from './background-promote'
 export {
   applyThemeToArchive,

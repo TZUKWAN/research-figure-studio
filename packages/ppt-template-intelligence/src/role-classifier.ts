@@ -5,7 +5,7 @@
  * heuristics cannot decide stays `unknown` with a low confidence — never a
  * fabricated certainty (GOAL sections 32/33).
  */
-import type { ObservedTemplateFacts, PageRole } from './schema.js'
+import { PAGE_ROLES, type ObservedTemplateFacts, type PageRole } from './schema.js'
 
 interface PageFacts {
   slideNumber: number
@@ -122,4 +122,51 @@ export function classifyPageRole(facts: PageFacts, slideCount: number): RoleInfe
 
   warnings.push('insufficient signal for role classification')
   return { role: 'unknown', confidence: 0.2, useFor: [], warnings }
+}
+
+/**
+ * GOAL §18: two-level role classification. Level 1 is the deterministic
+ * heuristic above. When its confidence falls below `threshold` (default 0.55)
+ * and the caller supplies a vision fallback, level 2 consults it; the vision
+ * answer only REPLACES the heuristic when it returns a valid role with
+ * confidence ≥ the deterministic one. Any fallback error fails OPEN to the
+ * deterministic result — vision is an upgrade, never a dependency.
+ */
+export type VisionRoleFallback = (input: {
+  /** rasterized page preview (data URL) for the vision model */
+  imageDataUrl?: string
+  slideNumber: number
+  deterministic: { role: PageRole; confidence: number }
+}) => Promise<{ role: PageRole; confidence: number } | null>
+
+export async function classifyPageRoleTwoLevel(
+  facts: PageFacts,
+  slideCount: number,
+  opts?: { vision?: VisionRoleFallback; threshold?: number },
+): Promise<RoleInference> {
+  const deterministic = classifyPageRole(facts, slideCount)
+  if (!opts?.vision || deterministic.confidence >= (opts.threshold ?? 0.55)) {
+    return deterministic
+  }
+  try {
+    const answer = await opts.vision({
+      slideNumber: facts.slideNumber,
+      deterministic: { role: deterministic.role, confidence: deterministic.confidence },
+    })
+    if (
+      answer &&
+      PAGE_ROLES.includes(answer.role) &&
+      answer.confidence >= deterministic.confidence
+    ) {
+      return {
+        ...deterministic,
+        role: answer.role,
+        confidence: answer.confidence,
+        warnings: [...deterministic.warnings, 'role upgraded by vision fallback'],
+      }
+    }
+  } catch {
+    // fail open — deterministic stands
+  }
+  return deterministic
 }

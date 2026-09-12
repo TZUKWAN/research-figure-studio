@@ -22,6 +22,7 @@ const PLACEHOLDER_PATTERNS: RegExp[] = [
 export interface PlaceholderIssue {
   slideIndex: number
   elementId: string
+  kind: 'PLACEHOLDER_TEXT' | 'EMPTY_EDITABLE' | 'UNCHANGED_TEMPLATE_TEXT'
   text: string
   matchedPattern: string
 }
@@ -41,24 +42,56 @@ export interface AuditableSlide {
     editable?: boolean
     explicitUnused?: boolean
     slotRole?: string
+    /** GOAL §16: the template's original text — equality means "never filled" */
+    currentText?: string
   }>
 }
 
-/** Every editable slot must be FILLED or EXPLICITLY_UNUSED — no silent placeholders. */
+/**
+ * GOAL §16, three gates, no silent placeholders:
+ *  1. PLACEHOLDER_TEXT — the text matches a known placeholder pattern;
+ *  2. EMPTY_EDITABLE   — an editable slot left empty (unless explicitly unused);
+ *  3. UNCHANGED        — the text still EQUALS the slot's template currentText,
+ *     i.e. the plan targeted this slot but never wrote to it.
+ * `opts.allowlist` marks text that is INTENTIONALLY kept (page numbers,
+ * copyright lines, brand footers) — matching elements are suppressed.
+ * `opts.extraForbidden` extends the placeholder patterns.
+ */
 export function auditPlaceholders(
   slides: AuditableSlide[],
-  opts?: { allowlist?: RegExp[] },
+  opts?: { allowlist?: RegExp[]; extraForbidden?: RegExp[] },
 ): PlaceholderAuditResult {
   const issues: PlaceholderIssue[] = []
   let explicitlyUnused = 0
-  const patterns = [...PLACEHOLDER_PATTERNS, ...(opts?.allowlist ?? [])]
+  const patterns = [...PLACEHOLDER_PATTERNS, ...(opts?.extraForbidden ?? [])]
+  const allow = opts?.allowlist ?? []
   for (const slide of slides) {
     for (const el of slide.elements) {
       const text = el.text.trim()
-      if (!text) continue
       if (el.editable === false) continue
       if (el.explicitUnused) {
         explicitlyUnused++
+        continue
+      }
+      if (allow.some((p) => p.test(text))) continue
+      if (!text) {
+        issues.push({
+          slideIndex: slide.slideIndex,
+          elementId: el.elementId,
+          kind: 'EMPTY_EDITABLE',
+          text: '',
+          matchedPattern: '(empty editable slot)',
+        })
+        continue
+      }
+      if (el.currentText !== undefined && el.currentText.trim() === text) {
+        issues.push({
+          slideIndex: slide.slideIndex,
+          elementId: el.elementId,
+          kind: 'UNCHANGED_TEMPLATE_TEXT',
+          text: text.slice(0, 60),
+          matchedPattern: '(equals template currentText)',
+        })
         continue
       }
       const hit = patterns.find((p) => p.test(text))
@@ -66,6 +99,7 @@ export function auditPlaceholders(
         issues.push({
           slideIndex: slide.slideIndex,
           elementId: el.elementId,
+          kind: 'PLACEHOLDER_TEXT',
           text: text.slice(0, 60),
           matchedPattern: String(hit),
         })
