@@ -139,10 +139,14 @@ describe('persistence integrity (DESKTOP-P0-05..09)', () => {
   it('deleteProject with an un-trashable directory fails loudly and keeps the index entry', () => {
     store.ensureDefaultProject()
     const proj = store.createProject('doomed')
-    // Make the trash rename fail: create a directory in .trash occupying the target name
+    // Make the trash rename fail: create a NON-EMPTY directory in .trash
+    // occupying the target name (POSIX rename() legally replaces an EMPTY
+    // target directory, so the blocker must contain a file to fail on both
+    // Windows and Linux)
     const ts = Date.now()
     const trashTarget = join(tmpDir, 'projects', '.trash', `${proj.id}-${ts}`)
     mkdirSync(trashTarget, { recursive: true })
+    writeFileSync(join(trashTarget, 'occupied'), 'x')
     // Patch Date.now just long enough for the delete call
     const realNow = Date.now
     Date.now = () => ts

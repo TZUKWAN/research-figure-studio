@@ -82,7 +82,16 @@ export async function launchShell(options: LaunchOptions): Promise<LaunchedApp> 
       ...hostEnv,
       GENOFFICE_USER_DATA: userDataDir,
       GENOFFICE_LANG: options.lang ?? 'en',
-      ...(process.platform === 'linux' ? { ELECTRON_DISABLE_SANDBOX: '1' } : {}),
+      ...(process.platform === 'linux'
+        ? {
+            ELECTRON_DISABLE_SANDBOX: '1',
+            // CI runners have no session bus; Chromium's dbus retries wedge the
+            // main loop at shutdown, so app.quit() never completes and
+            // ElectronApplication.close() hangs. Point dbus at a black hole
+            // (the standard headless-CI workaround) so quit proceeds.
+            DBUS_SESSION_BUS_ADDRESS: '/dev/null',
+          }
+        : {}),
     },
     // Playwright's Electron screencast wedges the page CDP session on Linux
     // (page.url() stays empty, no lifecycle events, evaluate hangs) — record
