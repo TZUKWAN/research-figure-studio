@@ -1025,6 +1025,10 @@ function chartColorSchemes(
  * or reveal it in the folder (standalone). Tab-opening failure must not
  * report the export itself as failed — the file is already persisted. */
 function openExportedPdf(path: string): void {
+  // E2E/unattended runs: opening the system viewer spawns a child process
+  // whose event-loop handle blocks app.quit() on headless Linux (no viewer
+  // configured, xdg-open waits), wedging ElectronApplication.close().
+  if (process.env.GENOFFICE_NO_AUTO_OPEN) return
   try {
     if (runtime.openGeneratedPath?.(path)) return
   } catch (err) {

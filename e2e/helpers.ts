@@ -82,6 +82,9 @@ export async function launchShell(options: LaunchOptions): Promise<LaunchedApp> 
       ...hostEnv,
       GENOFFICE_USER_DATA: userDataDir,
       GENOFFICE_LANG: options.lang ?? 'en',
+      // unattended runs must not spawn a system PDF viewer after exports —
+      // the child process blocks app.quit() on headless Linux
+      GENOFFICE_NO_AUTO_OPEN: '1',
       ...(process.platform === 'linux'
         ? {
             ELECTRON_DISABLE_SANDBOX: '1',
