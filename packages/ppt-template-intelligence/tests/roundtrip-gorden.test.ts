@@ -68,9 +68,7 @@ describe('gorden deck full roundtrip (P5)', () => {
       // same parse instance the ops are applied to; durable slide ids keep
       // the ops valid across the executor's pre-transaction plan validation
       const live = await openPptx(bytes)
-      const slideIds = new Map(
-        live.deck.slides.map((s, i) => [i + 1, slideDurableId(s as never)]),
-      )
+      const slideIds = new Map(live.deck.slides.map((s, i) => [i + 1, slideDurableId(s as never)]))
       const slideElements = new Map()
       live.deck.slides.forEach((slide, i) => {
         const out: Array<{

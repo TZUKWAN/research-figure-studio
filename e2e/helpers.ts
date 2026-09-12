@@ -147,38 +147,29 @@ export async function closeAndSaveVideo(
       })) as typeof dialog.showMessageBox
     })
     .catch(() => {})
-  // P1-7 teardown fix: a Promise.race leaves the losing close() promise
-  // pending forever, which keeps the Playwright worker's ElectronApplication
-  // undisposed and blows the 90 s worker teardown timeout. Settle BOTH: on
-  // timeout, kill the process and then AWAIT the original close() (it
-  // resolves once the process is gone), so nothing dangles into teardown.
-  let killTimer: NodeJS.Timeout | undefined
-  const gracefulClose = launched.app.close().catch(() => {})
-  const forceKill = new Promise<void>((resolvePromise) => {
-    killTimer = setTimeout(() => {
-      try {
-        launched.app.process().kill('SIGKILL')
-      } catch {
-        // already gone
-      }
+  // Teardown fix (P1-7, hardened after CI): app.close() can HANG forever on
+  // Linux even after the test finishes (a lingering print-manager/printToPDF
+  // webContents blocks the graceful browser close), and a hanging close()
+  // leaves the Playwright ElectronApplication undisposed — the worker then
+  // re-closes it at teardown and blows the 90 s worker teardown timeout with
+  // "1 error was not a part of any test". So: SIGKILL the process FIRST,
+  // wait (bounded) for exit, and only then call close() — on a dead process
+  // it resolves immediately and releases the Playwright handle.
+  const proc = launched.app.process()
+  try {
+    proc.kill('SIGKILL')
+  } catch {
+    // already gone
+  }
+  await new Promise<void>((resolvePromise) => {
+    if (!proc || proc.exitCode !== null || proc.signalCode !== null) {
       resolvePromise()
-    }, 20_000)
+      return
+    }
+    proc.once('exit', () => resolvePromise())
+    setTimeout(resolvePromise, 10_000)
   })
-  await Promise.race([gracefulClose, forceKill])
-  if (killTimer) clearTimeout(killTimer)
-  // Wait for the app process to fully exit (bounded) so teardown never races it
-  await Promise.race([
-    gracefulClose,
-    new Promise<void>((resolvePromise) => {
-      const proc = launched.app.process()
-      if (!proc || proc.exitCode !== null) {
-        resolvePromise()
-        return
-      }
-      proc.once('exit', () => resolvePromise())
-      setTimeout(resolvePromise, 10_000)
-    }),
-  ]).catch(() => {})
+  await launched.app.close().catch(() => {})
   if (!video) return undefined
   const target = join(ARTIFACTS_DIR, 'videos', `${name}.webm`)
   try {

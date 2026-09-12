@@ -272,4 +272,6 @@ jobs:
           fail-on-severity: high
 
       - name: npm audit (high/critical gate)
-        run: npm audit --audit-level=high
+        # Documented, expiring exceptions live in security-exceptions.json; the
+        # raw npm audit call would stay red forever on upstream-blocked advisories.
+        run: npm run audit:security
