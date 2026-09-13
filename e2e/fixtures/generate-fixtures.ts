@@ -21,7 +21,7 @@ import {
 } from '@genoffice/pptx-engine'
 
 const FIXTURES_DIR = join(__dirname, 'templates')
-const GENERATOR_VERSION = '1'
+const GENERATOR_VERSION = '3'
 
 function textbox(
   opened: OpenedPptx,
@@ -50,12 +50,20 @@ function titlePage(opened: OpenedPptx, title: string, subtitle: string): void {
 }
 
 function contentPage(opened: OpenedPptx, heading: string, body: string): void {
-  addElement(opened.deck.slides[0]!, {
+  // the duplicated page is the LAST slide — content must land there
+  const target = opened.deck.slides[opened.deck.slides.length - 1]!
+  addElement(target, {
     kind: 'textbox',
     offset: { x: 914400, y: 457200, cx: 9906000, cy: 914400 },
     paragraphs: [{ runs: [{ text: heading, bold: true, fontSize: 24 }] }],
   })
-  textbox(opened, 0, body, { x: 914400, y: 1371600, cx: 9906000, cy: 4572000, size: 14 })
+  textbox(opened, opened.deck.slides.length - 1, body, {
+    x: 914400,
+    y: 1371600,
+    cx: 9906000,
+    cy: 4572000,
+    size: 14,
+  })
 }
 
 async function minimalAcademic(): Promise<Buffer> {
@@ -72,7 +80,9 @@ async function businessReport(): Promise<Buffer> {
   const opened = await openPptx(await createBlankPptx())
   titlePage(opened, 'Business Report', 'Quarterly review deck')
   for (const heading of ['Highlights', 'Risks', 'Outlook', 'Appendix']) {
-    duplicateSlide(opened, 1)
+    // duplicate the LAST slide (the deck grows by one page per iteration);
+    // index 1 is out of range while the deck still has a single page
+    duplicateSlide(opened, opened.deck.slides.length - 1)
     contentPage(opened, heading, `${heading} for the business review fixture.`)
   }
   return savePptx(opened)
@@ -131,11 +141,18 @@ async function complexGroupTemplate(): Promise<Buffer> {
   return savePptx(opened)
 }
 
+async function brokenTemplate(): Promise<Buffer> {
+  // GOAL §41/§26: NOT a zip — import must fail with a typed error, the UI
+  // must show it, and the app must keep running
+  return Buffer.from('this is definitely not a powerpoint file')
+}
+
 const FIXTURES: Record<string, () => Promise<Buffer>> = {
   'minimal-academic.pptx': minimalAcademic,
   'business-report.pptx': businessReport,
   'chart-template.pptx': chartTemplate,
   'complex-group-template.pptx': complexGroupTemplate,
+  'broken-template.pptx': brokenTemplate,
 }
 
 export async function ensureOwnedFixtures(): Promise<string> {

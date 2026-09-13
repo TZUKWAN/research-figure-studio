@@ -12,6 +12,7 @@ import { closeAndSaveVideo, launchShell, waitForPageWithUrl } from './helpers'
 import { aiSettingsJson, startStubProvider } from './helpers/stub-provider'
 
 const FIXTURE = join(process.cwd(), 'e2e', 'fixtures', 'templates', 'minimal-academic.pptx')
+const BROKEN = join(process.cwd(), 'e2e', 'fixtures', 'templates', 'broken-template.pptx')
 
 async function openTemplatePanel(launched: Parameters<typeof waitForPageWithUrl>[0]) {
   const editor = await waitForPageWithUrl(launched.app, 'slides/out')
@@ -90,5 +91,35 @@ test.describe('template import (owned fixtures, GOAL §42/§43)', () => {
       await stub2.close()
     }
     expect(existsSync(FIXTURE)).toBe(true)
+  })
+
+  test('broken template import shows a typed error and the app keeps running (GOAL §41/§26)', async () => {
+    expect(existsSync(BROKEN), 'broken fixture must exist').toBe(true)
+    const stub = await startStubProvider()
+    const launched = await launchShell({
+      onboardingSeen: true,
+      aiSettings: aiSettingsJson(stub.baseUrl),
+      videoDir: 'template-import-broken',
+    })
+    try {
+      const { editor, panel } = await openTemplatePanel(launched)
+      await launched.app.evaluate(({ dialog }, path) => {
+        dialog.showOpenDialog = (async () => ({
+          canceled: false,
+          filePaths: [path],
+        })) as typeof dialog.showOpenDialog
+      }, BROKEN)
+      await panel.locator('[data-testid="tpl-empty"] .tpl-use').click()
+      // typed error, visible in the panel — never a crash
+      await expect(panel.locator('[data-testid="tpl-import-error"]')).toBeVisible({
+        timeout: 20_000,
+      })
+      // the app is still alive: the panel and canvas remain interactive
+      await expect(panel).toBeVisible()
+      await expect(editor.locator('.stage-wrap canvas').first()).toBeVisible()
+    } finally {
+      await closeAndSaveVideo(launched, 'template-import-broken')
+      await stub.close()
+    }
   })
 })
