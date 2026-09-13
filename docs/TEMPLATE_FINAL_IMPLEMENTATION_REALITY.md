@@ -9,7 +9,7 @@ windows-integration).
 The user-visible flow, component by component:
 
 1. **Template Center** (AI composer ▦ toggle → `TemplatePanel`)
-   - Sections: *My Templates* (user registry) and *Local Reference*
+   - Sections: _My Templates_ (user registry) and _Local Reference_
      (GordenDirProvider, only when `METIS_GORDEN_TEMPLATES_DIR` is set).
    - Empty library → usable empty state with **Import** (GOAL §11).
    - Cards lazy-load previews via IntersectionObserver (GOAL §15).
@@ -47,15 +47,15 @@ The user-visible flow, component by component:
 
 ## 2. Execution evidence
 
-| Surface | Suite | Result |
-|---|---|---|
-| Repo unit tests (16 workspaces) | `npm test` | 3816+ passed, 0 failed |
-| Template intelligence package | dedicated CI job | green |
-| All-decks Gorden workflow smoke | `gorden-workflow-smoke.test.ts` | 21/21 decks |
-| Reorder/clone `[3,1,2,2,5]` | `template-reorder-regression.test.ts` | green |
-| Import persistence + broken input | `template-import-owned.spec.ts` (non-skipped, runs on CI) | green |
-| Real Electron E2E suite | 13 passed + 1 environment-skipped (Gorden panel spec) | green |
-| Gates | lint/typecheck/format/comments/theme/licenses/audit:security | all 0 |
+| Surface                           | Suite                                                        | Result                 |
+| --------------------------------- | ------------------------------------------------------------ | ---------------------- |
+| Repo unit tests (16 workspaces)   | `npm test`                                                   | 3816+ passed, 0 failed |
+| Template intelligence package     | dedicated CI job                                             | green                  |
+| All-decks Gorden workflow smoke   | `gorden-workflow-smoke.test.ts`                              | 21/21 decks            |
+| Reorder/clone `[3,1,2,2,5]`       | `template-reorder-regression.test.ts`                        | green                  |
+| Import persistence + broken input | `template-import-owned.spec.ts` (non-skipped, runs on CI)    | green                  |
+| Real Electron E2E suite           | 13 passed + 1 environment-skipped (Gorden panel spec)        | green                  |
+| Gates                             | lint/typecheck/format/comments/theme/licenses/audit:security | all 0                  |
 
 ## 3. Honest boundaries
 
