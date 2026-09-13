@@ -16,4 +16,12 @@ Round: closure round on `audit/production-closure-final` (baseline `d7e561e`).
 | I-10 | P3       | Rename entry in My Templates                          | No UI button                                                                   | IPC shipped; UI control pending next round                                                                          | —                                                                                                                                                             | —                                    | OPEN (P3)                                                                |
 | I-11 | P3       | Owned-fixture CI E2E                                  | Panel E2E uses the local reference library and skips in CI without it          | Generator not yet written                                                                                           | —                                                                                                                                                             | —                                    | OPEN (P1 → next round; unit+import+panel-no-dir paths already run in CI) |
 
-P0/P1 at audit time: I-01..I-07, I-09 — all FIXED. Open items are I-10 (P3) and I-11 (P1, scheduled next round; CI remains green because the affected spec clean-skips by design and the non-skipped unit/IPC surface is covered).
+P0/P1 at audit time: I-01..I-07, I-09 — all FIXED. I-10 (P3, rename UI) and I-11 (P1, owned-fixture non-skipped CI E2E) also closed in this round.
+
+Additional closure-round verification (all green):
+
+- template-reorder-regression: owned [3,1,2,2,5] → [3,1,2A,2B,5] through the real analyzer/compiler/executor with save→reopen.
+- template-chart-lifecycle: native chart update → save → reopen keeps a NATIVE chart with updated cached data (GOAL §31).
+- perf-smoke: 100-slide owned fixture analyzes in <1s with full per-slide progress (GOAL §40).
+- dual-window-analysis E2E: cancelling window A does not affect window B (GOAL §20 / Scenario 04).
+- broken-template import E2E: typed error in the panel, app keeps running (GOAL §41/§26).
