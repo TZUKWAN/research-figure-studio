@@ -1527,9 +1527,11 @@ export function registerSlidesIpc(): void {
             }
             // GOAL §9: persisted analysis store — a restart must NOT re-analyze
             // a template whose definition is already on disk
+            // the file store is keyed by the RAW source hash (what
+            // saveAnalysisCache writes), not the prefixed cache key
             const fileDef = loadAnalysisCache<
               import('@genoffice/ppt-template-intelligence').TemplateDefinition
-            >(app.getPath('userData'), key)
+            >(app.getPath('userData'), hash)
             if (fileDef) {
               const entry: import('@genoffice/ppt-template-intelligence').CacheEntry = {
                 parserVersion: 1,
