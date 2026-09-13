@@ -229,18 +229,35 @@ function TemplateCard({
         </span>
         <span className="tpl-card-state">
           {section === 'user' && entry.id.startsWith('user-') && (
-            <button
-              className="tpl-cancel"
-              data-tip={t('tplRemove')}
-              aria-label={t('tplRemove')}
-              onClick={() => {
-                void window.slidesApi.templateUserRemove(entry.id).then(() => {
-                  window.location.reload()
-                })
-              }}
-            >
-              ✕
-            </button>
+            <>
+              <button
+                className="tpl-cancel"
+                data-tip={t('tplRename')}
+                aria-label={t('tplRename')}
+                onClick={() => {
+                  // GOAL §36: rename the registry entry (library metadata only)
+                  const name = window.prompt(t('tplRename'), entry.name)?.trim()
+                  if (!name || name === entry.name) return
+                  void window.slidesApi.templateUserRename(entry.id, name).then(() => {
+                    window.location.reload()
+                  })
+                }}
+              >
+                ✎
+              </button>
+              <button
+                className="tpl-cancel"
+                data-tip={t('tplRemove')}
+                aria-label={t('tplRemove')}
+                onClick={() => {
+                  void window.slidesApi.templateUserRemove(entry.id).then(() => {
+                    window.location.reload()
+                  })
+                }}
+              >
+                ✕
+              </button>
+            </>
           )}
           {analyze && (
             <>
@@ -302,6 +319,7 @@ export function TemplatePanel({
   const [referenceEntries, setReferenceEntries] = useState<TemplateLibraryEntry[]>([])
   const [loaded, setLoaded] = useState(false)
   const [importing, setImporting] = useState(false)
+  const [importError, setImportError] = useState<string | null>(null)
   const [selected, setSelected] = useState<TemplateLibraryEntry | null>(null)
   const [analyze, setAnalyze] = useState<AnalyzeState | null>(null)
   // GOAL §20: selecting deck B abandons deck A's in-flight result
@@ -382,19 +400,29 @@ export function TemplatePanel({
 
   const importTemplate = useCallback(async () => {
     setImporting(true)
+    setImportError(null)
     try {
       const r = await window.slidesApi.templateImport()
-      if (r && !('canceled' in r) && !('error' in r) && r.entry) {
-        refreshLibrary()
-        const entry: TemplateLibraryEntry = {
-          id: r.entry.id,
-          name: r.entry.name,
-          origin: r.entry.managedSourcePath,
-          sourceHash: r.entry.sourceHash,
-          analysisStatus: 'not-analyzed',
-        }
-        await select(entry)
+      if (!r) {
+        setImportError('unavailable')
+        return
       }
+      if ('error' in r) {
+        setImportError(r.error)
+        return
+      }
+      if ('canceled' in r) return
+      refreshLibrary()
+      const entry: TemplateLibraryEntry = {
+        id: r.entry.id,
+        name: r.entry.name,
+        origin: r.entry.managedSourcePath,
+        sourceHash: r.entry.sourceHash,
+        analysisStatus: 'not-analyzed',
+      }
+      await select(entry)
+    } catch (err) {
+      setImportError(err instanceof Error ? err.message : String(err))
     } finally {
       setImporting(false)
     }
@@ -429,6 +457,11 @@ export function TemplatePanel({
             {t('tplImportBtn')}
           </button>
           {importing && <span className="tpl-progress-label">{t('tplImporting')}</span>}
+          {importError && (
+            <span className="tpl-error" data-testid="tpl-import-error">
+              {importError}
+            </span>
+          )}
         </div>
       </div>
     )

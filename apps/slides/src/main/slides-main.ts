@@ -1547,12 +1547,12 @@ export function registerSlidesIpc(): void {
       )
       // GOAL §8/§9: user-registered templates persist their analysis + status
       // so a restart resumes with ready templates (no re-analyze on reopen)
-      const userEntry = loadRegistry(userTemplatesDir()).templates.find(
+      const userEntry = loadRegistry(app.getPath('userData')).templates.find(
         (t) => t.sourceHash === hash,
       )
       if (userEntry) {
-        saveAnalysisCache(userTemplatesDir(), hash, definition)
-        updateRegistryEntry(userTemplatesDir(), userEntry.id, {
+        saveAnalysisCache(app.getPath('userData'), hash, definition)
+        updateRegistryEntry(app.getPath('userData'), userEntry.id, {
           analysisStatus: 'ready',
           pageCount: definition.pages.length,
         })
@@ -1584,7 +1584,7 @@ export function registerSlidesIpc(): void {
 
   ipcMain.handle('slides:template-library-list', async () => {
     // My Templates first (GOAL §7): user registry is the primary section
-    const user = loadRegistry(userTemplatesDir()).templates
+    const user = loadRegistry(app.getPath('userData')).templates
     const provider = libraryProvider()
     const reference = provider ? await provider.list() : []
     return {
@@ -1635,13 +1635,13 @@ export function registerSlidesIpc(): void {
   })
 
   ipcMain.handle('slides:template-user-list', async () => ({
-    entries: loadRegistry(userTemplatesDir()).templates,
+    entries: loadRegistry(app.getPath('userData')).templates,
   }))
 
   ipcMain.handle('slides:template-user-rename', (_e, id: string, name: string) => {
     const trimmed = String(name ?? '').trim()
     if (!trimmed) return { error: 'name must not be empty' }
-    const entry = updateRegistryEntry(userTemplatesDir(), id, { name: trimmed })
+    const entry = updateRegistryEntry(app.getPath('userData'), id, { name: trimmed })
     return entry ? { entry } : { error: `template "${id}" not found` }
   })
 
@@ -1661,7 +1661,7 @@ export function registerSlidesIpc(): void {
         writeFileSync(file, Buffer.from(dataUrlBase64, 'base64'))
         // attach to any registry entry with this hash (user templates only —
         // local-reference decks are read-only by license)
-        const registry = loadRegistry(userTemplatesDir())
+        const registry = loadRegistry(app.getPath('userData'))
         for (const entry of registry.templates) {
           if (entry.sourceHash === sourceHash) entry.previewPath = file
         }
@@ -1698,7 +1698,9 @@ export function registerSlidesIpc(): void {
       const { opened, hash } = cached
       // GOAL §14 fast path: a persisted preview bitmap (hash + version keyed)
       // skips parse+render entirely on every visit after the first
-      const regEntry = loadRegistry(userTemplatesDir()).templates.find((t) => t.sourceHash === hash)
+      const regEntry = loadRegistry(app.getPath('userData')).templates.find(
+        (t) => t.sourceHash === hash,
+      )
       if (slideIndex === 0 && regEntry?.previewPath && existsSync(regEntry.previewPath)) {
         const b64 = readFileSync(regEntry.previewPath).toString('base64')
         return { previewDataUrl: 'data:image/png;base64,' + b64, sourceHash: hash }

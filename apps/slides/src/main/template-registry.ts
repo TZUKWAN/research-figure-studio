@@ -72,8 +72,12 @@ export function loadRegistry(userDataDir: string): TemplateRegistry {
     const parsed = JSON.parse(readFileSync(file, 'utf8')) as TemplateRegistry
     if (!Array.isArray(parsed.templates)) throw new Error('bad shape')
     return parsed
-  } catch {
+  } catch (err) {
     // corrupt/missing registry never crashes the app — start fresh (GOAL §41)
+    console.warn(
+      '[template-registry] registry unreadable, starting fresh:',
+      err instanceof Error ? err.message : err,
+    )
     return { version: REGISTRY_VERSION, templates: [] }
   }
 }

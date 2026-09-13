@@ -6,9 +6,14 @@ import { defineConfig } from '@playwright/test'
  * Tests launch the real built app (electron.launch), so they run serially —
  * parallel Electron instances fight over the GPU cache and dock on macOS.
  * Run with: `npm run test:e2e` (after `npm run build:all`).
+ *
+ * globalSetup regenerates the OWNED template fixtures (GOAL §42) so the
+ * template-import E2E runs non-skipped on CI (GOAL §43).
  */
 export default defineConfig({
+  globalSetup: './global-setup.ts',
   testDir: '.',
+  testIgnore: ['**/fixtures/**'],
   outputDir: './test-results',
   timeout: 90_000,
   fullyParallel: false,

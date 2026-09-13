@@ -245,6 +245,39 @@ jobs:
           npm run test -w @genoffice/shell
           npm run test -w @genoffice/slides
 
+  template-intelligence:
+    # GOAL §44: dedicated gate for the template-intelligence surface — package
+    # unit tests, owned-fixture generation (analyzer / roles / slots /
+    # capacity / fill / reorder / duplicate / chart / registry / previews),
+    # and the build so the shared E2E fixtures stay honest.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Template intelligence package (unit + owned fixtures)
+        run: npm run test -w @genoffice/ppt-template-intelligence
+
+      - name: Slides registry + fill suites
+        run: npx vitest run tests/template-registry.test.ts --root apps/slides
+
+      - name: Generate owned E2E fixtures (sanity)
+        run: npx tsx e2e/fixtures/run-generator.ts
+
+      - name: Template intelligence typecheck
+        run: npm run typecheck -w @genoffice/ppt-template-intelligence
+
   security:
     # Dependency audit as an information gate with an explicit severity policy:
     # transient moderate dev-dependency advisories must not block all
