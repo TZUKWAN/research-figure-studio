@@ -25,3 +25,8 @@ Additional closure-round verification (all green):
 - perf-smoke: 100-slide owned fixture analyzes in <1s with full per-slide progress (GOAL §40).
 - dual-window-analysis E2E: cancelling window A does not affect window B (GOAL §20 / Scenario 04).
 - broken-template import E2E: typed error in the panel, app keeps running (GOAL §41/§26).
+- template-fidelity-longcontent: filling one slot keeps every other shape
+  stable through save→reopen (GOAL §30), and a 140+ char CJK body is stored
+  IN FULL while the capacity model flags the pressure (GOAL §28).
+- analyzer OPEN stage: progress ladder now open → parse → analyze, with the
+  abort signal re-checked after the package opens (GOAL §17/§18).
