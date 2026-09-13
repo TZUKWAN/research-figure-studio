@@ -5,7 +5,7 @@
  * picker, the same pattern as the export spec) → managed copy → analysis with
  * progress → summary → persistence across relaunch → remove.
  */
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
 import { closeAndSaveVideo, launchShell, waitForPageWithUrl } from './helpers'
@@ -33,6 +33,7 @@ test.describe('template import (owned fixtures, GOAL §42/§43)', () => {
       aiSettings: aiSettingsJson(stub.baseUrl),
       videoDir: 'template-import-owned',
     })
+    const userDataDir = launched.userDataDir
     try {
       // no METIS_GORDEN_TEMPLATES_DIR: the Local Reference section is absent,
       // the panel shows the usable empty state (GOAL §11)
@@ -86,6 +87,16 @@ test.describe('template import (owned fixtures, GOAL §42/§43)', () => {
       await expect(panel2.locator('[data-testid^="tpl-card-user-"]')).toHaveCount(0, {
         timeout: 20_000,
       })
+      // the REGISTRY FILE must reflect the removal — not just the UI
+      let registryOnDisk: { templates: unknown[] } | null = null
+      for (let i = 0; i < 8; i++) {
+        await new Promise((r) => setTimeout(r, 250))
+        registryOnDisk = JSON.parse(
+          readFileSync(join(userDataDir, 'templates', 'registry.json'), 'utf8'),
+        )
+        if (registryOnDisk.templates.length === 0) break
+      }
+      expect(registryOnDisk!.templates).toHaveLength(0)
     } finally {
       await closeAndSaveVideo(relaunched, 'template-import-owned-relaunch')
       await stub2.close()
