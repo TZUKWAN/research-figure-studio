@@ -1,6 +1,6 @@
 # Template Intelligence — Final Implementation Reality
 
-Head: `audit/production-closure-final` @ `258396d` (CI run 34780363403, all
+Head: `audit/production-closure-final` @ `e68037c` (CI run 34790809777, all
 jobs green: test / research-qa / template-intelligence / e2e / security /
 windows-integration).
 
