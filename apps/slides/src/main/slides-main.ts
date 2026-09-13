@@ -1583,6 +1583,7 @@ export function registerSlidesIpc(): void {
   const userTemplatesDir = (): string => templatesRoot(app.getPath('userData'))
 
   ipcMain.handle('slides:template-library-list', async () => {
+    console.log('[library-list] env dir:', process.env.METIS_GORDEN_TEMPLATES_DIR ?? '(unset)')
     // My Templates first (GOAL §7): user registry is the primary section
     const user = loadRegistry(app.getPath('userData')).templates
     const provider = libraryProvider()
