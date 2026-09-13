@@ -7,7 +7,7 @@
  * a fixture is missing or this script's version bumps).
  */
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import {
   addChart,
   addElement,
