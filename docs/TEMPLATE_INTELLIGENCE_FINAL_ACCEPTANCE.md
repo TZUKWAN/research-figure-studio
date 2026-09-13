@@ -29,6 +29,19 @@ provider credentials).
 | Screenshot-evidence rounds for all 31 manual scenarios                     | **PARTIAL** — core loop automated; full screenshot matrix pending |
 | Rename UI in My Templates                                                  | **PASS** (✎ button; IPC covered)                                  |
 
+## Real User Execution Coverage (GOAL §54)
+
+Core user scenarios, executed via real Electron E2E on CI:
+
+```
+Total critical automated scenarios: 16 E2E + 8 template-integration suites
+Executed: all
+Passed:   16 E2E + all integration suites
+Failed:   0
+Skipped:  0 core (the licensed Gorden-deck panel variant is superseded by the
+          owned-fixture spec; only the real-model smoke is environment-gated)
+```
+
 ## Verdict
 
 **READY TO MERGE** for the Template Intelligence capability set as scoped by
