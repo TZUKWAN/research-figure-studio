@@ -32,13 +32,12 @@ provider credentials).
 ## Verdict
 
 **READY TO MERGE** for the Template Intelligence capability set as scoped by
-the capability matrix in `TEMPLATE_INTELLIGENCE_FINAL_REALITY_AUDIT.md`, with
-two documented follow-ups that do not gate the merge:
+the capability matrix in `TEMPLATE_INTELLIGENCE_FINAL_REALITY_AUDIT.md`.
 
-1. Screenshot-evidence completion for the remaining manual scenarios
-   (artifacts directory) — the underlying behaviors are already
-   automated-tested.
-2. Real-model smoke run in an environment with provider credentials.
+Follow-ups that do not gate the merge (tracked in the ledger):
 
-Both are tracked in `FINAL_ACCEPTANCE_ISSUE_LEDGER.md`; neither leaves a
-core user flow untested or a CI gate red.
+1. Screenshot-evidence completion for the remaining manual scenarios —
+   the underlying behaviors are already automated-tested (14 E2E tests on
+   CI, including the non-skipped owned-fixture import flow).
+2. Real-model smoke run in an environment with provider credentials
+   (CI `research-model-smoke` is skip-by-design without secrets).
