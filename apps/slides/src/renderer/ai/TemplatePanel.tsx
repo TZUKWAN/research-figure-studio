@@ -199,12 +199,16 @@ function TemplateCard({
   selected,
   analyze,
   onSelect,
+  onRenamed,
+  onRemoved,
 }: {
   entry: TemplateLibraryEntry
   section: 'user' | 'reference'
   selected: boolean
   analyze?: AnalyzeState
   onSelect: (entry: TemplateLibraryEntry) => void
+  onRenamed?: (id: string, name: string) => void
+  onRemoved?: (id: string) => void
 }): React.ReactElement {
   const { t } = useI18n()
   const analyzing = analyze?.status === 'analyzing'
@@ -239,7 +243,7 @@ function TemplateCard({
                   const name = window.prompt(t('tplRename'), entry.name)?.trim()
                   if (!name || name === entry.name) return
                   void window.slidesApi.templateUserRename(entry.id, name).then(() => {
-                    window.location.reload()
+                    onRenamed?.(entry.id, name)
                   })
                 }}
               >
@@ -251,7 +255,7 @@ function TemplateCard({
                 aria-label={t('tplRemove')}
                 onClick={() => {
                   void window.slidesApi.templateUserRemove(entry.id).then(() => {
-                    window.location.reload()
+                    onRemoved?.(entry.id)
                   })
                 }}
               >
@@ -486,6 +490,16 @@ export function TemplatePanel({
               selected={selected?.id === entry.id}
               analyze={selected?.id === entry.id ? (analyze ?? undefined) : undefined}
               onSelect={(e) => void select(e)}
+              onRenamed={(id, name) =>
+                setUserEntries((entries) => entries.map((e) => (e.id === id ? { ...e, name } : e)))
+              }
+              onRemoved={(id) => {
+                setUserEntries((entries) => entries.filter((e) => e.id !== id))
+                if (selected?.id === id) {
+                  setSelected(null)
+                  setAnalyze(null)
+                }
+              }}
             />
           ))}
         </div>
