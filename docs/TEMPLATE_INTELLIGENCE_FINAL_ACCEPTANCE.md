@@ -1,7 +1,7 @@
 # Template Intelligence — Final Acceptance
 
-Branch: `audit/production-closure-final` · HEAD: `258396d`
-CI: run 34780363403 — **all required jobs green**
+Branch: `audit/production-closure-final` · HEAD: `07aa7d5`
+CI: run 34785128790 — **all required jobs green**
 (test · research-qa · template-intelligence · e2e · security ·
 windows-integration; `research-model-smoke` is skip-by-design without
 provider credentials).
