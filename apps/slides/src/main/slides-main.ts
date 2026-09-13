@@ -1668,7 +1668,7 @@ export function registerSlidesIpc(): void {
   })
 
   ipcMain.handle('slides:template-user-remove', (_e, id: string) => ({
-    removed: removeRegistryEntry(userTemplatesDir(), id),
+    removed: removeRegistryEntry(app.getPath('userData'), id),
   }))
 
   // GOAL §14: persist the renderer-generated preview bitmap; keyed by
@@ -1687,7 +1687,7 @@ export function registerSlidesIpc(): void {
         for (const entry of registry.templates) {
           if (entry.sourceHash === sourceHash) entry.previewPath = file
         }
-        saveRegistry(userTemplatesDir(), registry)
+        saveRegistry(app.getPath('userData'), registry)
         return { path: file }
       } catch (err) {
         return { error: err instanceof Error ? err.message : String(err) }
