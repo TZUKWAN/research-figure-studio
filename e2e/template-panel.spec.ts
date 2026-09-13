@@ -1,10 +1,10 @@
 /**
- * GOAL §29: template selection panel E2E — previews from the real Gorden
- * library, analyzer progress events and the cancel button, driven through the
- * REAL renderer → main IPC chain.
+ * GOAL §29: template selection panel E2E — previews, analyzer progress events
+ * and the cancel button, driven through the REAL renderer → main IPC chain.
  *
- * Requires METIS_GORDEN_TEMPLATES_DIR (clean-skips without it, so CI without
- * the licensed template directory stays green).
+ * Library resolution (GOAL §43): the external Gorden directory when
+ * METIS_GORDEN_TEMPLATES_DIR is set, otherwise the OWNED local-reference
+ * fixtures — either way the panel flow runs NON-SKIPPED everywhere.
  */
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
@@ -12,15 +12,21 @@ import { expect, test } from '@playwright/test'
 import { closeAndSaveVideo, launchShell, waitForPageWithUrl } from './helpers'
 import { aiSettingsJson, startStubProvider } from './helpers/stub-provider'
 
-const GORDEN_DIR = process.env.METIS_GORDEN_TEMPLATES_DIR
+const GORDEN_DIR =
+  process.env.METIS_GORDEN_TEMPLATES_DIR ??
+  join(process.cwd(), 'e2e', 'fixtures', 'local-reference')
 const HAS_LIBRARY = Boolean(
-  GORDEN_DIR && existsSync(join(GORDEN_DIR, 'minimal-business-summary', 'template.pptx')),
+  GORDEN_DIR &&
+  (existsSync(join(GORDEN_DIR, 'minimal-academic', 'template.pptx')) ||
+    existsSync(join(GORDEN_DIR, 'minimal-business-summary', 'template.pptx'))),
 )
 
 test.describe('template selection panel (GOAL §29)', () => {
   test('library grid renders, analysis streams progress and cancel works', async () => {
     test.setTimeout(180_000)
-    if (!HAS_LIBRARY) test.skip(true, 'Gorden template directory not present')
+    if (!HAS_LIBRARY) test.skip(true, 'template library not present')
+    // the app inherits the library through the environment
+    process.env.METIS_GORDEN_TEMPLATES_DIR = GORDEN_DIR
     const stub = await startStubProvider()
     const launched = await launchShell({
       onboardingSeen: true,
@@ -43,23 +49,25 @@ test.describe('template selection panel (GOAL §29)', () => {
       // first paint); either way the analysis must end in a page-count summary
       const card = panel
         .locator('[data-testid^="tpl-card-"]')
-        .filter({ hasText: 'minimal-business-summary' })
+        .filter({ hasText: 'minimal-academic' })
         .first()
       await card.click()
       await expect(card.locator('.tpl-summary')).toBeVisible({ timeout: 60_000 })
       expect(await card.locator('.tpl-summary').textContent()).toMatch(/pages/)
 
       // "Use in AI" fills the composer input with the template instruction
-      await panel.locator('.tpl-use').click()
+      await panel.locator('.tpl-use-row .tpl-use').click()
       const input = editor.locator('[data-slides-ai-input="true"]')
-      await expect(input).toHaveValue(/analyze_ppt_template/, { timeout: 5_000 })
+      // GOAL §22/§23: Use-in-AI sets the runtime context and fills a localized
+      // instruction naming the selected template (no hardcoded prompt)
+      await expect(input).toHaveValue(/minimal-academic/, { timeout: 5_000 })
 
       // cancel path: a fresh large deck opens the analyzing window with the
       // Cancel button; a deck that finishes before the click lands simply
       // ends in the done state (cancel semantics are covered by unit tests)
       const bigCard = panel
         .locator('[data-testid^="tpl-card-"]')
-        .filter({ hasText: 'report-massive-charts' })
+        .filter({ hasText: /(report-massive-charts|large-100-slide)/ })
         .first()
       await bigCard.click()
       await bigCard
