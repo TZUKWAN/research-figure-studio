@@ -170,7 +170,10 @@ function TemplatePreview({
   }, [model, dataUrl, hash, persist])
 
   return (
-    <div ref={inViewRef} style={{ display: 'contents' }}>
+    // NOTE: a real box (NOT display:contents) — the IntersectionObserver in
+    // useInView cannot report intersection for a box-less element, and the
+    // preview would then never load.
+    <div ref={inViewRef} style={{ width: '100%', height: '100%' }}>
       {dataUrl ? (
         <img src={dataUrl} alt="" loading="lazy" />
       ) : model ? (
