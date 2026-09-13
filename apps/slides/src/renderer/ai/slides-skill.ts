@@ -42,6 +42,7 @@ import {
 import { executeStructuredEdit } from '../research/edit-plan'
 import { runLayoutScript, type LayoutScriptElement, type SlideStylePatch } from './layout-script'
 import { t } from '../i18n/locale'
+import { getPresentationSessionContext } from './template-context'
 
 /**
  * Slides capability as an AgentSkill: deck outline context + three tools (read structure /
@@ -4210,7 +4211,12 @@ async function executeTool(
         }
       }
       // create_presentation_from_template
-      const templatePath = String(call.input.templatePath ?? '').trim()
+      // GOAL section 23: the Template Center's selection is the default — the
+      // model may omit templatePath and the runtime context fills it in.
+      const sessionCtx = getPresentationSessionContext()
+      const templatePath =
+        String(call.input.templatePath ?? '').trim() || (sessionCtx.selectedTemplatePath ?? '')
+
       const selected = Array.isArray(call.input.selectedSlides)
         ? (call.input.selectedSlides as unknown[]).map(Number).filter((n) => Number.isInteger(n))
         : []

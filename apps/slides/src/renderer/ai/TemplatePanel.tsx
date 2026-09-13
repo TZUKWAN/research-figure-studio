@@ -1,31 +1,40 @@
 /**
- * Template selection panel (GOAL §29): visual template library with cached
- * previews, analyzer progress bar and a cancel button.
+ * Template Center (GOAL §7-§23): provider-aggregated template selection panel.
  *
- * - Library entries come from the main process (GordenDirProvider listing —
- *   user-supplied directory, never bundled).
- * - Previews: the main process returns the FIRST SLIDE's render model; this
- *   panel draws it offscreen once, caches the bitmap in localStorage keyed by
- *   the deck's source hash, and never re-renders a cached deck.
- * - Analysis runs through the existing template-analyze IPC; per-slide
- *   progress streams over the progress event channel and the Cancel button
- *   aborts the in-flight analysis in the main process.
+ * - My Templates: user-imported decks — persistent registry, Import button,
+ *   dedupe, works WITHOUT any template directory (GOAL §11 empty state).
+ * - Local Reference: Gorden directory decks (user-supplied, license-limited).
+ * - Previews render offscreen ONCE, cache in localStorage by source hash, and
+ *   persist to the registry's previews store for user decks (GOAL §14).
+ * - Cards lazy-load via IntersectionObserver (GOAL §15).
+ * - Analysis: progress bar + Cancel by analysisId (GOAL §19); switching decks
+ *   abandons stale results (GOAL §20).
+ * - Detail view on the analyzed card: per-page previews + roles (GOAL §16).
+ * - "Use in AI" sets the AI runtime template context (GOAL §23) — the input
+ *    receives a LOCALIZED instruction, never a hardcoded Chinese prompt.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import type { RenderSlide } from '@genoffice/pptx-render'
 import { SlideThumb } from '../SlideThumb'
 import { createImageLoader } from '../image-loader'
 import { useI18n } from '../i18n/locale'
+import { setPresentationSessionContext } from './template-context'
 
-interface LibraryEntry {
+export interface TemplateLibraryEntry {
   id: string
   name: string
   origin: string
+  sourceHash?: string | null
+  analysisStatus?: 'not-analyzed' | 'analyzing' | 'ready' | 'error'
+  pageCount?: number
+  previewPath?: string
 }
 
-interface ThumbState {
+interface ThumbResult {
   renderSlide?: RenderSlide
+  previewDataUrl?: string
   sourceHash?: string
+  pageCount?: number
   error?: string
 }
 
@@ -33,61 +42,93 @@ interface AnalyzeState {
   status: 'analyzing' | 'done' | 'canceled' | 'error'
   current: number
   total: number
+  analysisId?: string
   error?: string
   summary?: { pages: number; roles: string }
 }
 
-/** localStorage key for a deck's cached preview bitmap (by source hash). */
 const thumbKey = (hash: string): string => `ppt-thumb-${hash.slice(0, 16)}`
 
-/** One library card: cached bitmap preview (or first-paint offscreen render) + analyze/progress UI. */
-function TemplateCard({
-  entry,
-  selected,
-  analyze,
-  onSelect,
+/** Cached bitmap for a hash (localStorage, instant paint). */
+function cachedPreview(hash?: string | null): string | null {
+  if (!hash) return null
+  try {
+    return localStorage.getItem(thumbKey(hash))
+  } catch {
+    return null
+  }
+}
+
+/** GOAL §15: request expensive work only when the element nears the viewport. */
+function useInView(): [(el: HTMLElement | null) => void, boolean] {
+  const [inView, setInView] = useState(false)
+  const ref = useCallback((el: HTMLElement | null) => {
+    if (!el) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            setInView(true)
+            observer.disconnect()
+          }
+        }
+      },
+      { rootMargin: '300px' },
+    )
+    observer.observe(el)
+  }, [])
+  return [ref, inView]
+}
+
+/** Preview for one (deck, page): persisted bitmap fast path → localStorage →
+    offscreen Konva render (then cache + persist for user decks). */
+function TemplatePreview({
+  origin,
+  slideIndex = 0,
+  sourceHash,
+  persist,
+  width = 220,
 }: {
-  entry: LibraryEntry
-  selected: boolean
-  analyze?: AnalyzeState
-  onSelect: (entry: LibraryEntry) => void
+  origin: string
+  slideIndex?: number
+  sourceHash?: string | null
+  persist: boolean
+  width?: number
 }): React.ReactElement {
-  const { t } = useI18n()
-  const [dataUrl, setDataUrl] = useState<string | null>(null)
-  const [pending, setPending] = useState<boolean>(true)
-  const [thumb, setThumb] = useState<ThumbState | null>(null)
+  const [inViewRef, inView] = useInView()
+  const [thumb, setThumb] = useState<ThumbResult | null>(null)
+  const [dataUrl, setDataUrl] = useState<string | null>(
+    slideIndex === 0 ? cachedPreview(sourceHash) : null,
+  )
+  const [pending, setPending] = useState(true)
   const stageRef = useRef<{ toDataURL: (opts: Record<string, unknown>) => string } | null>(null)
   const imagesRef = useRef<Map<string, HTMLImageElement>>(new Map())
   const loaderRef = useRef<ReturnType<typeof createImageLoader> | null>(null)
+  const model = thumb?.renderSlide
+  const hash = thumb?.sourceHash ?? sourceHash ?? undefined
 
   useEffect(() => {
+    if (!inView) return
     let disposed = false
-    void window.slidesApi.templateThumb(entry.origin).then((r) => {
+    void window.slidesApi.templateThumb(origin, slideIndex).then((r) => {
       if (disposed) return
-      if (r && 'renderSlide' in r) {
-        // hash known → the localStorage bitmap cache may already have the preview
-        const cached = localStorage.getItem(thumbKey(r.sourceHash))
-        if (cached) {
-          setDataUrl(cached)
-          setPending(false)
-          return
-        }
-        setThumb(r)
-      } else {
+      if (r && 'previewDataUrl' in r) {
+        setDataUrl(r.previewDataUrl)
         setPending(false)
+        return
       }
+      setThumb(r ?? { error: 'unavailable' })
+      setPending(false)
     })
     return () => {
       disposed = true
       loaderRef.current?.dispose()
     }
-  }, [entry.origin])
+  }, [inView, origin, slideIndex])
 
-  // draw + cache once the model and its images are ready
+  // draw the fetched model once, cache + persist the bitmap (GOAL §14)
   useEffect(() => {
-    const model = thumb && 'renderSlide' in thumb ? thumb.renderSlide : undefined
-    const hash = thumb && 'sourceHash' in thumb ? thumb.sourceHash : undefined
-    if (!model || !hash) return
+    if (!model || dataUrl) return
     let disposed = false
     if (!loaderRef.current) {
       loaderRef.current = createImageLoader((entries) => {
@@ -103,26 +144,70 @@ function TemplateCard({
     }
     walk(model.nodes)
     loaderRef.current.load(urls)
-    // wait a beat for the batched image decode, then snapshot the offscreen stage
     const timer = setTimeout(() => {
       if (disposed) return
       const stage = stageRef.current
       if (!stage) return
       try {
         const url = stage.toDataURL({ pixelRatio: 1 })
-        localStorage.setItem(thumbKey(hash), url)
+        try {
+          if (hash) localStorage.setItem(thumbKey(hash), url)
+        } catch {
+          // storage full: in-memory preview still works
+        }
+        if (persist && hash) {
+          void window.slidesApi.templatePreviewSave(hash, url.slice(url.indexOf(',') + 1))
+        }
         setDataUrl(url)
       } catch {
         // preview is best-effort; the card still shows the deck name
       }
-      setPending(false)
     }, 400)
     return () => {
       disposed = true
       clearTimeout(timer)
     }
-  }, [thumb])
+  }, [model, dataUrl, hash, persist])
 
+  return (
+    <div ref={inViewRef} style={{ display: 'contents' }}>
+      {dataUrl ? (
+        <img src={dataUrl} alt="" loading="lazy" />
+      ) : model ? (
+        <div style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', opacity: 0 }}>
+          <SlideThumb
+            slide={model}
+            images={imagesRef.current}
+            width={width}
+            stageRef={(s) => {
+              stageRef.current = s as unknown as {
+                toDataURL: (o: Record<string, unknown>) => string
+              }
+            }}
+          />
+        </div>
+      ) : (
+        <span className="tpl-thumb-pending">{pending ? '…' : '—'}</span>
+      )}
+    </div>
+  )
+}
+
+function TemplateCard({
+  entry,
+  section,
+  selected,
+  analyze,
+  onSelect,
+}: {
+  entry: TemplateLibraryEntry
+  section: 'user' | 'reference'
+  selected: boolean
+  analyze?: AnalyzeState
+  onSelect: (entry: TemplateLibraryEntry) => void
+}): React.ReactElement {
+  const { t } = useI18n()
+  const analyzing = analyze?.status === 'analyzing'
   const pct = analyze && analyze.total > 0 ? Math.round((analyze.current / analyze.total) * 100) : 0
 
   return (
@@ -132,106 +217,125 @@ function TemplateCard({
       data-selected={selected || undefined}
     >
       <button className="tpl-thumb" onClick={() => onSelect(entry)} aria-label={entry.name}>
-        {dataUrl ? (
-          <img src={dataUrl} alt={entry.name} />
-        ) : thumb && 'renderSlide' in thumb && thumb.renderSlide ? (
-          <div
-            style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', opacity: 0 }}
-          >
-            <SlideThumb
-              slide={thumb.renderSlide}
-              images={imagesRef.current}
-              width={220}
-              stageRef={(s) => {
-                stageRef.current = s as unknown as {
-                  toDataURL: (o: Record<string, unknown>) => string
-                }
-              }}
-            />
-          </div>
-        ) : (
-          <span className="tpl-thumb-pending">{pending ? '…' : '—'}</span>
-        )}
+        <TemplatePreview
+          origin={entry.origin}
+          sourceHash={entry.sourceHash}
+          persist={section === 'user'}
+        />
       </button>
       <div className="tpl-card-meta">
         <span className="tpl-card-name" title={entry.origin}>
           {entry.name}
         </span>
-        {analyze && (
-          <span className="tpl-card-state">
-            {analyze.status === 'analyzing' && (
-              <>
-                <span
-                  className="tpl-progress"
-                  role="progressbar"
-                  aria-valuenow={pct}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                >
-                  <span className="tpl-progress-fill" style={{ width: `${pct}%` }} />
+        <span className="tpl-card-state">
+          {section === 'user' && entry.id.startsWith('user-') && (
+            <button
+              className="tpl-cancel"
+              data-tip={t('tplRemove')}
+              aria-label={t('tplRemove')}
+              onClick={() => {
+                void window.slidesApi.templateUserRemove(entry.id).then(() => {
+                  window.location.reload()
+                })
+              }}
+            >
+              ✕
+            </button>
+          )}
+          {analyze && (
+            <>
+              {analyzing && (
+                <>
+                  <span
+                    className="tpl-progress"
+                    role="progressbar"
+                    aria-valuenow={pct}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                  >
+                    <span className="tpl-progress-fill" style={{ width: `${pct}%` }} />
+                  </span>
+                  <span className="tpl-progress-label">
+                    {t('tplAnalyzing')
+                      .replace('{current}', String(analyze.current))
+                      .replace('{total}', String(analyze.total))}
+                  </span>
+                  <button
+                    className="tpl-cancel"
+                    onClick={() =>
+                      analyze.analysisId &&
+                      void window.slidesApi.templateAnalyzeCancel(analyze.analysisId)
+                    }
+                  >
+                    {t('tplCancelBtn')}
+                  </button>
+                </>
+              )}
+              {analyze.status === 'done' && analyze.summary && (
+                <span className="tpl-summary" title={analyze.summary.roles}>
+                  {t('tplPages').replace('{n}', String(analyze.summary.pages))}
                 </span>
-                <span className="tpl-progress-label">
-                  {t('tplAnalyzing')
-                    .replace('{current}', String(analyze.current))
-                    .replace('{total}', String(analyze.total))}
+              )}
+              {analyze.status === 'canceled' && <span>{t('tplCanceled')}</span>}
+              {analyze.status === 'error' && (
+                <span className="tpl-error" title={analyze.error}>
+                  {t('tplFailed')}
                 </span>
-                <button
-                  className="tpl-cancel"
-                  onClick={() => void window.slidesApi.templateAnalyzeCancel(entry.origin)}
-                >
-                  {t('tplCancelBtn')}
-                </button>
-              </>
-            )}
-            {analyze.status === 'done' && analyze.summary && (
-              <span className="tpl-summary" title={analyze.summary.roles}>
-                {analyze.summary.pages} pages
-              </span>
-            )}
-            {analyze.status === 'canceled' && <span>{t('tplCanceled')}</span>}
-            {analyze.status === 'error' && (
-              <span className="tpl-error" title={analyze.error}>
-                {t('tplFailed')}
-              </span>
-            )}
-          </span>
-        )}
+              )}
+            </>
+          )}
+        </span>
       </div>
     </div>
   )
 }
 
-/** Template library section rendered inside the AI panel above the input. */
+/** The Template Center section rendered inside the AI composer (GOAL §7). */
 export function TemplatePanel({
   onUse,
 }: {
-  /** Receives a ready-to-send AI instruction for the chosen template. */
-  onUse: (instruction: string) => void
+  /** Receives the template context for the AI runtime (GOAL §23). */
+  onUse: (ctx: { templateId: string; templatePath: string; templateName: string }) => void
 }): React.ReactElement {
   const { t } = useI18n()
-  const [entries, setEntries] = useState<LibraryEntry[]>([])
+  const [userEntries, setUserEntries] = useState<TemplateLibraryEntry[]>([])
+  const [referenceEntries, setReferenceEntries] = useState<TemplateLibraryEntry[]>([])
   const [loaded, setLoaded] = useState(false)
-  const [selected, setSelected] = useState<LibraryEntry | null>(null)
+  const [importing, setImporting] = useState(false)
+  const [selected, setSelected] = useState<TemplateLibraryEntry | null>(null)
   const [analyze, setAnalyze] = useState<AnalyzeState | null>(null)
-  const analyzingRef = useRef<string | null>(null)
+  // GOAL §20: selecting deck B abandons deck A's in-flight result
+  const epochRef = useRef(0)
+  const analysisIdRef = useRef<string | null>(null)
 
-  useEffect(() => {
-    let disposed = false
+  const refreshLibrary = useCallback(() => {
     void window.slidesApi.templateLibraryList().then((r) => {
-      if (disposed) return
-      setEntries((r?.entries ?? []) as LibraryEntry[])
+      setUserEntries((r?.user ?? []) as TemplateLibraryEntry[])
+      setReferenceEntries((r?.reference ?? []) as TemplateLibraryEntry[])
       setLoaded(true)
     })
-    return () => {
-      disposed = true
-    }
   }, [])
 
-  // progress channel: single subscription, filtered to the selected deck
+  useEffect(() => {
+    refreshLibrary()
+  }, [refreshLibrary])
+
+  // GOAL §19: capture the analysisId the moment the analysis starts
+  useEffect(
+    () =>
+      window.slidesApi.onTemplateAnalyzeStarted(({ filePath, analysisId }) => {
+        if (selected && selected.origin === filePath) {
+          analysisIdRef.current = analysisId
+          setAnalyze((prev) => (prev ? { ...prev, analysisId } : prev))
+        }
+      }),
+    [selected],
+  )
+
+  // GOAL §17: per-slide progress, filtered by the live epoch
   useEffect(
     () =>
       window.slidesApi.onTemplateAnalyzeProgress((p) => {
-        if (analyzingRef.current !== p.filePath) return
         setAnalyze((prev) =>
           prev && prev.status === 'analyzing'
             ? { ...prev, current: p.current, total: p.total }
@@ -241,13 +345,13 @@ export function TemplatePanel({
     [],
   )
 
-  const select = useCallback(async (entry: LibraryEntry) => {
+  const select = useCallback(async (entry: TemplateLibraryEntry) => {
     setSelected(entry)
-    analyzingRef.current = entry.origin
+    const epoch = ++epochRef.current
+    analysisIdRef.current = null
     setAnalyze({ status: 'analyzing', current: 0, total: 0 })
     const r = await window.slidesApi.templateAnalyze(entry.origin)
-    if (analyzingRef.current !== entry.origin) return
-    analyzingRef.current = null
+    if (epochRef.current !== epoch) return // GOAL §20: stale result dropped
     if (!r) {
       setAnalyze({ status: 'error', current: 0, total: 0, error: 'unavailable' })
       return
@@ -276,39 +380,126 @@ export function TemplatePanel({
     })
   }, [])
 
-  if (loaded && entries.length === 0) return <></>
+  const importTemplate = useCallback(async () => {
+    setImporting(true)
+    try {
+      const r = await window.slidesApi.templateImport()
+      if (r && !('canceled' in r) && !('error' in r) && r.entry) {
+        refreshLibrary()
+        const entry: TemplateLibraryEntry = {
+          id: r.entry.id,
+          name: r.entry.name,
+          origin: r.entry.managedSourcePath,
+          sourceHash: r.entry.sourceHash,
+          analysisStatus: 'not-analyzed',
+        }
+        await select(entry)
+      }
+    } finally {
+      setImporting(false)
+    }
+  }, [refreshLibrary, select])
 
-  const use = (): void => {
+  const use = useCallback(() => {
     if (!selected) return
-    onUse(
-      `使用模板 "${selected.name}"（${selected.origin}）：先 analyze_ppt_template 分析它，再按其页面角色规划内容并用 create_presentation_from_template 填充，另存为新文件。`,
+    // GOAL §23: first-class runtime context for the AI tools
+    setPresentationSessionContext({
+      selectedTemplateId: selected.id,
+      selectedTemplatePath: selected.origin,
+      selectedTemplateName: selected.name,
+    })
+    onUse({
+      templateId: selected.id,
+      templatePath: selected.origin,
+      templateName: selected.name,
+    })
+  }, [selected, onUse])
+
+  const detailPages =
+    analyze?.status === 'done' && selected ? Math.min(analyze.summary?.pages ?? 0, 12) : 0
+
+  if (loaded && userEntries.length === 0 && referenceEntries.length === 0) {
+    // GOAL §11: an empty library is a usable state, never a hidden panel
+    return (
+      <div className="tpl-panel" data-testid="template-panel">
+        <div className="tpl-panel-title">{t('tplPanelTitle')}</div>
+        <div className="tpl-empty" data-testid="tpl-empty">
+          <div className="tpl-empty-title">{t('tplEmptyTitle')}</div>
+          <button className="tpl-use" onClick={() => void importTemplate()} disabled={importing}>
+            {t('tplImportBtn')}
+          </button>
+          {importing && <span className="tpl-progress-label">{t('tplImporting')}</span>}
+        </div>
+      </div>
     )
   }
 
   return (
     <div className="tpl-panel" data-testid="template-panel">
-      <div className="tpl-panel-title">{t('tplPanelTitle')}</div>
-      <div className="tpl-grid">
-        {entries.map((entry) => (
-          <TemplateCard
-            key={entry.id}
-            entry={entry}
-            selected={selected?.id === entry.id}
-            analyze={selected?.id === entry.id ? (analyze ?? undefined) : undefined}
-            onSelect={(e) => void select(e)}
-          />
-        ))}
-      </div>
+      <div className="tpl-section-title">{t('tplMyTemplates')}</div>
+      {userEntries.length === 0 ? (
+        <div className="tpl-empty-inline">
+          <button className="tpl-use" onClick={() => void importTemplate()} disabled={importing}>
+            {t('tplImportBtn')}
+          </button>
+        </div>
+      ) : (
+        <div className="tpl-grid">
+          {userEntries.map((entry) => (
+            <TemplateCard
+              key={entry.id}
+              entry={entry}
+              section="user"
+              selected={selected?.id === entry.id}
+              analyze={selected?.id === entry.id ? (analyze ?? undefined) : undefined}
+              onSelect={(e) => void select(e)}
+            />
+          ))}
+        </div>
+      )}
+      {referenceEntries.length > 0 && (
+        <>
+          <div className="tpl-section-title">{t('tplLocalReference')}</div>
+          <div className="tpl-grid">
+            {referenceEntries.map((entry) => (
+              <TemplateCard
+                key={entry.id}
+                entry={entry}
+                section="reference"
+                selected={selected?.id === entry.id}
+                analyze={selected?.id === entry.id ? (analyze ?? undefined) : undefined}
+                onSelect={(e) => void select(e)}
+              />
+            ))}
+          </div>
+        </>
+      )}
       {analyze?.status === 'done' && selected && (
         <div className="tpl-use-row">
-          {analyze.summary && (
-            <span className="tpl-roles" title={analyze.summary.roles}>
-              {selected.name} · {analyze.summary.pages} pages · {analyze.summary.roles}
-            </span>
-          )}
+          <span className="tpl-roles" title={analyze.summary?.roles}>
+            {t('tplPages').replace('{n}', String(analyze.summary?.pages ?? 0))} ·{' '}
+            {analyze.summary?.roles}
+          </span>
           <button className="tpl-use" onClick={use}>
             {t('tplUseInAi')}
           </button>
+        </div>
+      )}
+      {selected && analyze?.status === 'done' && detailPages > 0 && (
+        // GOAL §16: template detail — per-page previews of the analyzed deck
+        <div className="tpl-detail" data-testid="tpl-detail">
+          {Array.from({ length: detailPages }, (_, i) => (
+            <div className="tpl-detail-page" key={i}>
+              <TemplatePreview
+                origin={selected.origin}
+                slideIndex={i}
+                sourceHash={selected.sourceHash}
+                persist={false}
+                width={96}
+              />
+              <span className="tpl-detail-idx">{i + 1}</span>
+            </div>
+          ))}
         </div>
       )}
     </div>

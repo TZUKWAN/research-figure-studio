@@ -2464,9 +2464,12 @@ export function AiPanel({
           {attachNotice && <div className="ai-attach-notice">{attachNotice}</div>}
           {tplPanelOpen && (
             <TemplatePanel
-              onUse={(instruction) => {
+              onUse={(ctx) => {
+                // GOAL §23: the template rides the runtime context (already
+                // set inside TemplatePanel); the input receives a localized
+                // instruction so the model knows the intent immediately.
                 inputEditedSinceRunRef.current = true
-                setInput(instruction)
+                setInput(t('tplUseInstruction').replace('{name}', ctx.templateName))
                 inputRef.current?.focus()
               }}
             />

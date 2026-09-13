@@ -22,7 +22,7 @@ import type { WebContents } from 'electron'
 import { execFile } from 'node:child_process'
 import { readFile, writeFile, rm, stat, mkdir, open } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { userInfo } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { cleanupExpiredGeneratedPages } from './generated-page-temp'
@@ -271,6 +271,16 @@ const CLOUD_PAGE_PREFIX = 'cloudpptx:'
 const issuedCloudPages = new Set<string>()
 const AI_RUN_STALE_ERROR = 'stale AI run'
 import { appendBoundedLine } from './bounded-append-log'
+import {
+  importUserTemplate,
+  loadRegistry,
+  removeRegistryEntry,
+  saveRegistry,
+  templatesRoot,
+  updateRegistryEntry,
+  PREVIEW_RENDERER_VERSION,
+  saveAnalysisCache,
+} from './template-registry'
 import { registerPresenterIpc } from './presenter-show'
 import { registerAttachmentIpc } from './attachments-ipc'
 
@@ -1465,16 +1475,45 @@ export function registerSlidesIpc(): void {
   // create_presentation_from_template: analyze (cached) → compileFillPlan →
   // ONE atomic sessionTxn (prune + setSlotParagraphText) → rebuilt slide.
   const templateCache = new Map<string, string>()
-  // GOAL §29: in-flight analyses by file path — the cancel IPC aborts the
-  // analyzer's AbortSignal, which surfaces as { canceled: true } to the caller
-  const templateAnalyzeAborts = new Map<string, AbortController>()
+  // GOAL §19: analyses are identified by analysisId (NOT file path) so two
+  // windows analyzing the same file cancel independently; handles carry the
+  // owning sender so one window's close/exit never aborts another's analysis.
+  interface TemplateAnalysisHandle {
+    analysisId: string
+    senderId: number
+    filePath: string
+    controller: AbortController
+    startedAt: number
+  }
+  const templateAnalysisHandles = new Map<string, TemplateAnalysisHandle>()
+  const abortSenderAnalyses = (senderId: number): void => {
+    for (const [id, h] of templateAnalysisHandles) {
+      if (h.senderId === senderId) {
+        h.controller.abort()
+        templateAnalysisHandles.delete(id)
+      }
+    }
+  }
 
   ipcMain.handle('slides:template-analyze', async (e, filePath: string) => {
     const session = sessions.get(e.sender.id)
     if (!session) return null
-    const aborts = templateAnalyzeAborts
+    const analysisId = `ana_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
     const controller = new AbortController()
-    aborts.set(filePath, controller)
+    templateAnalysisHandles.set(analysisId, {
+      analysisId,
+      senderId: e.sender.id,
+      filePath,
+      controller,
+      startedAt: Date.now(),
+    })
+    // the renderer learns the analysisId BEFORE completion so cancel works
+    // for a still-running analysis (GOAL §19)
+    if (!e.sender.isDestroyed()) {
+      e.sender.send('slides:template-analyze-started', { filePath, analysisId })
+    }
+    // window close/app quit must abort this sender's analyses (GOAL §21)
+    e.sender.once('destroyed', () => abortSenderAnalyses(e.sender.id))
     try {
       const bytes = new Uint8Array(await readFile(filePath))
       const hash = createHash('sha256').update(bytes).digest('hex')
@@ -1494,59 +1533,187 @@ export function registerSlidesIpc(): void {
         async () =>
           analyzeTemplateBytes(bytes, { type: 'user-upload', sourceFile: filePath }, undefined, {
             signal: controller.signal,
-            // GOAL §29: stream per-slide progress to the requesting renderer
+            // GOAL §17/§29: stream per-slide progress, tagged with analysisId
             onProgress: (p: TemplateAnalyzeProgress) => {
               if (!e.sender.isDestroyed()) {
-                e.sender.send('slides:template-analyze-progress', { filePath, ...p })
+                e.sender.send('slides:template-analyze-progress', {
+                  filePath,
+                  analysisId,
+                  ...p,
+                })
               }
             },
           }),
       )
-      return { definition, sourceHash: hash }
+      // GOAL §8/§9: user-registered templates persist their analysis + status
+      // so a restart resumes with ready templates (no re-analyze on reopen)
+      const userEntry = loadRegistry(userTemplatesDir()).templates.find(
+        (t) => t.sourceHash === hash,
+      )
+      if (userEntry) {
+        saveAnalysisCache(userTemplatesDir(), hash, definition)
+        updateRegistryEntry(userTemplatesDir(), userEntry.id, {
+          analysisStatus: 'ready',
+          pageCount: definition.pages.length,
+        })
+      }
+      return { definition, sourceHash: hash, analysisId }
     } catch (err) {
-      if ((err as { name?: string }).name === 'AbortError') return { canceled: true }
-      return { error: err instanceof Error ? err.message : String(err) }
+      if ((err as { name?: string }).name === 'AbortError') return { canceled: true, analysisId }
+      return { error: err instanceof Error ? err.message : String(err), analysisId }
     } finally {
-      aborts.delete(filePath)
+      templateAnalysisHandles.delete(analysisId)
     }
   })
 
-  // ── Template library + previews (GOAL §29): the selection panel's data plane.
-  // The Gorden directory is user-supplied (license: never bundled); entries stay
-  // cheap (no parsing), and thumbnails are first-slide render models the
-  // renderer draws and caches by source hash.
+  ipcMain.handle('slides:template-analyze-cancel', (_e, analysisId: string) => {
+    templateAnalysisHandles.get(analysisId)?.controller.abort()
+    return true
+  })
+
+  // ── Template library + previews (GOAL §7/§12): the Template Center's data
+  // plane. Provider aggregation: My Templates (user registry, persistent) +
+  // Local Reference (Gorden directory, user-supplied, never bundled). Entries
+  // stay cheap (no parsing); thumbnails are render models the renderer draws
+  // and caches by source hash, persisted to previews/ after first paint.
   const libraryProvider = (): GordenDirProvider | null => {
     const dir = process.env.METIS_GORDEN_TEMPLATES_DIR
     return dir && GordenDirProvider.isAvailable(dir) ? new GordenDirProvider(dir) : null
   }
+  const userTemplatesDir = (): string => templatesRoot(app.getPath('userData'))
 
   ipcMain.handle('slides:template-library-list', async () => {
+    // My Templates first (GOAL §7): user registry is the primary section
+    const user = loadRegistry(userTemplatesDir()).templates
     const provider = libraryProvider()
-    if (!provider) return { entries: [], dir: null }
-    return { entries: await provider.list(), dir: process.env.METIS_GORDEN_TEMPLATES_DIR ?? null }
+    const reference = provider ? await provider.list() : []
+    return {
+      user: user.map((e) => ({
+        id: e.id,
+        name: e.name,
+        origin: e.managedSourcePath,
+        sourceHash: e.sourceHash,
+        analysisStatus: e.analysisStatus,
+        pageCount: e.pageCount,
+        previewPath: e.previewPath,
+        importedAt: e.importedAt,
+        lastUsedAt: e.lastUsedAt,
+      })),
+      reference: reference.map((r) => ({
+        id: r.id,
+        name: r.name,
+        origin: r.origin,
+        sourceHash: null,
+        analysisStatus: 'not-analyzed' as const,
+        pageCount: r.slideCount || undefined,
+        previewPath: r.previewPath,
+      })),
+      dir: process.env.METIS_GORDEN_TEMPLATES_DIR ?? null,
+    }
   })
 
-  ipcMain.handle('slides:template-thumb', async (_e, filePath: string) => {
+  // GOAL §8: user template import — picker → validate → managed copy → hash →
+  // dedupe → register. Analysis runs through the SAME analysisId path as the
+  // library cards, so progress + cancel apply to imported templates too.
+  ipcMain.handle('slides:template-import', async (e) => {
+    const session = sessions.get(e.sender.id)
+    if (!session) return null
+    const r = await showOpenDialogWithMemory(dialog, dialogParent(), {
+      title: 'Import PPTX template',
+      filters: [{ name: 'PowerPoint template', extensions: ['pptx'] }],
+      properties: ['openFile'],
+    })
+    if (r.canceled || r.filePaths.length === 0) return { canceled: true }
+    const sourcePath = r.filePaths[0]!
     try {
-      const bytes = new Uint8Array(await readFile(filePath))
-      const sourceHash = createHash('sha256').update(bytes).digest('hex')
-      const opened = await openPptx(bytes)
-      const slide = opened.deck.slides[0]
-      if (!slide) return { error: 'template has no slides' }
+      const bytes = new Uint8Array(await readFile(sourcePath))
+      const { entry, duplicate } = importUserTemplate(app.getPath('userData'), sourcePath, bytes)
+      return { entry, duplicate, sourceHash: entry.sourceHash }
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  ipcMain.handle('slides:template-user-list', async () => ({
+    entries: loadRegistry(userTemplatesDir()).templates,
+  }))
+
+  ipcMain.handle('slides:template-user-rename', (_e, id: string, name: string) => {
+    const trimmed = String(name ?? '').trim()
+    if (!trimmed) return { error: 'name must not be empty' }
+    const entry = updateRegistryEntry(userTemplatesDir(), id, { name: trimmed })
+    return entry ? { entry } : { error: `template "${id}" not found` }
+  })
+
+  ipcMain.handle('slides:template-user-remove', (_e, id: string) => ({
+    removed: removeRegistryEntry(userTemplatesDir(), id),
+  }))
+
+  // GOAL §14: persist the renderer-generated preview bitmap; keyed by
+  // sourceHash + preview renderer version so only changed decks re-render.
+  ipcMain.handle(
+    'slides:template-preview-save',
+    (_e, sourceHash: string, dataUrlBase64: string) => {
+      try {
+        const dir = join(userTemplatesDir(), 'previews')
+        mkdirSync(dir, { recursive: true })
+        const file = join(dir, `${sourceHash}-v${PREVIEW_RENDERER_VERSION}.png`)
+        writeFileSync(file, Buffer.from(dataUrlBase64, 'base64'))
+        // attach to any registry entry with this hash (user templates only —
+        // local-reference decks are read-only by license)
+        const registry = loadRegistry(userTemplatesDir())
+        for (const entry of registry.templates) {
+          if (entry.sourceHash === sourceHash) entry.previewPath = file
+        }
+        saveRegistry(userTemplatesDir(), registry)
+        return { path: file }
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : String(err) }
+      }
+    },
+  )
+
+  // GOAL §14: the deck parse lives in a small TTL cache so a detail view
+  // requesting several page thumbs parses the file ONCE.
+  const thumbDecks = new Map<
+    string,
+    { opened: Awaited<ReturnType<typeof openPptx>>; hash: string; expires: number }
+  >()
+  const THUMB_DECK_TTL_MS = 30_000
+
+  ipcMain.handle('slides:template-thumb', async (_e, filePath: string, slideIndex = 0) => {
+    try {
+      let cached = thumbDecks.get(filePath)
+      if (cached && cached.expires < Date.now()) {
+        thumbDecks.delete(filePath)
+        cached = undefined
+      }
+      if (!cached) {
+        const bytes = new Uint8Array(await readFile(filePath))
+        const hash = createHash('sha256').update(bytes).digest('hex')
+        cached = { opened: await openPptx(bytes), hash, expires: 0 }
+        thumbDecks.set(filePath, cached)
+      }
+      cached.expires = Date.now() + THUMB_DECK_TTL_MS
+      const { opened, hash } = cached
+      // GOAL §14 fast path: a persisted preview bitmap (hash + version keyed)
+      // skips parse+render entirely on every visit after the first
+      const regEntry = loadRegistry(userTemplatesDir()).templates.find((t) => t.sourceHash === hash)
+      if (slideIndex === 0 && regEntry?.previewPath && existsSync(regEntry.previewPath)) {
+        const b64 = readFileSync(regEntry.previewPath).toString('base64')
+        return { previewDataUrl: 'data:image/png;base64,' + b64, sourceHash: hash }
+      }
+      const slide = opened.deck.slides[slideIndex]
+      if (!slide) return { error: 'template has no such slide' }
       const renderSlide = buildRenderSlide(slide, opened.deck.size, {
         fitWidthPx: 480,
         media: makeMediaResolver(opened),
         metrics: getFontMetrics(),
       })
-      return { renderSlide, sourceHash }
+      return { renderSlide, sourceHash: hash, pageCount: opened.deck.slides.length }
     } catch (err) {
       return { error: err instanceof Error ? err.message : String(err) }
     }
-  })
-
-  ipcMain.handle('slides:template-analyze-cancel', (_e, filePath: string) => {
-    templateAnalyzeAborts.get(filePath)?.abort()
-    return true
   })
 
   ipcMain.handle(
@@ -1694,6 +1861,30 @@ export function registerSlidesIpc(): void {
           }
         }
         if (req.saveTo) {
+          // GOAL section 10: the user's original template file must NEVER be
+          // overwritten. Compare canonical (realpath) paths so Windows case
+          // differences, relative paths, symlinks, junctions and UNC aliases
+          // cannot smuggle a same-file save through string equality.
+          const sameRealFile = (): boolean => {
+            try {
+              return realpathSync(req.saveTo!) === realpathSync(req.templatePath)
+            } catch {
+              // a path that does not exist yet cannot be the template file
+              try {
+                return (
+                  resolve(req.saveTo!).toLowerCase() === resolve(req.templatePath).toLowerCase()
+                )
+              } catch {
+                return false
+              }
+            }
+          }
+          if (sameRealFile()) {
+            return {
+              error:
+                'saveTo points at the original template file — overwriting user templates is not allowed. Save to a NEW file.',
+            }
+          }
           const { savePptxToFile } = await import('@genoffice/pptx-engine')
           await savePptxToFile(session.opened, req.saveTo)
         }

@@ -299,11 +299,17 @@ const api: SlidesApi = {
   applyEditScript: (op: ApplyEditScriptOp) => ipcRenderer.invoke('slides:apply-edit-script', op),
   applyTxn: (op: ApplyTxnOp) => ipcRenderer.invoke('slides:apply-txn', op),
   templateAnalyze: (filePath: string) => ipcRenderer.invoke('slides:template-analyze', filePath),
-  templateAnalyzeCancel: (filePath: string) =>
-    ipcRenderer.invoke('slides:template-analyze-cancel', filePath),
+  templateAnalyzeCancel: (analysisId: string) =>
+    ipcRenderer.invoke('slides:template-analyze-cancel', analysisId),
+  onTemplateAnalyzeStarted: (handler: (p: { filePath: string; analysisId: string }) => void) => {
+    const listener = (_e: unknown, p: Parameters<typeof handler>[0]) => handler(p)
+    ipcRenderer.on('slides:template-analyze-started', listener)
+    return () => ipcRenderer.removeListener('slides:template-analyze-started', listener)
+  },
   onTemplateAnalyzeProgress: (
     handler: (p: {
       filePath: string
+      analysisId?: string
       stage: 'parse' | 'analyze'
       current: number
       total: number
@@ -315,6 +321,13 @@ const api: SlidesApi = {
     return () => ipcRenderer.removeListener('slides:template-analyze-progress', listener)
   },
   templateLibraryList: () => ipcRenderer.invoke('slides:template-library-list'),
+  templateImport: () => ipcRenderer.invoke('slides:template-import'),
+  templateUserList: () => ipcRenderer.invoke('slides:template-user-list'),
+  templateUserRename: (id: string, name: string) =>
+    ipcRenderer.invoke('slides:template-user-rename', id, name),
+  templateUserRemove: (id: string) => ipcRenderer.invoke('slides:template-user-remove', id),
+  templatePreviewSave: (sourceHash: string, dataUrlBase64: string) =>
+    ipcRenderer.invoke('slides:template-preview-save', sourceHash, dataUrlBase64),
   templateThumb: (filePath: string) => ipcRenderer.invoke('slides:template-thumb', filePath),
   templateFill: (req: unknown) => ipcRenderer.invoke('slides:template-fill', req),
   aiSnapshotRestore: (id: number, ownerToken?: string) =>

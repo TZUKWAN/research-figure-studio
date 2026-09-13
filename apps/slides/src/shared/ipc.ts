@@ -1494,39 +1494,91 @@ export interface SlidesApi {
         definition: import('@genoffice/ppt-template-intelligence').TemplateDefinition
         sourceHash: string
       }
-    | { error: string }
-    | { canceled: true }
+    | { error: string; analysisId?: string }
+    | { canceled: true; analysisId?: string }
     | null
   >
-  /** GOAL §29: abort an in-flight template analysis for the given file */
-  templateAnalyzeCancel: (filePath: string) => Promise<boolean>
-  /** GOAL §29: subscribe to per-slide analysis progress; returns the unsubscribe fn */
+  /** GOAL §19: abort an in-flight analysis by analysisId (window/isolation scoped) */
+  templateAnalyzeCancel: (analysisId: string) => Promise<boolean>
+  /** GOAL §19: fired when an analysis starts, BEFORE completion — carries the analysisId needed to cancel */
+  onTemplateAnalyzeStarted: (
+    handler: (p: { filePath: string; analysisId: string }) => void,
+  ) => () => void
+  /** GOAL §17/§29: subscribe to per-slide analysis progress; returns the unsubscribe fn */
   onTemplateAnalyzeProgress: (
     handler: (p: {
       filePath: string
+      analysisId?: string
       stage: 'parse' | 'analyze'
       current: number
       total: number
       slideNumber?: number
     }) => void,
   ) => () => void
-  /** GOAL §29: template selection panel data — cheap library listing (no parsing) */
+  /** GOAL §12: Template Center data — provider-aggregated sections */
   templateLibraryList: () => Promise<{
-    entries: Array<{
+    user: Array<{
       id: string
       name: string
-      sourceType: 'gorden-local'
-      slideCount: number
-      tags: string[]
       origin: string
+      sourceHash: string
+      analysisStatus: 'not-analyzed' | 'analyzing' | 'ready' | 'error'
+      pageCount?: number
+      previewPath?: string
+      importedAt: string
+      lastUsedAt: string
+    }>
+    reference: Array<{
+      id: string
+      name: string
+      origin: string
+      sourceHash: null
+      analysisStatus: 'not-analyzed'
+      pageCount?: number
       previewPath?: string
     }>
     dir: string | null
   }>
-  /** GOAL §29: first-slide render model for a template deck (renderer draws + caches the bitmap) */
+  /** GOAL §8: import a user PPTX template (picker → validate → managed copy → dedupe → register) */
+  templateImport: () => Promise<
+    | {
+        entry: {
+          id: string
+          name: string
+          managedSourcePath: string
+          sourceHash: string
+          analysisStatus: string
+        }
+        duplicate: boolean
+        sourceHash: string
+      }
+    | { canceled: true }
+    | { error: string }
+    | null
+  >
+  templateUserList: () => Promise<{ entries: Array<{ id: string; name: string }> } | null>
+  templateUserRename: (
+    id: string,
+    name: string,
+  ) => Promise<{ entry?: unknown } | { error: string } | null>
+  templateUserRemove: (id: string) => Promise<{ removed: boolean } | null>
+  /** GOAL §14: persist the renderer-rendered preview bitmap (hash + renderer version keyed) */
+  templatePreviewSave: (
+    sourceHash: string,
+    dataUrlBase64: string,
+  ) => Promise<{ path: string } | { error: string } | null>
+  /** GOAL §14/§16: page render model for a template deck (slideIndex defaults
+      to 0). Either a persisted preview bitmap (fast path) or a render model the
+      renderer draws, plus the deck's page count for the detail view. */
   templateThumb: (
     filePath: string,
-  ) => Promise<{ renderSlide: RenderSlide; sourceHash: string } | { error: string } | null>
+    slideIndex?: number,
+  ) => Promise<
+    | { renderSlide: RenderSlide; sourceHash: string; pageCount?: number }
+    | { previewDataUrl: string; sourceHash: string }
+    | { error: string }
+    | null
+  >
   /** Template Intelligence: fill a template deck with content as ONE atomic transaction */
   templateFill: (req: {
     templatePath: string
