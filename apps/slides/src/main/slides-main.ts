@@ -279,6 +279,7 @@ import {
   templatesRoot,
   updateRegistryEntry,
   PREVIEW_RENDERER_VERSION,
+  loadAnalysisCache,
   saveAnalysisCache,
 } from './template-registry'
 import { registerPresenterIpc } from './presenter-show'
@@ -1521,12 +1522,30 @@ export function registerSlidesIpc(): void {
         {
           async get(key) {
             const saved = templateCache.get(key)
-            return saved
-              ? (JSON.parse(saved) as import('@genoffice/ppt-template-intelligence').CacheEntry)
-              : undefined
+            if (saved) {
+              return JSON.parse(saved) as import('@genoffice/ppt-template-intelligence').CacheEntry
+            }
+            // GOAL §9: persisted analysis store — a restart must NOT re-analyze
+            // a template whose definition is already on disk
+            const fileDef = loadAnalysisCache<
+              import('@genoffice/ppt-template-intelligence').TemplateDefinition
+            >(app.getPath('userData'), key)
+            if (fileDef) {
+              const entry: import('@genoffice/ppt-template-intelligence').CacheEntry = {
+                parserVersion: 1,
+                sourceHash: hash,
+                analyzedAt: new Date().toISOString(),
+                definition: fileDef,
+              }
+              templateCache.set(key, JSON.stringify(entry))
+              return entry
+            }
+            return undefined
           },
           async set(key, entry) {
             templateCache.set(key, JSON.stringify(entry))
+            // GOAL §9: persist the fresh analysis for restarts
+            saveAnalysisCache(app.getPath('userData'), hash, entry.definition)
           },
         },
         hash,
