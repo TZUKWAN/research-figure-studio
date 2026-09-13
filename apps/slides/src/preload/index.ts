@@ -310,7 +310,7 @@ const api: SlidesApi = {
     handler: (p: {
       filePath: string
       analysisId?: string
-      stage: 'parse' | 'analyze'
+      stage: 'open' | 'parse' | 'analyze'
       current: number
       total: number
       slideNumber?: number

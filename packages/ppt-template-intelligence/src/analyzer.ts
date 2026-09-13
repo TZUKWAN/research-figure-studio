@@ -49,8 +49,10 @@ export async function observeTemplateFacts(
   bytes: Uint8Array,
   opts?: TemplateAnalyzeOpts,
 ): Promise<{ facts: ObservedTemplateFacts; hash: string }> {
+  opts?.onProgress?.({ stage: 'open', current: 0, total: 1 })
   const opened = await openPptx(bytes)
   const hash = createHash('sha256').update(bytes).digest('hex')
+  throwIfAnalysisAborted(opts?.signal)
   const pages: ObservedTemplateFacts['pages'] = []
   const total = opened.deck.slides.length
 
@@ -469,7 +471,7 @@ export function analyzeTemplate(
     event per slide as the deck is walked; `analyze` reports the inference
     pass. `signal` aborts between slides with an `AbortError`. */
 export interface TemplateAnalyzeProgress {
-  stage: 'parse' | 'analyze'
+  stage: 'open' | 'parse' | 'analyze'
   current: number
   total: number
   /** slideNumber being processed, when stage is 'parse' */
