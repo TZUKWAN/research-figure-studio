@@ -17,12 +17,22 @@ describe('isSameRealFile (GOAL §10)', () => {
     expect(isSameRealFile(p, p)).toBe(true)
   })
 
-  it('flags case-insensitive matches on Windows-style paths', () => {
+  it('flags case-insensitive matches only where the FS is case-insensitive', () => {
     const dir = mkdtempSync(join(tmpdir(), 'save-safety-'))
     const p = join(dir, 'Template.PPTX')
     writeFileSync(p, 'x')
-    expect(isSameRealFile(p, p.toUpperCase())).toBe(true)
-    expect(isSameRealFile(p, p.toLowerCase())).toBe(true)
+    const upper = p.toUpperCase()
+    const lower = p.toLowerCase()
+    if (process.platform === 'win32') {
+      // same file through a case-variant spelling
+      expect(isSameRealFile(p, upper)).toBe(true)
+      expect(isSameRealFile(p, lower)).toBe(true)
+    } else {
+      // on Linux the variant spellings are DIFFERENT files (one does not
+      // exist) — the safe answer is “not the same file”, never a false match
+      expect(isSameRealFile(p, upper)).toBe(false)
+      expect(isSameRealFile(p, lower)).toBe(false)
+    }
   })
 
   it('flags different spellings of the same directory', () => {
