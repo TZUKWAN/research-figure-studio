@@ -4,7 +4,7 @@
  * case differences, `..` segments, and existing files via hardlinks/symlinks.
  */
 import { describe, expect, it } from 'vitest'
-import { mkdtempSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { isSameRealFile } from '../src/main/template-save-safety'
