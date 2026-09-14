@@ -271,6 +271,7 @@ const CLOUD_PAGE_PREFIX = 'cloudpptx:'
 const issuedCloudPages = new Set<string>()
 const AI_RUN_STALE_ERROR = 'stale AI run'
 import { appendBoundedLine } from './bounded-append-log'
+import { isSameRealFile } from './template-save-safety'
 import {
   importUserTemplate,
   loadRegistry,
@@ -1886,24 +1887,10 @@ export function registerSlidesIpc(): void {
         }
         if (req.saveTo) {
           // GOAL section 10: the user's original template file must NEVER be
-          // overwritten. Compare canonical (realpath) paths so Windows case
+          // overwritten. Canonical (realpath) comparison so Windows case
           // differences, relative paths, symlinks, junctions and UNC aliases
           // cannot smuggle a same-file save through string equality.
-          const sameRealFile = (): boolean => {
-            try {
-              return realpathSync(req.saveTo!) === realpathSync(req.templatePath)
-            } catch {
-              // a path that does not exist yet cannot be the template file
-              try {
-                return (
-                  resolve(req.saveTo!).toLowerCase() === resolve(req.templatePath).toLowerCase()
-                )
-              } catch {
-                return false
-              }
-            }
-          }
-          if (sameRealFile()) {
+          if (isSameRealFile(req.saveTo!, req.templatePath)) {
             return {
               error:
                 'saveTo points at the original template file — overwriting user templates is not allowed. Save to a NEW file.',

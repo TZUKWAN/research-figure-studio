@@ -147,7 +147,10 @@ function TemplatePreview({
     const timer = setTimeout(() => {
       if (disposed) return
       const stage = stageRef.current
-      if (!stage) return
+      if (!stage) {
+        if (!disposed) setPending(false)
+        return
+      }
       try {
         const url = stage.toDataURL({ pixelRatio: 1 })
         try {
@@ -162,6 +165,7 @@ function TemplatePreview({
       } catch {
         // preview is best-effort; the card still shows the deck name
       }
+      if (!disposed) setPending(false)
     }, 400)
     return () => {
       disposed = true
