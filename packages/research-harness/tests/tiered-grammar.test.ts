@@ -81,11 +81,10 @@ describe('tiered grammar (framework architecture rows)', () => {
     const layout = tieredGrammar(makeContext())
     expect(layout).toBeTruthy()
     const hints = layout!.hints
-    const index = new Map(IDS.map((id, i) => [id, i]))
     const pos = new Map(
       IDS.map((id) => {
-        const hint = hints.get(id)
-        return [id, hint ? { x: hint.x, y: hint.y } : undefined]
+        const hint = hints.get(id)!
+        return [id, { x: hint.x, y: hint.y }]
       }),
     )
 
@@ -100,7 +99,7 @@ describe('tiered grammar (framework architecture rows)', () => {
     const pillarXs = ['pillar-eco', 'pillar-social', 'pillar-human', 'pillar-strategy'].map(
       (p) => pos.get(p)!.x,
     )
-    const tops = [...pos.values()].map((v) => v.y)
+    const tops = [...pos.values()].map((v) => v!.y)
     // rows genuinely differ: no two tier tops collapse together
     expect(new Set(tops.map((y) => Math.round(y * 20))).size).toBe(3)
     expect(Math.min(...pillarXs)).toBeLessThan(0.35)

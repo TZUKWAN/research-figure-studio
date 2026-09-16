@@ -292,7 +292,7 @@ interface GrammarLayout {
   anchors: Set<string>
 }
 
-interface GrammarContext {
+export interface GrammarContext {
   topo: Topology
   sizes: Map<string, Size>
   edges: FigureEdgesInput[]
