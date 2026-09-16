@@ -1,6 +1,6 @@
 /**
  * GOAL: complex architecture look for converging frameworks. The user's real
- * case (长江经济带: foundation + 4 pillars → summary) produced a single
+ * case (Yangtze corridor: foundation + 4 pillars → summary) produced a single
  * left-column stack that left half the canvas empty. The tiered grammar
  * (kept in the registry, selection-gated until the router gains row-channel
  * support) must produce the classic architecture look when directly invoked:
