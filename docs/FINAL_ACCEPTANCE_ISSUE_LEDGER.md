@@ -30,3 +30,17 @@ Additional closure-round verification (all green):
   IN FULL while the capacity model flags the pressure (GOAL §28).
 - analyzer OPEN stage: progress ladder now open → parse → analyze, with the
   abort signal re-checked after the package opens (GOAL §17/§18).
+- save-safety extraction: isSameRealFile pure function + win32 case-fold
+  (Windows fs.realpath preserves input case — a case-variant saveTo evaded
+  the overwrite protection). Platform-branched tests.
+- registry root fix: removeRegistryEntry/preview-save passed the templates
+  ROOT into helpers expecting userData — removal never landed and
+  previewPath was never persisted. Registry-file assertions added to the
+  owned E2E.
+- analysis file-cache lookup: get used the prefixed cacheKey while set wrote
+  the raw hash — restart never hit the persisted analysis. Fixed.
+- KNOWN ENVIRONMENT CONFLICT: a second AI agent (MDT, another checkout) runs
+  on the same desktop and periodically taskkills all electron.exe while
+  stealing focus — visible-window Computer Use rounds are unstable until
+  that session is paused. Automated E2E (16 tests, isolated userData) is
+  unaffected and remains the acceptance evidence of record.
