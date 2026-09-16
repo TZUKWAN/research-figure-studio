@@ -464,6 +464,47 @@ function convergingGrammar(g: GrammarContext): GrammarLayout {
  * columns, only TERMINAL sinks (no non-feedback outgoing edges) reach the
  * right output column.
  */
+/**
+ * Tiered (GOAL §45 framework look): topological layers become HORIZONTAL
+ * rows — outcome/sink tier on the TOP row, source/foundation tier on the
+ * BOTTOM row, each row spread across the full canvas width. This is the
+ * classic framework look (outcome on top, pillars centered, foundation at
+ * the base). Declines unless the structure forms 3-4 rows of at most 5
+ * nodes, so degenerate topologies fall back to converging/layered.
+ */
+export function tieredGrammar(g: GrammarContext): GrammarLayout | null {
+  const { topo, sizes } = g
+  if (topo.ids.length < 4 || topo.ids.length > 10) return null
+  const byLayer = new Map<number, string[]>()
+  for (const id of topo.ids) {
+    const layer = topo.layerOf.get(id) ?? 0
+    byLayer.set(layer, [...(byLayer.get(layer) ?? []), id])
+  }
+  const layers = [...byLayer.keys()].sort((a, b) => a - b)
+  if (layers.length < 3 || layers.length > 4) return null
+  const rows = layers.map((layer) => byLayer.get(layer) ?? [])
+  if (rows.some((row) => row.length > 5)) return null
+  // rows are indexed by LAYER (0 = foundation/source at the BOTTOM of the
+  // canvas, last = outcome/sink at the TOP) — y grows downward on canvas
+  const rowY = layers.length === 3 ? [0.84, 0.5, 0.16] : [0.86, 0.62, 0.38, 0.14]
+  const hints = new Map<string, Hint>()
+  const anchors = new Set<string>()
+  // row 0 = source (foundation) layer at the BOTTOM; last row = outcome at TOP
+  for (let row = 0; row < layers.length; row++) {
+    const layer = layers[row]!
+    const members = byLayer.get(layer) ?? []
+    const y = rowY[row]!
+    const centers = spreadCenters(members.length, 0.08, 0.92)
+    members.forEach((id, index) => {
+      place(id, clamp01(centers[index] ?? 0.5, 0.04, 0.96), y, sizes.get(id)!, hints)
+    })
+  }
+  const topRow = rows[rows.length - 1]!
+  const topAnchor = [...topRow].sort((a, b) => a.localeCompare(b))[Math.floor(topRow.length / 2)]!
+  anchors.add(topAnchor)
+  return { hints, anchors }
+}
+
 function divergingGrammar(g: GrammarContext): GrammarLayout {
   const { topo, sizes, prior, meta } = g
   const hints = new Map<string, Hint>()
@@ -1365,6 +1406,7 @@ function sizesFor(
 const GRAMMAR_BUILDERS: Record<CompositionPrior['grammar'], GrammarBuilder> = {
   linear: (g) => linearGrammar(g),
   converging: (g) => convergingGrammar(g),
+  tiered: (g) => tieredGrammar(g),
   diverging: (g) => divergingGrammar(g),
   'input-core-output': (g) => iceGrammar(g),
   parallel: (g) => parallelGrammar(g),
@@ -1390,6 +1432,7 @@ const GRAMMAR_COMPOSITION: Record<
 > = {
   linear: { balance: 'loosely-balanced', whitespaceStrategy: 'compact' },
   converging: { balance: 'asymmetric', whitespaceStrategy: 'balanced' },
+  tiered: { balance: 'symmetric', whitespaceStrategy: 'balanced' },
   diverging: { balance: 'asymmetric', whitespaceStrategy: 'balanced' },
   'input-core-output': { balance: 'asymmetric', whitespaceStrategy: 'balanced' },
   parallel: { balance: 'symmetric', whitespaceStrategy: 'balanced' },

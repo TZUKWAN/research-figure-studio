@@ -32,6 +32,7 @@ export interface CompositionPrior {
     | 'mediation'
     | 'moderation'
     | 'tree'
+    | 'tiered'
   semanticFit: string[]
   principles: string[]
   defaultBias: Record<string, number>
@@ -58,6 +59,7 @@ export const COMPOSITION_PRIORS: CompositionPrior[] = [
     allowedRange: { inputs: [0.04, 0.14], sink: [0.7, 0.92] },
     readingFlow: 'LR',
   },
+
   {
     id: 'diverging-flow',
     grammar: 'diverging',
@@ -458,6 +460,13 @@ export function priorFitScore(
       break
     case 'moderation':
       if (signature.hasModeration) score += 4
+      break
+    case 'tiered':
+      // 3+ topological rows with several sources feeding fewer sinks reads as
+      // a tiered framework (foundation -> pillars -> outcome)
+      if (signature.layerCount >= 3) score += 3
+      if (signature.sourceCount >= 2) score += 1
+      if (signature.sinkCount >= 1 && signature.nodeCount >= 5) score += 1
       break
     case 'tree':
       if (signature.hasHierarchy) score += 4
